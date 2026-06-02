@@ -899,6 +899,7 @@ func ResumeAllSessionsForWorkItemCmd(
 
 		activeSubPlans := make(map[string]bool)
 		hasPlanningActive := false
+		graphSessions := make([]domain.AgentSession, 0, len(sessions))
 		for _, s := range sessions {
 			// Manual sessions are out-of-band; they must not influence the
 			// review-loop bulk-resume decisions about which impl/review sub-plans
@@ -906,8 +907,10 @@ func ResumeAllSessionsForWorkItemCmd(
 			if s.Kind == domain.AgentSessionKindManual {
 				continue
 			}
-			if s.Status == domain.AgentSessionRunning || s.Status == domain.AgentSessionPending ||
-				s.Status == domain.AgentSessionCompleted || s.Status == domain.AgentSessionWaitingForAnswer {
+			graphSessions = append(graphSessions, s)
+		}
+		for _, s := range graphSessions {
+			if s.Status == domain.AgentSessionRunning || s.Status == domain.AgentSessionPending || s.Status == domain.AgentSessionWaitingForAnswer {
 				if s.Kind == domain.AgentSessionKindPlanning {
 					hasPlanningActive = true
 				} else if s.SubPlanID != "" {

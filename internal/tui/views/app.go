@@ -2338,7 +2338,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case RetryFailedMsg:
-		a.toasts.AddToast("Retrying failed repos...", components.ToastInfo)
+		a.toasts.AddToast("Retrying failed or interrupted repos...", components.ToastInfo)
 		if a.provider.Implementation() != nil {
 			if plan := a.plans[msg.WorkItemID]; plan != nil {
 				cmds = append(cmds, RetryFailedCmd(a.registerPipelineCancel(msg.WorkItemID), a.provider.Session(), a.provider.Implementation(), plan.ID, msg.WorkItemID))
@@ -3738,7 +3738,6 @@ func (a App) sidebarEntryFromWorkItem(wi domain.Session) SidebarEntry {
 				entry.DoneSubPlans++
 			}
 		}
-		subPlanSessions := make([]domain.AgentSession, 0, len(a.sessions))
 		for _, s := range a.sessions {
 			if !subPlanIDs[s.SubPlanID] {
 				continue
@@ -3746,19 +3745,25 @@ func (a App) sidebarEntryFromWorkItem(wi domain.Session) SidebarEntry {
 			if s.UpdatedAt.After(entry.LastActivity) {
 				entry.LastActivity = s.UpdatedAt
 			}
-			subPlanSessions = append(subPlanSessions, s)
 		}
-		for _, leaf := range leafAgentSessions(subPlanSessions) {
-			if leaf.Status == domain.AgentSessionWaitingForAnswer {
-				for _, q := range a.questions[leaf.ID] {
-					if q.Status == domain.QuestionPending || q.Status == domain.QuestionEscalated {
-						entry.HasOpenQuestion = true
-					}
+	}
+	graphSessions := make([]domain.AgentSession, 0, len(a.sessions))
+	for _, s := range a.sessionsForWorkItem(wi.ID) {
+		if s.Kind == domain.AgentSessionKindManual {
+			continue
+		}
+		graphSessions = append(graphSessions, s)
+	}
+	for _, leaf := range leafAgentSessions(graphSessions) {
+		if leaf.Status == domain.AgentSessionWaitingForAnswer {
+			for _, q := range a.questions[leaf.ID] {
+				if q.Status == domain.QuestionPending || q.Status == domain.QuestionEscalated {
+					entry.HasOpenQuestion = true
 				}
 			}
-			if leaf.Status == domain.AgentSessionInterrupted {
-				entry.HasInterrupted = true
-			}
+		}
+		if leaf.Status == domain.AgentSessionInterrupted {
+			entry.HasInterrupted = true
 		}
 	}
 	return entry

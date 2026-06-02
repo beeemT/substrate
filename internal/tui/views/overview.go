@@ -1752,18 +1752,36 @@ func (a *App) buildFailedActionCard(wi *domain.Session, subPlans []domain.TaskPl
 	if wi.State != domain.SessionFailed {
 		return nil
 	}
-	var affected []string
+	affectedSet := make(map[string]bool, len(subPlans))
+	affected := make([]string, 0, len(subPlans))
+	addAffected := func(repo string) {
+		repo = firstNonEmptyString(strings.TrimSpace(repo), "(unknown)")
+		if affectedSet[repo] {
+			return
+		}
+		affectedSet[repo] = true
+		affected = append(affected, repo)
+	}
 	for _, subPlan := range subPlans {
-		if subPlan.Status != domain.SubPlanFailed {
+		if subPlan.Status == domain.SubPlanFailed {
+			addAffected(subPlan.RepositoryName)
+		}
+	}
+	subPlanRepos := make(map[string]string, len(subPlans))
+	for _, subPlan := range subPlans {
+		subPlanRepos[subPlan.ID] = subPlan.RepositoryName
+	}
+	for _, leaf := range domain.LeafAgentSessions(a.sessionsForWorkItem(wi.ID)) {
+		if leaf.Status != domain.AgentSessionFailed && leaf.Status != domain.AgentSessionInterrupted {
 			continue
 		}
-		affected = append(affected, subPlan.RepositoryName)
+		addAffected(firstNonEmptyString(leaf.RepositoryName, subPlanRepos[leaf.SubPlanID], taskSessionDisplayName(&leaf)))
 	}
 	if len(affected) == 0 {
-		// No failed sub-plans found; show a generic card.
+		// No failed or interrupted sub-plans found; show a generic card.
 		affected = []string{"(unknown)"}
 	}
-	context := []string{fmt.Sprintf("Failed repos: %d of %d", len(affected), len(subPlans))}
+	context := []string{fmt.Sprintf("Failed or interrupted repos: %d of %d", len(affected), len(subPlans))}
 	// Check for review critiques on failed sessions.
 	reviewRepos := a.reviewResultsForOverview(wi.ID, subPlans)
 	critiqueCount := 0
@@ -1776,8 +1794,8 @@ func (a *App) buildFailedActionCard(wi *domain.Session, subPlans []domain.TaskPl
 	return &OverviewActionCard{
 		Kind:        overviewActionFailed,
 		Title:       "Implementation failed",
-		Blocked:     fmt.Sprintf("%d repo(s) failed during implementation or review", len(affected)),
-		Why:         "You can retry the failed repos or inspect their session logs for details.",
+		Blocked:     fmt.Sprintf("%d repo(s) failed or were interrupted during implementation or review", len(affected)),
+		Why:         "You can retry the failed or interrupted repos or inspect their session logs for details.",
 		Affected:    affected,
 		Context:     context,
 		ReviewRepos: reviewRepos,

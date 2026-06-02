@@ -21,7 +21,6 @@ import (
 	"github.com/beeemT/substrate/internal/gitwork"
 	"github.com/beeemT/substrate/internal/service"
 	"github.com/beeemT/substrate/internal/worktree"
-	"golang.org/x/sync/errgroup"
 )
 
 // ImplementationService orchestrates the implementation phase after plan approval.
@@ -291,6 +290,10 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (r
 	// 9. Generate branch name
 	branch := GenerateBranchName(workItem.ExternalID, workItem.Title)
 
+	// Reset retryable sub-plans before building execution state so retry waves
+	// reflect the statuses that will actually be executed.
+	s.resetRetryableSubPlans(ctx, subPlans)
+
 	// 10. Initialize execution state
 	state := NewExecutionState(planID, subPlans)
 
@@ -312,16 +315,6 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (r
 		return nil, fmt.Errorf("prepare worktrees: %w", err)
 	}
 
-	// Reset failed and in_progress sub-plans to pending so they are picked up by BuildWaves.
-	// Completed sub-plans are left alone. In_progress ones were left stranded by a process crash
-	// — treat them as needing a fresh execution just like failed ones.
-	// Escalated sub-plans are also reset so bulk retry re-executes them.
-	for i := range subPlans {
-		if subPlans[i].Status == domain.SubPlanFailed || subPlans[i].Status == domain.SubPlanInProgress || subPlans[i].Status == domain.SubPlanEscalated {
-			s.persistSubPlanStatus(ctx, &subPlans[i], domain.SubPlanPending)
-		}
-	}
-
 	// Execute each wave sequentially
 	for waveIndex, wave := range BuildWaves(subPlans) {
 		if ctx.Err() != nil {
@@ -336,8 +329,13 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (r
 			"sub_plans", len(wave),
 			"plan_id", planID)
 
-		// Execute sub-plans in this wave concurrently
+		// Execute sub-plans in this wave concurrently. A sub-plan failure must
+		// not cancel siblings; the parent context still interrupts all sessions
+		// when the operator quits or the app shuts down.
 		sessionResults, warnings := s.executeWave(ctx, wave, &workspace, &plan, &workItem, branch, worktreePaths, state)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		result.Sessions = append(result.Sessions, sessionResults...)
 		result.Warnings = append(result.Warnings, warnings...)
 
@@ -410,6 +408,39 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (r
 	return result, nil
 }
 
+// resetRetryableSubPlans resets sub-plans that should be picked up by a bulk
+// retry. In addition to persisted failed/in-progress/escalated sub-plan states,
+// it treats failed or interrupted graph leaves as retryable even when the
+// sub-plan status itself is stale.
+func (s *ImplementationService) resetRetryableSubPlans(ctx context.Context, subPlans []domain.TaskPlan) {
+	for i := range subPlans {
+		if s.subPlanNeedsRetry(ctx, subPlans[i]) {
+			s.resetSubPlanForRetry(ctx, &subPlans[i])
+		}
+	}
+}
+
+func (s *ImplementationService) subPlanNeedsRetry(ctx context.Context, subPlan domain.TaskPlan) bool {
+	switch subPlan.Status {
+	case domain.SubPlanFailed, domain.SubPlanInProgress, domain.SubPlanEscalated:
+		return true
+	}
+
+	sessions, err := s.sessionSvc.ListBySubPlanID(ctx, subPlan.ID)
+	if err != nil {
+		slog.Warn("failed to list sessions for retry reconciliation",
+			"error", err,
+			"sub_plan_id", subPlan.ID)
+		return false
+	}
+	for _, leaf := range domain.LeafAgentSessions(sessions) {
+		if leaf.Status == domain.AgentSessionFailed || leaf.Status == domain.AgentSessionInterrupted {
+			return true
+		}
+	}
+	return false
+}
+
 // executeWave executes all sub-plans in a wave concurrently.
 func (s *ImplementationService) executeWave(
 	ctx context.Context,
@@ -424,13 +455,14 @@ func (s *ImplementationService) executeWave(
 	var results []SessionResult
 	var warnings []ImplementationWarning
 	var mu sync.Mutex
-
-	g, ctx := errgroup.WithContext(ctx)
+	var wg sync.WaitGroup
 
 	for _, sp := range wave {
 		spCopy := sp
+		wg.Add(1)
 
-		g.Go(func() error {
+		go func() {
+			defer wg.Done()
 			result, warning := s.executeSubPlan(ctx, spCopy, workspace, plan, workItem, branch, worktreePaths, state)
 
 			mu.Lock()
@@ -439,22 +471,12 @@ func (s *ImplementationService) executeWave(
 				warnings = append(warnings, *warning)
 			}
 			mu.Unlock()
-
-			// Cancel other goroutines only on hard failure (impl or review).
-			// Review escalation is not a failure — it's a human-decision pause.
-			if result.Status == domain.AgentSessionFailed {
-				return fmt.Errorf("sub-plan %s failed: %s", spCopy.ID, result.Summary)
-			}
-			if result.Outcome != nil && result.Outcome.Failed {
-				return fmt.Errorf("sub-plan %s review failed", spCopy.ID)
-			}
-
-			return nil
-		})
+		}()
 	}
 
-	// Wait for all sub-plans in the wave
-	_ = g.Wait() // Error is handled via results
+	// Wait for all sub-plans in the wave. Individual failures are represented
+	// in results; they do not cancel sibling goroutines.
+	wg.Wait()
 
 	return results, warnings
 }
@@ -2132,6 +2154,16 @@ func (s *ImplementationService) persistSubPlanStatus(ctx context.Context, sp *do
 	}
 	// Always update in-memory state so the orchestrator can continue.
 	sp.Status = status
+	sp.UpdatedAt = time.Now()
+}
+
+func (s *ImplementationService) resetSubPlanForRetry(ctx context.Context, sp *domain.TaskPlan) {
+	if err := s.planSvc.ResetSubPlanForRetry(ctx, sp.ID); err != nil {
+		slog.Warn("failed to reset sub-plan for retry",
+			"error", err,
+			"sub_plan_id", sp.ID)
+	}
+	sp.Status = domain.SubPlanPending
 	sp.UpdatedAt = time.Now()
 }
 

@@ -359,6 +359,26 @@ func TestResumeAllSessionsForWorkItemCmd_SkipsSuperseded(t *testing.T) {
 	}
 }
 
+func TestResumeAllSessionsForWorkItemCmd_ResumesInterruptedLeafWithCompletedParent(t *testing.T) {
+	impl := resumeAllSession("impl-completed", "sp-1", domain.AgentSessionCompleted)
+	review := resumeAllSession("review-interrupted", "sp-1", domain.AgentSessionInterrupted)
+	review.Kind = domain.AgentSessionKindReview
+	review.ParentAgentSessionID = impl.ID
+	fix := newResumeAllCmdFixture(t, []domain.AgentSession{impl, review})
+
+	msg := ResumeAllSessionsForWorkItemCmd(context.Background(), fix.workItemSvc, fix.planningSvc, fix.resumption, fix.sessionSvc, fix.planSvc, nil, "wi-1", "inst-1")()
+	resumed, ok := msg.(SessionResumedMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want SessionResumedMsg", msg)
+	}
+	if resumed.Message != "Resumed 1 task" {
+		t.Fatalf("message = %q, want %q", resumed.Message, "Resumed 1 task")
+	}
+	if len(fix.harness.starts) != 1 {
+		t.Fatalf("starts = %d, want 1", len(fix.harness.starts))
+	}
+}
+
 func TestResumeAllSessionsForWorkItemCmd_PlanningTriggersRestart(t *testing.T) {
 	planning := domain.AgentSession{ID: "sess-plan", WorkItemID: "wi-1", WorkspaceID: "ws-1", Kind: domain.AgentSessionKindPlanning, Status: domain.AgentSessionInterrupted}
 	implementation := resumeAllSession("sess-impl", "sp-1", domain.AgentSessionInterrupted)

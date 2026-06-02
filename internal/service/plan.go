@@ -141,9 +141,9 @@ func canTransitionPlan(from, to domain.PlanStatus) bool {
 var validSubPlanTransitions = map[domain.TaskPlanStatus][]domain.TaskPlanStatus{
 	domain.SubPlanPending:    {domain.SubPlanInProgress},
 	domain.SubPlanInProgress: {domain.SubPlanCompleted, domain.SubPlanFailed, domain.SubPlanEscalated, domain.SubPlanPending},
-	domain.SubPlanCompleted:  {},                                                  // Terminal state
-	domain.SubPlanFailed:     {domain.SubPlanInProgress, domain.SubPlanPending},    // Direct retry + wave reset
-	domain.SubPlanEscalated:  {domain.SubPlanInProgress, domain.SubPlanPending},    // Human-resumed retry
+	domain.SubPlanCompleted:  {},                                                // Terminal state
+	domain.SubPlanFailed:     {domain.SubPlanInProgress, domain.SubPlanPending}, // Direct retry + wave reset
+	domain.SubPlanEscalated:  {domain.SubPlanInProgress, domain.SubPlanPending}, // Human-resumed retry
 }
 
 func canTransitionSubPlan(from, to domain.TaskPlanStatus) bool {
@@ -803,6 +803,26 @@ func (s *PlanService) TransitionSubPlan(ctx context.Context, id string, to domai
 		CreatedAt: time.Now(),
 	})
 	return nil
+}
+
+// ResetSubPlanForRetry moves a sub-plan back to pending for orchestration
+// retry. Unlike TransitionSubPlan, this intentionally permits terminal states:
+// retry reconciliation may discover a failed or interrupted leaf agent session
+// even when the persisted sub-plan status is stale. Pending is an internal
+// orchestration reset and emits no semantic lifecycle event.
+func (s *PlanService) ResetSubPlanForRetry(ctx context.Context, id string) error {
+	return s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
+		sp, err := res.SubPlans.Get(ctx, id)
+		if err != nil {
+			return newNotFoundError("sub-plan", id)
+		}
+		if sp.Status == domain.SubPlanPending {
+			return nil
+		}
+		sp.Status = domain.SubPlanPending
+		sp.UpdatedAt = time.Now()
+		return res.SubPlans.Update(ctx, sp)
+	})
 }
 
 // subPlanEventType returns the semantic event type for a sub-plan status transition.

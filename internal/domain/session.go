@@ -2,6 +2,94 @@ package domain
 
 import "time"
 
+// LeafAgentSessions returns the leaf nodes of the agent-session graph defined
+// by AgentSession.ParentAgentSessionID. A leaf is a session that no other
+// non-manual session in the input slice points to as its parent.
+//
+// Manual sessions are excluded entirely. They are user-driven side
+// conversations outside the orchestrator's implementation/review chain and must
+// not influence work-item-level retry, question, or interruption projections.
+func LeafAgentSessions(sessions []AgentSession) []AgentSession {
+	if len(sessions) == 0 {
+		return nil
+	}
+
+	filtered := make([]AgentSession, 0, len(sessions))
+	for i := range sessions {
+		if sessions[i].Kind == AgentSessionKindManual {
+			continue
+		}
+		filtered = append(filtered, sessions[i])
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+
+	hasChild := make(map[string]bool, len(filtered))
+	for i := range filtered {
+		if pid := filtered[i].ParentAgentSessionID; pid != "" {
+			hasChild[pid] = true
+		}
+	}
+
+	type groupKey struct {
+		kind           AgentSessionKind
+		subPlanID      string
+		repositoryName string
+	}
+	type groupInfo struct {
+		leaves  []AgentSession
+		anyEdge bool
+	}
+
+	groups := make(map[groupKey]*groupInfo)
+	for i := range filtered {
+		s := filtered[i]
+		k := groupKey{kind: s.Kind, subPlanID: s.SubPlanID, repositoryName: s.RepositoryName}
+		g := groups[k]
+		if g == nil {
+			g = &groupInfo{}
+			groups[k] = g
+		}
+		if s.ParentAgentSessionID != "" || hasChild[s.ID] {
+			g.anyEdge = true
+		}
+		if hasChild[s.ID] {
+			continue
+		}
+		g.leaves = append(g.leaves, s)
+	}
+
+	leaves := make([]AgentSession, 0, len(filtered))
+	for _, g := range groups {
+		if len(g.leaves) == 0 {
+			continue
+		}
+		if g.anyEdge {
+			leaves = append(leaves, g.leaves...)
+			continue
+		}
+		latest := g.leaves[0]
+		for i := 1; i < len(g.leaves); i++ {
+			if leafAgentSessionIsNewer(g.leaves[i], latest) {
+				latest = g.leaves[i]
+			}
+		}
+		leaves = append(leaves, latest)
+	}
+	return leaves
+}
+
+func leafAgentSessionIsNewer(a, b AgentSession) bool {
+	if !a.CreatedAt.Equal(b.CreatedAt) {
+		return a.CreatedAt.After(b.CreatedAt)
+	}
+	if !a.UpdatedAt.Equal(b.UpdatedAt) {
+		return a.UpdatedAt.After(b.UpdatedAt)
+	}
+	return a.ID > b.ID
+}
+
 // AgentSessionKind identifies the kind of child agent session being tracked.
 type AgentSessionKind string
 

@@ -3,6 +3,7 @@ package views
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1487,6 +1488,31 @@ func TestOverviewConsolidatesInterruptedImplementationSessions(t *testing.T) {
 	t.Fatalf("hints = %#v, want resume hint", hints)
 }
 
+func TestOverviewHeaderUsesInterruptedLeafOutsideSubPlans(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	app := newTestApp(Services{WorkspaceID: "ws-local", WorkspaceName: "local", Settings: newTestSettingsService()})
+	workItem := domain.Session{ID: "wi-1", WorkspaceID: "ws-local", Title: "Interrupted review", State: domain.SessionReviewing, CreatedAt: now, UpdatedAt: now}
+	plan := &domain.Plan{ID: "plan-1", WorkItemID: "wi-1", Status: domain.PlanApproved}
+	app.plans[workItem.ID] = plan
+	app.subPlans[plan.ID] = []domain.TaskPlan{{ID: "sp-1", PlanID: plan.ID, RepositoryName: "repo-a", Status: domain.SubPlanCompleted}}
+	app.sessions = []domain.AgentSession{
+		{ID: "impl-1", WorkItemID: workItem.ID, WorkspaceID: "ws-local", SubPlanID: "sp-1", RepositoryName: "repo-a", Kind: domain.AgentSessionKindImplementation, Status: domain.AgentSessionCompleted, UpdatedAt: now.Add(-time.Minute)},
+		{ID: "review-1", WorkItemID: workItem.ID, WorkspaceID: "ws-local", RepositoryName: "repo-a", Kind: domain.AgentSessionKindReview, Status: domain.AgentSessionInterrupted, ParentAgentSessionID: "impl-1", UpdatedAt: now},
+	}
+
+	entry := app.sidebarEntryFromWorkItem(workItem)
+	header := buildOverviewHeader(workItem, entry)
+	if header.StatusLabel != "Interrupted" {
+		t.Fatalf("status label = %q, want Interrupted", header.StatusLabel)
+	}
+	actions := app.buildOverviewActions(&workItem, plan, app.subPlans[plan.ID])
+	if len(actions) != 1 || actions[0].Kind != overviewActionInterrupted {
+		t.Fatalf("actions = %#v, want interrupted action", actions)
+	}
+}
+
 func TestOverviewShowsFinalizeActionForCompletedButImplementingWorkItem(t *testing.T) {
 	t.Parallel()
 
@@ -1951,5 +1977,43 @@ func TestInspectKeyForCompletedPlanOpensNormalMode(t *testing.T) {
 	}
 	if updated.planReview.inputMode != planReviewNormal {
 		t.Fatalf("inputMode = %v, want planReviewNormal for completed plan inspect", updated.planReview.inputMode)
+	}
+}
+
+func TestBuildFailedActionCard_IncludesInterruptedLeafRepos(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	wi := &domain.Session{ID: "wi-1", State: domain.SessionFailed}
+	subPlans := []domain.TaskPlan{
+		{ID: "sp-failed", RepositoryName: "repo-failed", Status: domain.SubPlanFailed},
+		{ID: "sp-interrupted", RepositoryName: "repo-interrupted", Status: domain.SubPlanCompleted},
+		{ID: "sp-completed", RepositoryName: "repo-completed", Status: domain.SubPlanCompleted},
+	}
+	app := App{
+		sessions: []domain.AgentSession{
+			{ID: "failed-leaf", WorkItemID: "wi-1", SubPlanID: "sp-failed", RepositoryName: "repo-failed", Kind: domain.AgentSessionKindImplementation, Status: domain.AgentSessionFailed, CreatedAt: now, UpdatedAt: now},
+			{ID: "interrupted-leaf", WorkItemID: "wi-1", SubPlanID: "sp-interrupted", RepositoryName: "repo-interrupted", Kind: domain.AgentSessionKindImplementation, Status: domain.AgentSessionInterrupted, CreatedAt: now, UpdatedAt: now},
+			{ID: "completed-leaf", WorkItemID: "wi-1", SubPlanID: "sp-completed", RepositoryName: "repo-completed", Kind: domain.AgentSessionKindImplementation, Status: domain.AgentSessionCompleted, CreatedAt: now, UpdatedAt: now},
+		},
+		plans:     map[string]*domain.Plan{},
+		subPlans:  map[string][]domain.TaskPlan{},
+		questions: map[string]map[string]domain.Question{},
+	}
+
+	action := app.buildFailedActionCard(wi, subPlans)
+	if action == nil {
+		t.Fatal("buildFailedActionCard returned nil")
+	}
+	if !slices.Contains(action.Affected, "repo-failed") {
+		t.Fatalf("Affected = %v, want repo-failed", action.Affected)
+	}
+	if !slices.Contains(action.Affected, "repo-interrupted") {
+		t.Fatalf("Affected = %v, want repo-interrupted", action.Affected)
+	}
+	if slices.Contains(action.Affected, "repo-completed") {
+		t.Fatalf("Affected = %v, did not want repo-completed", action.Affected)
+	}
+	if !strings.Contains(strings.Join(action.Context, "\n"), "Failed or interrupted repos: 2 of 3") {
+		t.Fatalf("Context = %v, want failed or interrupted count", action.Context)
 	}
 }

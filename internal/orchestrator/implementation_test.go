@@ -3110,3 +3110,212 @@ error: failed to push some refs to 'gitlab.justtrack.io:justtrack/frontend/paket
 		})
 	}
 }
+
+// controlledWaveHarness lets wave tests fail one repo while holding another
+// repo open until the test releases it.
+type controlledWaveHarness struct {
+	mu              sync.Mutex
+	started         map[string]chan struct{}
+	release         map[string]chan struct{}
+	errs            map[string]error
+	waitCtxCanceled map[string]bool
+}
+
+func newControlledWaveHarness() *controlledWaveHarness {
+	return &controlledWaveHarness{
+		started:         make(map[string]chan struct{}),
+		release:         make(map[string]chan struct{}),
+		errs:            make(map[string]error),
+		waitCtxCanceled: make(map[string]bool),
+	}
+}
+
+func (h *controlledWaveHarness) SupportsCompact() bool { return true }
+func (h *controlledWaveHarness) Name() string          { return "controlled-wave" }
+func (h *controlledWaveHarness) StartSession(_ context.Context, opts adapter.SessionOpts) (adapter.AgentSession, error) {
+	h.mu.Lock()
+	if h.started[opts.Repository] == nil {
+		h.started[opts.Repository] = make(chan struct{})
+	}
+	if h.release[opts.Repository] == nil {
+		h.release[opts.Repository] = make(chan struct{})
+	}
+	started := h.started[opts.Repository]
+	release := h.release[opts.Repository]
+	err := h.errs[opts.Repository]
+	h.mu.Unlock()
+	close(started)
+	return &controlledWaveSession{id: opts.SessionID, repo: opts.Repository, events: make(chan adapter.AgentEvent, 1), release: release, err: err, harness: h}, nil
+}
+
+func (h *controlledWaveHarness) fail(repo string, err error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.errs[repo] = err
+}
+
+func (h *controlledWaveHarness) waitStarted(t *testing.T, repo string) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for {
+		h.mu.Lock()
+		ch := h.started[repo]
+		h.mu.Unlock()
+		if ch != nil {
+			select {
+			case <-ch:
+				return
+			case <-deadline:
+				t.Fatalf("repo %s did not start", repo)
+			}
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("repo %s was not registered", repo)
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
+func (h *controlledWaveHarness) releaseRepo(repo string) {
+	h.mu.Lock()
+	ch := h.release[repo]
+	h.mu.Unlock()
+	close(ch)
+}
+
+func (h *controlledWaveHarness) sawCanceled(repo string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.waitCtxCanceled[repo]
+}
+
+type controlledWaveSession struct {
+	id      string
+	repo    string
+	events  chan adapter.AgentEvent
+	release <-chan struct{}
+	err     error
+	harness *controlledWaveHarness
+}
+
+func (s *controlledWaveSession) ID() string { return s.id }
+func (s *controlledWaveSession) Wait(ctx context.Context) error {
+	if s.err != nil {
+		return s.err
+	}
+	select {
+	case <-s.release:
+		if ctx.Err() != nil {
+			s.harness.mu.Lock()
+			s.harness.waitCtxCanceled[s.repo] = true
+			s.harness.mu.Unlock()
+			return ctx.Err()
+		}
+		return nil
+	case <-ctx.Done():
+		s.harness.mu.Lock()
+		s.harness.waitCtxCanceled[s.repo] = true
+		s.harness.mu.Unlock()
+		return ctx.Err()
+	}
+}
+func (s *controlledWaveSession) Events() <-chan adapter.AgentEvent             { close(s.events); return s.events }
+func (s *controlledWaveSession) SendMessage(_ context.Context, _ string) error { return nil }
+func (s *controlledWaveSession) Steer(_ context.Context, _ string) error       { return nil }
+func (s *controlledWaveSession) SendAnswer(_ context.Context, _ string) error  { return nil }
+func (s *controlledWaveSession) Abort(_ context.Context) error                 { return nil }
+func (s *controlledWaveSession) ResumeInfo() map[string]string                 { return nil }
+func (s *controlledWaveSession) Done() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
+func (s *controlledWaveSession) Compact(_ context.Context) error { return nil }
+
+func TestExecuteWave_DoesNotCancelSiblingSubPlansOnFailure(t *testing.T) {
+	svc, _, _, sessionRepo, subPlanRepo := newImplementationServiceForTest(t.TempDir(), "repo-a")
+	harness := newControlledWaveHarness()
+	harness.fail("repo-a", errors.New("repo-a failed"))
+	svc.harness = harness
+
+	subPlanRepo.subPlans["sp-b"] = domain.TaskPlan{ID: "sp-b", PlanID: "plan-1", RepositoryName: "repo-b", Content: "Implement B", Order: 0, Status: domain.SubPlanPending}
+	spA := subPlanRepo.subPlans["sp-1"]
+	spB := subPlanRepo.subPlans["sp-b"]
+	workspace := domain.Workspace{ID: "ws-1", RootPath: t.TempDir(), Status: domain.WorkspaceReady}
+	plan := domain.Plan{ID: "plan-1", WorkItemID: "wi-1", Status: domain.PlanApproved}
+	workItem := domain.Session{ID: "wi-1", WorkspaceID: "ws-1", ExternalID: "MAN-1", Source: "manual", Title: "Implement", State: domain.SessionImplementing}
+	state := NewExecutionState("plan-1", []domain.TaskPlan{spA, spB})
+
+	done := make(chan []SessionResult, 1)
+	go func() {
+		results, _ := svc.executeWave(context.Background(), []domain.TaskPlan{spA, spB}, &workspace, &plan, &workItem, "branch", map[string]string{"repo-a": t.TempDir(), "repo-b": t.TempDir()}, state)
+		done <- results
+	}()
+
+	harness.waitStarted(t, "repo-b")
+	select {
+	case <-done:
+		t.Fatal("executeWave returned before sibling repo was released")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	harness.releaseRepo("repo-b")
+	var results []SessionResult
+	select {
+	case results = <-done:
+	case <-time.After(time.Second):
+		t.Fatal("executeWave did not finish after sibling release")
+	}
+	if harness.sawCanceled("repo-b") {
+		t.Fatal("sibling repo observed context cancellation from another sub-plan failure")
+	}
+
+	byRepo := make(map[string]domain.AgentSessionStatus, len(results))
+	for _, result := range results {
+		byRepo[result.Repository] = result.Status
+	}
+	if byRepo["repo-a"] != domain.AgentSessionFailed {
+		t.Fatalf("repo-a status = %q, want %q", byRepo["repo-a"], domain.AgentSessionFailed)
+	}
+	if byRepo["repo-b"] != domain.AgentSessionCompleted {
+		t.Fatalf("repo-b status = %q, want %q", byRepo["repo-b"], domain.AgentSessionCompleted)
+	}
+
+	var repoBCompleted bool
+	for _, session := range sessionRepo.sessions {
+		if session.RepositoryName == "repo-b" && session.Status == domain.AgentSessionCompleted {
+			repoBCompleted = true
+		}
+		if session.RepositoryName == "repo-b" && session.Status == domain.AgentSessionInterrupted {
+			t.Fatal("repo-b was marked interrupted after repo-a failed")
+		}
+	}
+	if !repoBCompleted {
+		t.Fatal("repo-b session was not completed")
+	}
+}
+
+func TestResetRetryableSubPlans_IncludesFailedAndInterruptedLeaves(t *testing.T) {
+	svc, _, _, sessionRepo, subPlanRepo := newImplementationServiceForTest(t.TempDir(), "repo-a")
+	now := time.Now()
+	subPlanRepo.subPlans["sp-1"] = domain.TaskPlan{ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a", Status: domain.SubPlanCompleted}
+	subPlanRepo.subPlans["sp-b"] = domain.TaskPlan{ID: "sp-b", PlanID: "plan-1", RepositoryName: "repo-b", Status: domain.SubPlanCompleted}
+	subPlanRepo.subPlans["sp-c"] = domain.TaskPlan{ID: "sp-c", PlanID: "plan-1", RepositoryName: "repo-c", Status: domain.SubPlanCompleted}
+	sessionRepo.sessions["failed-leaf"] = domain.AgentSession{ID: "failed-leaf", WorkItemID: "wi-1", SubPlanID: "sp-1", RepositoryName: "repo-a", Kind: domain.AgentSessionKindImplementation, Status: domain.AgentSessionFailed, CreatedAt: now, UpdatedAt: now}
+	sessionRepo.sessions["interrupted-leaf"] = domain.AgentSession{ID: "interrupted-leaf", WorkItemID: "wi-1", SubPlanID: "sp-b", RepositoryName: "repo-b", Kind: domain.AgentSessionKindImplementation, Status: domain.AgentSessionInterrupted, CreatedAt: now, UpdatedAt: now}
+	sessionRepo.sessions["completed-leaf"] = domain.AgentSession{ID: "completed-leaf", WorkItemID: "wi-1", SubPlanID: "sp-c", RepositoryName: "repo-c", Kind: domain.AgentSessionKindImplementation, Status: domain.AgentSessionCompleted, CreatedAt: now, UpdatedAt: now}
+
+	subPlans := []domain.TaskPlan{subPlanRepo.subPlans["sp-1"], subPlanRepo.subPlans["sp-b"], subPlanRepo.subPlans["sp-c"]}
+	svc.resetRetryableSubPlans(context.Background(), subPlans)
+
+	if got := subPlanRepo.subPlans["sp-1"].Status; got != domain.SubPlanPending {
+		t.Fatalf("failed leaf sub-plan status = %q, want %q", got, domain.SubPlanPending)
+	}
+	if got := subPlanRepo.subPlans["sp-b"].Status; got != domain.SubPlanPending {
+		t.Fatalf("interrupted leaf sub-plan status = %q, want %q", got, domain.SubPlanPending)
+	}
+	if got := subPlanRepo.subPlans["sp-c"].Status; got != domain.SubPlanCompleted {
+		t.Fatalf("completed leaf sub-plan status = %q, want %q", got, domain.SubPlanCompleted)
+	}
+}
