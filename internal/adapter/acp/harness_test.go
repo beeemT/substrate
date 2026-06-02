@@ -58,6 +58,9 @@ func TestHelperACPProcess(t *testing.T) {
 			writeHelper(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{"sessionId": "acp-sess-1", "update": map[string]any{"sessionUpdate": "tool_call", "toolCallId": "tc1", "title": "Read file", "kind": "read", "status": "pending"}}})
 			writeHelper(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{"sessionId": "acp-sess-1", "update": map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "tc1", "status": "completed", "content": []map[string]any{{"type": "content", "content": map[string]any{"type": "text", "text": "ok"}}}}}})
 			writeHelper(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{"stopReason": "end_turn"}})
+			if os.Getenv("ACP_EXIT_AFTER_PROMPT") == "1" {
+				os.Exit(0)
+			}
 		case "session/cancel", "session/close":
 			if hasID {
 				writeHelper(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{}})
@@ -383,16 +386,27 @@ func TestStartSessionIncludesEmptyMCPServers(t *testing.T) {
 
 func TestAbortAfterSessionFinished(t *testing.T) {
 	cfg := helperACPConfig(t)
+	cfg.Env["ACP_EXIT_AFTER_PROMPT"] = "1"
 	h := NewHarness(cfg, t.TempDir())
 	sess, err := h.StartSession(context.Background(), adapter.SessionOpts{SessionID: "s-finished", WorktreePath: t.TempDir(), SessionLogDir: t.TempDir(), UserPrompt: "do work"})
 	if err != nil {
 		t.Fatalf("StartSession: %v", err)
 	}
 	collectUntilDone(t, sess)
-	// Wait for the agent process to exit so the rpc client closes via EOF.
-	// Without this, the Abort below could race against a still-running agent.
-	if err := sess.Wait(context.Background()); err != nil {
-		t.Fatalf("Wait: %v", err)
+	concrete := sess.(*Session)
+	select {
+	case <-concrete.client.wait():
+	case <-time.After(time.Second):
+		t.Fatal("rpc client did not close after helper exit")
+	}
+	for deadline := time.Now().Add(time.Second); concrete.cmd.ProcessState == nil; {
+		if time.Now().After(deadline) {
+			t.Fatal("helper process was not reaped after exit")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !concrete.client.Closed() {
+		t.Fatal("rpc client is not closed before abort")
 	}
 	// Abort on a fully-finished session must be a silent no-op: the rpc
 	// client is already closed, the process is reaped, and any further
