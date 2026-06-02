@@ -256,13 +256,17 @@ func actionMenuFrameWidth(termWidth int) int {
 	if termWidth <= 2 {
 		return 1
 	}
-	return min(termWidth-2, actionMenuMaxOverlayWidth-2)
+	availableWidth := termWidth - 2
+	minHalfWidth := (termWidth + 1) / 2
+	return min(availableWidth, max(actionMenuMaxOverlayWidth-2, minHalfWidth))
 }
 
 func (m ActionMenuModel) visibleActionRows() int {
 	const fixedRows = 7 // frame borders + title + search + divider + body gap + footer
 	availableRows := max(1, m.height-fixedRows)
-	return min(actionMenuMaxVisibleActions, availableRows)
+	minHalfHeightRows := max(1, (m.height+1)/2-fixedRows)
+	desiredRows := max(actionMenuMaxVisibleActions, minHalfHeightRows)
+	return min(desiredRows, availableRows)
 }
 
 func (m ActionMenuModel) searchLine(width int) string {
@@ -274,21 +278,24 @@ func (m ActionMenuModel) searchLine(width int) string {
 
 func (m ActionMenuModel) actionsBody(width, visibleRows int) string {
 	visibleRows = max(1, visibleRows)
+	rows := make([]string, 0, visibleRows)
 	if len(m.matches) == 0 {
-		return m.st.Muted.Render(centerText("No matching actions", width))
-	}
+		rows = append(rows, m.st.Muted.Render(centerText("No matching actions", width)))
+	} else {
+		startIdx := 0
+		if len(m.matches) > visibleRows && m.cursor >= visibleRows {
+			startIdx = m.cursor - visibleRows/2
+		}
+		startIdx = min(startIdx, max(0, len(m.matches)-visibleRows))
+		endIdx := min(startIdx+visibleRows, len(m.matches))
 
-	startIdx := 0
-	if len(m.matches) > visibleRows && m.cursor >= visibleRows {
-		startIdx = m.cursor - visibleRows/2
+		for i := startIdx; i < endIdx; i++ {
+			idx := m.matches[i]
+			rows = append(rows, formatActionRow(m.actions[idx], width, i == m.cursor, m.st))
+		}
 	}
-	startIdx = min(startIdx, max(0, len(m.matches)-visibleRows))
-	endIdx := min(startIdx+visibleRows, len(m.matches))
-
-	rows := make([]string, 0, endIdx-startIdx)
-	for i := startIdx; i < endIdx; i++ {
-		idx := m.matches[i]
-		rows = append(rows, formatActionRow(m.actions[idx], width, i == m.cursor, m.st))
+	for len(rows) < visibleRows {
+		rows = append(rows, "")
 	}
 	return strings.Join(rows, "\n")
 }

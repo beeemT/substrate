@@ -43,3 +43,27 @@ func TestActionMenuViewRendersActionRowsWithSharedChrome(t *testing.T) {
 		t.Fatalf("view should truncate the long action label with an ellipsis\n%s", plain)
 	}
 }
+
+func TestActionMenuViewUsesAtLeastHalfScreen(t *testing.T) {
+	t.Parallel()
+
+	st := styles.NewStyles(styles.DefaultTheme)
+	model := NewActionMenuModel(st)
+	model.SetSize(200, 60)
+	model.actions = []Action{{ID: "open", Label: "Open", Shortcut: "o"}}
+	model.matches = []int{0}
+
+	view := model.View()
+	lines := strings.Split(view, "\n")
+	if len(lines) < 30 {
+		t.Fatalf("view height = %d lines, want at least 30", len(lines))
+	}
+	for i, line := range lines {
+		if got := ansi.StringWidth(line); got > 200 {
+			t.Fatalf("line %d width = %d, want <= 200: %q", i+1, got, line)
+		}
+	}
+	if got := ansi.StringWidth(lines[0]); got < 100 {
+		t.Fatalf("view width = %d, want at least 100", got)
+	}
+}
