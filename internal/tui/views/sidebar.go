@@ -358,7 +358,11 @@ func (e SidebarEntry) Subtitle() string {
 	return strings.Join(parts, " · ")
 }
 
-const sidebarHeaderLines = 2 // title + divider
+// maxSidebarTitleLines caps the number of lines a wrapped sidebar title may
+// occupy. Beyond this, the wrapped title is truncated to the first
+// maxSidebarTitleLines lines so a long work-item title cannot eat the entire
+// tasks pane.
+const maxSidebarTitleLines = 5
 
 // SidebarModel manages the session list sidebar.
 type SidebarModel struct { //nolint:recvcheck // Bubble Tea convention
@@ -371,23 +375,67 @@ type SidebarModel struct { //nolint:recvcheck // Bubble Tea convention
 	height       int
 	cachedView   *string // render cache; pointer survives value-receiver copies
 	viewDirty    *bool   // true when state changed since last View()
-	paneMode     sidebarPaneMode
-	filter       SidebarFilter
-	dimension    SidebarDimension
-	direction    SidebarDirection
+	// Header is pre-rendered on demand so the long-title line count can be used
+	// for viewport math. cachedHeader holds the wrapped/truncated title; the
+	// total header height is cachedHeaderLines + 1 (the trailing divider or
+	// status label). headerDirty is set by SetTitle and SetWidth.
+	cachedHeader      *string
+	cachedHeaderLines *int
+	headerDirty       *bool
+	paneMode          sidebarPaneMode
+	filter            SidebarFilter
+	dimension         SidebarDimension
+	direction         SidebarDirection
 }
 
 // NewSidebarModel creates a new SidebarModel with the given styles.
 func NewSidebarModel(st styles.Styles) SidebarModel {
-	dirty := true
+	viewDirty := true
+	headerDirty := true
 	return SidebarModel{
-		styles:     st,
-		width:      SidebarWidth,
-		title:      "Sessions",
-		cursor:     -1,
-		cachedView: new(string),
-		viewDirty:  &dirty,
+		styles:            st,
+		width:             SidebarWidth,
+		title:             "Sessions",
+		cursor:            -1,
+		cachedView:        new(string),
+		viewDirty:         &viewDirty,
+		cachedHeader:      new(string),
+		cachedHeaderLines: new(int),
+		headerDirty:       &headerDirty,
 	}
+}
+
+// recomputeHeader wraps the title to contentWidth, caps it at
+// maxSidebarTitleLines, and stores both the rendered string and its line
+// count. Callers must call this (directly or via headerRowCount) before using
+// cachedHeaderLines for layout math. Idempotent and cheap.
+func (m *SidebarModel) recomputeHeader(contentWidth int) {
+	titleText := m.title
+	if strings.TrimSpace(titleText) == "" {
+		titleText = "Sessions"
+	}
+	styled := m.styles.SectionLabel.Render(titleText)
+	rendered := lipgloss.NewStyle().Width(contentWidth).AlignHorizontal(lipgloss.Center).Render(styled)
+	lines := strings.Split(rendered, "\n")
+	if len(lines) > maxSidebarTitleLines {
+		lines = lines[:maxSidebarTitleLines]
+		rendered = strings.Join(lines, "\n")
+	}
+	*m.cachedHeader = rendered
+	*m.cachedHeaderLines = len(lines)
+	*m.headerDirty = false
+}
+
+// headerRowCount returns the total number of rendered rows the header occupies
+// (wrapped title + 1 line for the divider or status label). Recomputes the
+// header cache if dirty. Safe to call from a value receiver because the cache
+// lives behind pointers.
+func (m SidebarModel) headerRowCount(contentWidth int) int {
+	if *m.headerDirty {
+		m.recomputeHeader(contentWidth)
+	}
+
+	return *m.cachedHeaderLines + 1
 }
 
 // sidebarFilterFromString converts a ui.default_filter config value to a SidebarFilter.
@@ -464,6 +512,12 @@ func (m *SidebarModel) SetEntries(entries []SidebarEntry) {
 func (m *SidebarModel) SetWidth(w int) {
 	m.width = max(0, w)
 	*m.viewDirty = true
+	// Width change affects how the title wraps, so the header cache must be
+	// rebuilt before any layout math that depends on headerRowCount.
+	*m.headerDirty = true
+	// Header may grow or shrink at the new width; re-evaluate cursor
+	// visibility so a row that fit before isn't clipped (or vice versa).
+	m.ensureCursorVisible()
 }
 
 // SetHeight sets the available render height.
@@ -473,6 +527,13 @@ func (m *SidebarModel) SetHeight(h int) { m.height = h; *m.viewDirty = true }
 func (m *SidebarModel) SetTitle(title string) {
 	m.title = title
 	*m.viewDirty = true
+	// Title change alters the wrapped line count used by View,
+	// ensureCursorVisible, and the scrollbar.
+	*m.headerDirty = true
+	// Re-evaluate cursor visibility against the new header height so a
+	// previously-visible focused row isn't pushed off the pane by the longer
+	// header.
+	m.ensureCursorVisible()
 }
 
 // SetPaneMode sets the current pane mode, which controls whether the status label
@@ -629,7 +690,11 @@ func (m *SidebarModel) ensureCursorVisible() {
 	if m.cursor < 0 || len(m.entries) == 0 {
 		return
 	}
-	availableRows := max(0, m.height-sidebarHeaderLines)
+	contentWidth := m.width
+	if contentWidth <= 0 {
+		contentWidth = SidebarWidth
+	}
+	availableRows := max(0, m.height-m.headerRowCount(contentWidth))
 	if availableRows <= 0 {
 		return
 	}
@@ -736,64 +801,34 @@ func (m SidebarModel) View() string {
 
 		return ""
 	}
-	if !*m.viewDirty && *m.cachedView != "" {
+	if !*m.viewDirty && !*m.headerDirty && *m.cachedView != "" {
 		return *m.cachedView
 	}
 	width := m.width
 	if width <= 0 {
 		width = SidebarWidth
 	}
-	availableRows := max(0, m.height-sidebarHeaderLines)
-	// Determine visible entries and whether scrolling is needed.
-	var start, end int
-	var needsScroll bool
-	if availableRows > 0 {
-		rowBudget := availableRows
-		visibleRowCount := 0
-		visibleEntryCount := 0
-		for i := range m.entries {
-			rows := entryRowHeight(m.entries[i])
-			if visibleRowCount+rows > rowBudget && visibleRowCount > 0 {
-				break
-			}
-			visibleRowCount += rows
-			visibleEntryCount++
-		}
-		if visibleEntryCount < len(m.entries) {
-			needsScroll = true
-			// Use the persisted scroll offset to determine first visible entry.
-			start = min(max(m.scrollOffset, 0), max(0, len(m.entries)-1))
-			end = 0
-			rowUsed := 0
-			for i := start; i < len(m.entries); i++ {
-				r := entryRowHeight(m.entries[i])
-				if rowUsed+r > availableRows {
-					break
-				}
-				rowUsed += r
-				end = i + 1
-			}
-		} else {
-			start = 0
-			end = len(m.entries)
-		}
-	}
-	// When entries overflow, shrink content width for a thin scrollbar.
+	// First pass: render the header at the full content width, then decide
+	// whether a scrollbar is needed based on the resulting available rows.
 	contentWidth := width
+	headerRows := m.headerRowCount(contentWidth)
+	availableRows := max(0, m.height-headerRows)
+	start, end, needsScroll := m.computeVisibleRange(availableRows)
+	// Second pass: if a scrollbar is shown, shrink the content width by 2 and
+	// rewrap the header at the new width. The header can take one extra line
+	// at the narrower width, so recompute the visible range too.
 	var scrollbar string
 	if needsScroll && width > 2 {
-		contentWidth = width - 2 // 1 char scrollbar + 1 char gap
-		scrollbar = renderSidebarScrollbar(m.styles, m.entries, availableRows, start, m.height)
+		contentWidth = width - 2
+		*m.headerDirty = true // force recompute at the new width
+		headerRows = m.headerRowCount(contentWidth)
+		availableRows = max(0, m.height-headerRows)
+		start, end, _ = m.computeVisibleRange(availableRows)
+		scrollbar = renderSidebarScrollbar(m.styles, m.entries, availableRows, headerRows, start, m.height)
 	}
 	// Build header lines at the resolved content width.
 	var lines []string
-	titleText := m.title
-	if strings.TrimSpace(titleText) == "" {
-		titleText = "Sessions"
-	}
-	title := m.styles.SectionLabel.Render(titleText)
-	header := lipgloss.NewStyle().Width(contentWidth).AlignHorizontal(lipgloss.Center).Render(title)
-	lines = append(lines, header)
+	lines = append(lines, *m.cachedHeader)
 	statusLabel := m.StatusLabel()
 	if statusLabel != "" {
 		status := m.styles.Muted.Render(statusLabel)
@@ -846,6 +881,42 @@ func (m SidebarModel) View() string {
 	*m.viewDirty = false
 
 	return result
+}
+
+// computeVisibleRange finds the inclusive start, exclusive end, and whether
+// scrolling is required to show the cursor's target entries. The budget is the
+// number of rows available for entries; m.scrollOffset is the first entry
+// considered when scrolling.
+func (m SidebarModel) computeVisibleRange(budget int) (start, end int, needsScroll bool) {
+	if budget <= 0 || len(m.entries) == 0 {
+		return 0, 0, false
+	}
+	visibleRowCount := 0
+	visibleEntryCount := 0
+	for i := range m.entries {
+		rows := entryRowHeight(m.entries[i])
+		if visibleRowCount+rows > budget && visibleEntryCount > 0 {
+			break
+		}
+		visibleRowCount += rows
+		visibleEntryCount++
+	}
+	if visibleEntryCount >= len(m.entries) {
+		return 0, len(m.entries), false
+	}
+	start = min(max(m.scrollOffset, 0), max(0, len(m.entries)-1))
+	rowUsed := 0
+	end = start
+	for i := start; i < len(m.entries); i++ {
+		r := entryRowHeight(m.entries[i])
+		if rowUsed+r > budget {
+			break
+		}
+		rowUsed += r
+		end = i + 1
+	}
+
+	return start, end, true
 }
 
 func sessionStatusLabel(status domain.AgentSessionStatus) string {
@@ -940,7 +1011,9 @@ func entryRowHeight(e SidebarEntry) int {
 // renderSidebarScrollbar renders a thin scrollbar column for the sidebar content area.
 // The scrollbar covers the full rendered height; header rows show the track, and the
 // thumb is positioned based on scrollOffset within the content portion.
-func renderSidebarScrollbar(st styles.Styles, entries []SidebarEntry, contentHeight, firstVisible, totalHeight int) string {
+// headerRows is the actual header height (wrapped title + divider/status line); it
+// must be passed in because the header height is now dynamic.
+func renderSidebarScrollbar(st styles.Styles, entries []SidebarEntry, contentHeight, headerRows, firstVisible, totalHeight int) string {
 	if totalHeight <= 0 {
 		return ""
 	}
@@ -955,7 +1028,6 @@ func renderSidebarScrollbar(st styles.Styles, entries []SidebarEntry, contentHei
 	for i := range firstVisible {
 		scrollOffset += entryRowHeight(entries[i])
 	}
-	headerRows := 2 // title + divider
 	thumbHeight := max(1, (contentHeight*contentHeight)/max(1, totalRows))
 	thumbHeight = min(thumbHeight, contentHeight)
 	thumbRange := max(0, contentHeight-thumbHeight)
