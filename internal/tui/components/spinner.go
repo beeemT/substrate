@@ -8,17 +8,22 @@ import (
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
+var activitySpinner = spinner.Spinner{
+	Frames: []string{"⣼ ", "⣹ ", "⢻ ", "⠿ ", "⡟ ", "⣏ ", "⣧ ", "⣶ "},
+	FPS:    spinner.Dot.FPS,
+}
+
 // NewSpinner returns the shared activity spinner used across the TUI.
 func NewSpinner(st styles.Styles) spinner.Model {
 	sp := spinner.New()
-	sp.Spinner = spinner.Dot
+	sp.Spinner = activitySpinner
 	sp.Style = st.Active
 	return sp
 }
 
 // SpinnerFrame returns the shared activity spinner frame for a zero-based index.
 func SpinnerFrame(frame int) string {
-	frames := spinner.Dot.Frames
+	frames := activitySpinner.Frames
 	if len(frames) == 0 {
 		return ""
 	}
@@ -31,7 +36,7 @@ func SpinnerFrame(frame int) string {
 
 // SpinnerFrames returns a copy of the shared activity spinner frames.
 func SpinnerFrames() []string {
-	frames := spinner.Dot.Frames
+	frames := activitySpinner.Frames
 	out := make([]string, len(frames))
 	copy(out, frames)
 	return out
@@ -39,5 +44,5 @@ func SpinnerFrames() []string {
 
 // SpinnerFrameInterval returns the shared spinner cadence.
 func SpinnerFrameInterval() time.Duration {
-	return spinner.Dot.FPS
+	return activitySpinner.FPS
 }

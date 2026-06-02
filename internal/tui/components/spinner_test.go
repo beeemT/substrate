@@ -22,6 +22,19 @@ func TestSpinnerFrameUsesSharedSpinnerFrames(t *testing.T) {
 	}
 }
 
+func TestSpinnerFramesAreClockwiseWithTwoEmptyDotSlots(t *testing.T) {
+	want := []string{"⣼ ", "⣹ ", "⢻ ", "⠿ ", "⡟ ", "⣏ ", "⣧ ", "⣶ "}
+	frames := SpinnerFrames()
+	if len(frames) != len(want) {
+		t.Fatalf("frame count = %d, want %d", len(frames), len(want))
+	}
+	for i, wantFrame := range want {
+		if frames[i] != wantFrame {
+			t.Fatalf("frame %d = %q, want %q", i, frames[i], wantFrame)
+		}
+	}
+}
+
 func TestNewSpinnerUsesSharedSpinnerDefinition(t *testing.T) {
 	model := NewSpinner(styles.NewStyles(styles.DefaultTheme))
 	if len(model.Spinner.Frames) == 0 {
