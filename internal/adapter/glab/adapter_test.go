@@ -380,8 +380,8 @@ func TestOnEvent_SubPlanPRReady_UnDraftsMRs(t *testing.T) {
 	if !strings.Contains(updateJoined, "--ready") {
 		t.Errorf("call[1] missing --ready: %q", updateJoined)
 	}
-	if !strings.Contains(updateJoined, branch) {
-		t.Errorf("call[1] missing branch %q: %q", branch, updateJoined)
+	if !strings.Contains(updateJoined, "mr update 5") {
+		t.Errorf("call[1] must target MR IID 5: %q", updateJoined)
 	}
 	// Third call: mr view to refresh state after undrafting
 	refreshCall := stub.calls[2]
@@ -743,6 +743,41 @@ func TestOnEvent_WorktreeCreated_AddsGitLabResolvesFooter(t *testing.T) {
 	joined := strings.Join(stub.calls[1].args, " ")
 	if !strings.Contains(joined, "--description Repo specific implementation plan\n\nResolves #40") {
 		t.Fatalf("args %q missing gitlab resolves footer", joined)
+	}
+}
+
+func TestOnEvent_WorktreeReused_UpdatesDescriptionByIID(t *testing.T) {
+	var calls []stubCall
+	runner := func(_ context.Context, dir, name string, args ...string) ([]byte, error) {
+		calls = append(calls, stubCall{dir: dir, name: name, args: args})
+		joined := strings.Join(args, " ")
+		switch {
+		case strings.Contains(joined, "mr view"):
+			return []byte(`{"iid":30,"state":"opened","web_url":"https://gitlab.com/org/repo/-/merge_requests/30"}`), nil
+		case strings.Contains(joined, "mr update"):
+			return []byte("updated"), nil
+		default:
+			t.Fatalf("unexpected glab call: %q", joined)
+			return nil, errors.New("unexpected glab call")
+		}
+	}
+	a := newWithRunner(config.GlabConfig{}, emptyReviewArtifactRepos, "", runner)
+	payload := mustJSON(worktreePayload{Branch: "sub-SEN-110817448-fix-bug", WorktreePath: "/tmp/wt", SubPlan: "Updated implementation plan"})
+	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorktreeReused), Payload: payload}); err != nil {
+		t.Fatalf("OnEvent returned error: %v", err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("got %d glab calls, want 2", len(calls))
+	}
+	updateArgs := strings.Join(calls[1].args, " ")
+	if !strings.Contains(updateArgs, "mr update 30") {
+		t.Fatalf("update args %q must target the MR IID", updateArgs)
+	}
+	if strings.Contains(updateArgs, "sub-SEN-110817448-fix-bug") {
+		t.Fatalf("update args %q must not target the ambiguous branch name", updateArgs)
+	}
+	if !strings.Contains(updateArgs, "--description Updated implementation plan") {
+		t.Fatalf("update args %q missing description", updateArgs)
 	}
 }
 

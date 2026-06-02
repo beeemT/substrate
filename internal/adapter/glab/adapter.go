@@ -276,13 +276,13 @@ func (a *GlabAdapter) onWorkItemCompleted(ctx context.Context, payload string) e
 
 		if hasPreviousTracking {
 			// Previously tracked MR — mark ready (existing flow).
-			if err := a.markMRReady(ctx, entry.worktreePath, p.Branch); err != nil {
+			if err := a.markMRReady(ctx, entry.worktreePath, p.Branch, 0); err != nil {
 				slog.Warn("glab: mr update --draft=false failed", "repo", entry.repo, "branch", p.Branch, "error", err)
 				continue
 			}
 		} else if a.mrExists(ctx, entry.worktreePath, p.Branch) {
 			// MR exists on remote but wasn't tracked (adapter restart). Mark ready.
-			if err := a.markMRReady(ctx, entry.worktreePath, p.Branch); err != nil {
+			if err := a.markMRReady(ctx, entry.worktreePath, p.Branch, 0); err != nil {
 				slog.Warn("glab: mr update --draft=false failed", "repo", entry.repo, "branch", p.Branch, "error", err)
 				continue
 			}
@@ -294,7 +294,7 @@ func (a *GlabAdapter) onWorkItemCompleted(ctx context.Context, payload string) e
 				slog.Warn("glab: completion-time MR creation failed", "repo", entry.repo, "branch", p.Branch, "error", err)
 				continue
 			}
-			if err := a.markMRReady(ctx, entry.worktreePath, p.Branch); err != nil {
+			if err := a.markMRReady(ctx, entry.worktreePath, p.Branch, 0); err != nil {
 				slog.Warn("glab: mr update --draft=false failed after completion-time create", "repo", entry.repo, "branch", p.Branch, "error", err)
 			}
 		}
@@ -658,7 +658,7 @@ func (a *GlabAdapter) handleExistingMR(ctx context.Context, mr glabMRView, p sub
 	}
 
 	// Mark the MR ready (undraft it) so it's ready for review.
-	if err := a.markMRReady(ctx, worktreePath, p.Branch); err != nil {
+	if err := a.markMRReady(ctx, worktreePath, p.Branch, mr.IID); err != nil {
 		slog.Warn("glab: mr update --ready failed", "repo", projectPath, "branch", p.Branch, "error", err)
 	}
 	// Refresh MR state after undrafting to capture the post-update draft flag.
@@ -702,10 +702,11 @@ func (a *GlabAdapter) linkExistsForWorkItem(ctx context.Context, workItemID stri
 	return false
 }
 
-// markMRReady runs `glab mr update <branch> --ready --yes`.
-func (a *GlabAdapter) markMRReady(ctx context.Context, dir, branch string) error {
+// markMRReady runs `glab mr update <iid> --ready --yes` when the MR IID is known.
+func (a *GlabAdapter) markMRReady(ctx context.Context, dir, branch string, iid int) error {
+	target := a.mrUpdateTarget(ctx, dir, branch, iid)
 	out, err := a.runner(ctx, dir, "glab",
-		"mr", "update", branch,
+		"mr", "update", target,
 		"--ready",
 		"--yes",
 	)
@@ -718,8 +719,9 @@ func (a *GlabAdapter) markMRReady(ctx context.Context, dir, branch string) error
 
 // updateMRDescription updates the description of an existing MR.
 func (a *GlabAdapter) updateMRDescription(ctx context.Context, dir, branch, description string) error {
+	target := a.mrUpdateTarget(ctx, dir, branch, 0)
 	out, err := a.runner(ctx, dir, "glab",
-		"mr", "update", branch,
+		"mr", "update", target,
 		"--description", description,
 		"--yes",
 	)
@@ -728,6 +730,16 @@ func (a *GlabAdapter) updateMRDescription(ctx context.Context, dir, branch, desc
 	}
 
 	return nil
+}
+
+func (a *GlabAdapter) mrUpdateTarget(ctx context.Context, dir, branch string, iid int) string {
+	if iid > 0 {
+		return strconv.Itoa(iid)
+	}
+	if mr, ok := a.mrView(ctx, dir, branch); ok {
+		return strconv.Itoa(mr.IID)
+	}
+	return branch
 }
 
 // parseMRURL scans command output for the first line containing a GitLab MR URL.
