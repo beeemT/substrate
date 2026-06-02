@@ -964,13 +964,19 @@ func ResumeAllSessionsForWorkItemCmd(
 			return SessionResumedMsg{WorkItemID: workItemID, Message: "No resumable tasks"}
 		}
 
-		// Restart foreman with current plan if implementation service is available
+		// Restart foreman with the current approved plan before resuming implementation
+		// agents. A resumed implementation can ask Foreman immediately; if Foreman
+		// cannot start, do not leave agents running without their question router.
 		if implSvc != nil && planSvc != nil {
 			plan, err := planSvc.GetPlanByWorkItemID(ctx, workItemID)
-			if err == nil && plan.Status == domain.PlanApproved {
-				if err := implSvc.BeginForeman(ctx, workItemID, plan.ID); err != nil {
-					slog.Warn("failed to start foreman for resume", "error", err, "work_item_id", workItemID)
-				}
+			if err != nil {
+				return ErrMsg{Err: fmt.Errorf("load approved plan before resume: %w", err)}
+			}
+			if plan.Status != domain.PlanApproved {
+				return ErrMsg{Err: fmt.Errorf("resume requires approved plan, got %s", plan.Status)}
+			}
+			if err := implSvc.BeginForeman(ctx, workItemID, plan.ID); err != nil {
+				return ErrMsg{Err: fmt.Errorf("start foreman before resume: %w", err)}
 			}
 		}
 

@@ -145,16 +145,31 @@ func (s *ImplementationService) EndForeman(ctx context.Context, workItemID strin
 	return nil
 }
 
-// RestartForemanWithPlan stops and starts the foreman with the new plan.
+// RestartForemanWithPlan stops and starts the foreman with the current plan.
 // Called after replanning to update foreman's context with new plan/FAQ.
 func (s *ImplementationService) RestartForemanWithPlan(ctx context.Context, workItemID, planID string) error {
-	// End existing foreman
+	plan, err := s.planSvc.GetPlan(ctx, planID)
+	if err != nil || plan.WorkItemID != workItemID {
+		if err != nil {
+			slog.Warn("failed to load requested plan for foreman restart; falling back to active work item plan",
+				"error", err, "work_item_id", workItemID, "plan_id", planID)
+		} else {
+			slog.Warn("requested plan belongs to a different work item; falling back to active work item plan",
+				"work_item_id", workItemID, "plan_id", planID, "plan_work_item_id", plan.WorkItemID)
+		}
+		plan, err = s.planSvc.GetPlanByWorkItemID(ctx, workItemID)
+		if err != nil {
+			return fmt.Errorf("load current plan for work item: %w", err)
+		}
+	}
+
+	// End existing foreman only after resolving the replacement plan so a stale
+	// TUI cache cannot leave running agents without their question router.
 	if err := s.EndForeman(ctx, workItemID); err != nil {
 		slog.Warn("error ending foreman before restart", "error", err)
 	}
 
-	// Begin new foreman with fresh context
-	return s.BeginForeman(ctx, workItemID, planID)
+	return s.BeginForeman(ctx, workItemID, plan.ID)
 }
 
 // ImplementResult contains the result of implementation execution.

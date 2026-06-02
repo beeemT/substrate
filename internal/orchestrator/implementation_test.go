@@ -864,6 +864,37 @@ func TestImplement_StartsAndStopsForemanDuringImplementation(t *testing.T) {
 	}
 }
 
+func TestRestartForemanWithPlanFallsBackToCurrentWorkItemPlan(t *testing.T) {
+	svc, _, _, _, _ := newImplementationServiceForTest(t.TempDir(), "repo-a")
+	foremanHarness := &completingHarness{}
+	svc.foremanHarness = foremanHarness
+
+	if err := svc.RestartForemanWithPlan(context.Background(), "wi-1", "stale-plan"); err != nil {
+		t.Fatalf("RestartForemanWithPlan: %v", err)
+	}
+
+	foreman := svc.registry.GetForeman("wi-1")
+	if foreman == nil {
+		t.Fatal("foreman not found in registry after restart")
+	}
+	if err := svc.EndForeman(context.Background(), "wi-1"); err != nil {
+		t.Fatalf("EndForeman: %v", err)
+	}
+	if got := foreman.LastPlanID(); got != "plan-1" {
+		t.Fatalf("foreman last plan ID = %q, want plan-1", got)
+	}
+
+	foremanHarness.mu.Lock()
+	foremanSession := foremanHarness.lastSess
+	foremanHarness.mu.Unlock()
+	if foremanSession == nil {
+		t.Fatal("foreman session was not started")
+	}
+	if foremanSession.opts.Mode != adapter.SessionModeForeman {
+		t.Fatalf("foreman mode = %q, want %q", foremanSession.opts.Mode, adapter.SessionModeForeman)
+	}
+}
+
 func TestImplement_PrepareWorktreesFailureUsesDetachedCleanupContext(t *testing.T) {
 	svc, workItemRepo, eventRepo, _, _ := newImplementationServiceForTest(t.TempDir(), "repo-a")
 	ctx, cancel := context.WithCancel(context.Background())

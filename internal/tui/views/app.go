@@ -2221,10 +2221,6 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ResumeSessionMsg:
 		if a.provider.Resumption() != nil {
-			// Restart foreman with current plan if it exists
-			if plan := a.plans[msg.WorkItemID]; plan != nil {
-				cmds = append(cmds, RestartForemanWithPlanOrchestratedCmd(a.provider.Implementation(), msg.WorkItemID, plan.ID))
-			}
 			cmds = append(cmds, ResumeAllSessionsForWorkItemCmd(
 				context.Background(),
 				a.provider.Session(),
