@@ -182,6 +182,37 @@ func TestAppView_RendersStartupIntegrationToastUntilReady(t *testing.T) {
 	}
 }
 
+func TestStartupIntegrationsStartMsgReturnsCommandForAsyncExecution(t *testing.T) {
+	t.Parallel()
+
+	app := newToastTestApp(t)
+	app.startupIntegrationsInProgress = true
+	model, startupCmd := app.Update(StartupIntegrationsStartMsg{})
+	updated, ok := model.(*App)
+	if !ok {
+		t.Fatalf("model = %T, want *App", model)
+	}
+	if startupCmd == nil {
+		t.Fatal("startup integrations start did not return a command for Bubble Tea to run asynchronously")
+	}
+	if !updated.startupIntegrationsInProgress {
+		t.Fatal("startup integrations were marked ready before the returned command completed")
+	}
+
+	spinnerMsg, ok := StartupIntegrationsSpinnerTickCmd(updated.startupIntegrationSpinner)().(StartupIntegrationsSpinnerTickMsg)
+	if !ok {
+		t.Fatalf("startup spinner tick command returned %T, want StartupIntegrationsSpinnerTickMsg", spinnerMsg)
+	}
+	model, _ = updated.Update(spinnerMsg)
+	updated, ok = model.(*App)
+	if !ok {
+		t.Fatalf("model = %T, want *App", model)
+	}
+	if got := stripToastANSI(updated.toasts.StackView(updated.pinnedToasts()...)); !strings.Contains(got, components.SpinnerFrame(1)) {
+		t.Fatalf("startup spinner did not advance while startup command was pending: %q", got)
+	}
+}
+
 func TestAppView_RendersToastInUpperRightWithoutGrowingLayout(t *testing.T) {
 	t.Parallel()
 

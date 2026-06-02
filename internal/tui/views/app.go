@@ -1335,11 +1335,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case StartupIntegrationsStartMsg:
 		if a.startupIntegrationsInProgress {
-			// Run rebuild off the Bubble Tea event loop to avoid freezing the TUI.
-			go func() {
-				cmd := StartupIntegrationsCmd(a.provider, a.runtimeCtx)
-				a.program.Send(cmd())
-			}()
+			cmds = append(cmds, StartupIntegrationsCmd(a.provider, a.runtimeCtx))
 		}
 		return a, tea.Batch(cmds...)
 
