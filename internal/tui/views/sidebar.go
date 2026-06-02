@@ -486,11 +486,13 @@ func (m *SidebarModel) SetEntries(entries []SidebarEntry) {
 	*m.viewDirty = true
 	if len(m.entries) == 0 {
 		m.cursor = -1
+		m.scrollOffset = 0
 
 		return
 	}
 	if !hadSelection {
 		m.cursor = -1
+		m.scrollOffset = 0
 
 		return
 	}
@@ -504,8 +506,8 @@ func (m *SidebarModel) SetEntries(entries []SidebarEntry) {
 	}
 	if m.cursor >= len(m.entries) {
 		m.cursor = len(m.entries) - 1
-		m.ensureCursorVisible()
 	}
+	m.ensureCursorVisible()
 }
 
 // SetWidth sets the available render width.
@@ -683,11 +685,35 @@ func (m *SidebarModel) ClearSelection() {
 	*m.viewDirty = true
 }
 
+// clampCursorAndScrollOffset restores sidebar selection invariants after the
+// entry set changes. It returns false when no entry can be visible.
+func (m *SidebarModel) clampCursorAndScrollOffset() bool {
+	if len(m.entries) == 0 {
+		m.cursor = -1
+		m.scrollOffset = 0
+
+		return false
+	}
+	if m.cursor >= len(m.entries) {
+		m.cursor = len(m.entries) - 1
+		*m.viewDirty = true
+	}
+	if m.scrollOffset < 0 {
+		m.scrollOffset = 0
+		*m.viewDirty = true
+	} else if m.scrollOffset >= len(m.entries) {
+		m.scrollOffset = len(m.entries) - 1
+		*m.viewDirty = true
+	}
+
+	return true
+}
+
 // ensureCursorVisible adjusts scrollOffset so that the current cursor is visible
 // in the viewport, preferring to keep the cursor at the bottom of the viewport
 // when scrolling down. Call after any cursor mutation.
 func (m *SidebarModel) ensureCursorVisible() {
-	if m.cursor < 0 || len(m.entries) == 0 {
+	if !m.clampCursorAndScrollOffset() || m.cursor < 0 {
 		return
 	}
 	contentWidth := m.width

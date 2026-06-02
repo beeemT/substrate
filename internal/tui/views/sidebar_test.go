@@ -192,6 +192,25 @@ func TestSidebarMoveUpFromUnselectedJumpsToBottom(t *testing.T) {
 	}
 }
 
+func TestSidebarSetEntriesShrinkingClampsScrollOffset(t *testing.T) {
+	m := views.NewSidebarModel(makeSidebarStyles())
+	m.SetWidth(30)
+	m.SetHeight(8)
+	m.SetEntries(makeSessions(10))
+	m.GotoBottom()
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("SetEntries after shrinking scrolled entries panicked: %v", r)
+		}
+	}()
+
+	m.SetEntries(makeSessions(3))
+	if sel := m.Selected(); sel == nil || sel.WorkItemID != "C" {
+		t.Fatalf("expected selection to clamp to final remaining entry, got %+v", sel)
+	}
+}
+
 func TestSidebarSingleSession(t *testing.T) {
 	m := views.NewSidebarModel(makeSidebarStyles())
 	m.SetHeight(20)
@@ -769,6 +788,7 @@ func TestApplyDimensionAndDirection_State_ArchivedGroup(t *testing.T) {
 		t.Fatalf("expected group to be Archived, got %q", groups[0])
 	}
 }
+
 func TestTimeBucket(t *testing.T) {
 	now := time.Now()
 	today := time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, now.Location())
