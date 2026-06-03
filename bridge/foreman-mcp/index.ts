@@ -164,6 +164,13 @@ async function main() {
   await server.connect(transport);
 }
 
+// Handle --version before entering the MCP event loop so the binary can be
+// smoke-tested without a live substrate foreman socket or MCP client.
+if (process.argv.includes("--version")) {
+  console.log("foreman-mcp");
+  process.exit(0);
+}
+
 main().catch((err) => {
   process.stderr.write(`Fatal: ${err instanceof Error ? err.message : err}\n`);
   process.exit(1);

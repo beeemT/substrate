@@ -212,6 +212,9 @@ jobs:
               assert_match "session_ready", pipe_output("#{pkgshare}/bridge/omp-bridge", '{"type":"abort"}\n', 0)
               assert_path_exists pkgshare/"bridge/claude-agent-bridge"
               assert_match "claude-agent-bridge", shell_output("#{pkgshare}/bridge/claude-agent-bridge --version", 0)
+              assert_path_exists pkgshare/"bridge/foreman-mcp"
+              assert_predicate pkgshare/"bridge/foreman-mcp", :executable?
+              assert_match "foreman-mcp", shell_output("#{pkgshare}/bridge/foreman-mcp --version", 0)
             end
           end
           FORMULA
