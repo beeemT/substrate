@@ -346,6 +346,9 @@ type StartPlanMsg struct{ WorkItemID string }
 // OverrideAcceptMsg fires when user overrides and accepts critiques.
 type OverrideAcceptMsg struct{ WorkItemID string }
 
+// FailReviewMsg fires when user marks an escalated review as failed.
+type FailReviewMsg struct{ WorkItemID string }
+
 // NewSessionBrowseMsg fires when user selects browsed items and starts a session.
 type NewSessionBrowseMsg struct {
 	Adapter      adapter.WorkItemAdapter
@@ -642,6 +645,9 @@ type ConfirmDeleteSessionMsg struct{ SessionID string }
 
 // ConfirmOverrideAcceptMsg requests a confirmation dialog before overriding review acceptance.
 type ConfirmOverrideAcceptMsg struct{ WorkItemID string }
+
+// ConfirmFailReviewMsg requests confirmation before failing an escalated review.
+type ConfirmFailReviewMsg struct{ WorkItemID string }
 
 // LiveInstancesLoadedMsg carries the set of currently-alive instance IDs.
 type LiveInstancesLoadedMsg struct {

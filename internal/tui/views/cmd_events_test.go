@@ -455,6 +455,57 @@ found:
 	}
 }
 
+func TestFailReviewCmd_EmitsWorkItemFailedEvent(t *testing.T) {
+	workItemRepo := &cmdWorkItemRepo{items: map[string]domain.Session{
+		"wi-1": {ID: "wi-1", WorkspaceID: "ws-1", ExternalID: "gh:issue:acme/rocket#42", Source: "github", SourceScope: domain.ScopeIssues, SourceItemIDs: []string{"acme/rocket#42"}, State: domain.SessionReviewing},
+	}}
+	bus := event.NewBus(event.BusConfig{})
+	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, bus)
+	defer bus.Close()
+
+	sub, err := bus.Subscribe("fail-review-test", string(domain.EventWorkItemFailed))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	msg := FailReviewCmd(workItemSvc, "wi-1")()
+	if done, ok := msg.(ActionDoneMsg); !ok || done.Message != "Work item failed" {
+		t.Fatalf("msg = %#v, want successful ActionDoneMsg", msg)
+	}
+
+	var payload struct {
+		WorkItemID string `json:"work_item_id"`
+		ExternalID string `json:"external_id"`
+	}
+	for {
+		select {
+		case evt, ok := <-sub.C:
+			if !ok {
+				t.Fatal("channel closed before finding expected event")
+			}
+			if err := json.Unmarshal([]byte(evt.Payload), &payload); err != nil {
+				t.Fatalf("Unmarshal payload: %v", err)
+			}
+			if payload.WorkItemID == "wi-1" {
+				goto found
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for work_item.failed event")
+		}
+	}
+found:
+	if payload.ExternalID != "gh:issue:acme/rocket#42" {
+		t.Fatalf("external_id = %q, want gh:issue:acme/rocket#42", payload.ExternalID)
+	}
+	updatedItem, err := workItemRepo.Get(context.Background(), "wi-1")
+	if err != nil {
+		t.Fatalf("Get work item: %v", err)
+	}
+	if updatedItem.State != domain.SessionFailed {
+		t.Fatalf("work item state = %q, want failed", updatedItem.State)
+	}
+}
+
 func createReviewContextRepo(t *testing.T, branch string) string {
 	t.Helper()
 	repoDir := t.TempDir()

@@ -2043,6 +2043,13 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		)
 		return a, nil
 
+	case ConfirmFailReviewMsg:
+		a.showConfirm("Fail Session",
+			"Mark this reviewed work item as failed? This cannot be undone.",
+			func() tea.Msg { return FailReviewMsg(msg) },
+		)
+		return a, nil
+
 	case StartPlanMsg:
 		if a.provider.Planning() != nil {
 			cmds = append(cmds, StartPlanningCmd(a.registerPipelineCancel(msg.WorkItemID), a.provider.Planning(), msg.WorkItemID))
@@ -2385,6 +2392,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case OverrideAcceptMsg:
 		cmds = append(cmds, OverrideAcceptCmd(a.provider.Session(), msg.WorkItemID))
+		return a, tea.Batch(cmds...)
+
+	case FailReviewMsg:
+		cmds = append(cmds, FailReviewCmd(a.provider.Session(), msg.WorkItemID))
 		return a, tea.Batch(cmds...)
 
 	case LoadNewSessionFiltersMsg:

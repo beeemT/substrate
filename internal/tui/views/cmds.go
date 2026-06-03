@@ -931,6 +931,22 @@ func OverrideAcceptCmd(
 	}
 }
 
+// FailReviewCmd marks a reviewing work item failed after human review.
+// EventWorkItemFailed is emitted by FailWorkItem → Transition → emitStateChange.
+func FailReviewCmd(
+	workItemSvc *service.SessionService,
+	workItemID string,
+) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		if err := workItemSvc.FailWorkItem(ctx, workItemID); err != nil {
+			return ErrMsg{Err: err}
+		}
+
+		return ActionDoneMsg{Message: "Work item failed"}
+	}
+}
+
 // RetryFailedCmd transitions a failed work item back to implementing and re-runs
 // the implementation pipeline for failed sub-plans.
 // It runs asynchronously - completion is signaled via EventWorkItemCompleted.

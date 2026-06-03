@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -498,9 +499,13 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 				}
 			}
 		case "f":
-
-			if action := m.selectedActionCard(); action != nil && action.Kind == overviewActionFinalize {
-				return m, func() tea.Msg { return FinalizeWorkItemMsg{WorkItemID: m.data.WorkItemID} }
+			if action := m.selectedActionCard(); action != nil {
+				switch action.Kind {
+				case overviewActionReviewing:
+					return m, func() tea.Msg { return ConfirmFailReviewMsg{WorkItemID: m.data.WorkItemID} }
+				case overviewActionFinalize:
+					return m, func() tea.Msg { return FinalizeWorkItemMsg{WorkItemID: m.data.WorkItemID} }
+				}
 			}
 		case "r":
 			if action := m.selectedActionCard(); action != nil {
@@ -863,7 +868,7 @@ func actionKeybindHints(action OverviewActionCard, actions []OverviewActionCard)
 
 		return hints
 	case overviewActionReviewing:
-		return []KeybindHint{{Key: "r", Label: "Re-implement"}, {Key: "o", Label: "Override accept"}, {Key: "i", Label: "Inspect review"}}
+		return []KeybindHint{{Key: "r", Label: "Extend review"}, {Key: "o", Label: "Override accept"}, {Key: "f", Label: "Fail session"}, {Key: "i", Label: "Inspect review"}}
 	case overviewActionFailed:
 		return []KeybindHint{{Key: "r", Label: "Retry"}, {Key: "i", Label: "Inspect"}}
 	case overviewActionFinalize:
@@ -1718,10 +1723,22 @@ func (a *App) buildReviewActionCard(wi *domain.Session, subPlans []domain.TaskPl
 			firstCritique = summarizeText(repo.Critiques[0].Description, 160)
 		}
 	}
-	if critiqueCount == 0 {
+	escalatedRepos := make([]string, 0, len(subPlans))
+	for _, subPlan := range subPlans {
+		if subPlan.Status == domain.SubPlanEscalated {
+			escalatedRepos = append(escalatedRepos, subPlan.RepositoryName)
+			if !slices.Contains(affected, subPlan.RepositoryName) {
+				affected = append(affected, subPlan.RepositoryName)
+			}
+		}
+	}
+	if critiqueCount == 0 && len(escalatedRepos) == 0 {
 		return nil
 	}
 	context := []string{fmt.Sprintf("Affected repos: %d", len(affected)), fmt.Sprintf("Open critiques: %d", critiqueCount)}
+	if len(escalatedRepos) > 0 {
+		context = append(context, fmt.Sprintf("Escalated repos: %d", len(escalatedRepos)))
+	}
 	if firstCritique != "" {
 		context = append(context, "First critique: "+firstCritique)
 	}
@@ -1730,7 +1747,7 @@ func (a *App) buildReviewActionCard(wi *domain.Session, subPlans []domain.TaskPl
 		Kind:        overviewActionReviewing,
 		Title:       "Review requires decision",
 		Blocked:     "Critiques are waiting for a human decision",
-		Why:         "You can re-implement the reviewed work or override accept from the overview.",
+		Why:         "You can extend review with another implementation pass, override accept, or fail the session.",
 		Affected:    affected,
 		Context:     context,
 		ReviewRepos: reviewRepos,

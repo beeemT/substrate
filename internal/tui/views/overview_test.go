@@ -522,7 +522,7 @@ func TestReviewingOverviewExposesReviewDecisionAction(t *testing.T) {
 		t.Fatalf("overview action kind = %q, want %q", app.content.overview.data.Actions[0].Kind, overviewActionReviewing)
 	}
 	hints := app.content.KeybindHints()
-	for _, want := range []string{"Re-implement", "Override accept", "Inspect review"} {
+	for _, want := range []string{"Extend review", "Override accept", "Fail session", "Inspect review"} {
 		found := false
 		for _, hint := range hints {
 			if hint.Label == want {
@@ -540,6 +540,72 @@ func TestReviewingOverviewExposesReviewDecisionAction(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Fatalf("content view = %q, want %q", view, want)
 		}
+	}
+}
+
+func TestReviewingOverviewExposesEscalatedDecisionWithoutLatestReview(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	app := newTestApp(Services{
+		WorkspaceID:   "ws-local",
+		WorkspaceName: "local",
+		Settings:      newTestSettingsService(),
+		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{
+			SessionReviewArtifacts: emptySessionArtifactRepo{},
+		}}),
+		Events: service.NewEventService(repository.NoopTransacter{Res: repository.Resources{
+			Events: emptyEventRepo{},
+		}}),
+	})
+	app.content.SetSize(90, 24)
+	app.workItems = []domain.Session{{ID: "wi-1", WorkspaceID: "ws-local", ExternalID: "SUB-1", Title: "Escalated review", State: domain.SessionReviewing, CreatedAt: now, UpdatedAt: now}}
+	app.plans["wi-1"] = &domain.Plan{ID: "plan-1", WorkItemID: "wi-1", Status: domain.PlanApproved, Version: 1, UpdatedAt: now}
+	app.subPlans["plan-1"] = []domain.TaskPlan{{ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a", Status: domain.SubPlanEscalated, UpdatedAt: now}}
+	app.sessions = []domain.AgentSession{
+		{ID: "impl-reviewed", WorkItemID: "wi-1", WorkspaceID: "ws-local", Kind: domain.AgentSessionKindImplementation, SubPlanID: "sp-1", RepositoryName: "repo-a", Status: domain.AgentSessionCompleted, UpdatedAt: now.Add(-time.Minute), CreatedAt: now.Add(-time.Minute)},
+		{ID: "impl-leaf", WorkItemID: "wi-1", WorkspaceID: "ws-local", Kind: domain.AgentSessionKindImplementation, SubPlanID: "sp-1", RepositoryName: "repo-a", Status: domain.AgentSessionCompleted, UpdatedAt: now, CreatedAt: now},
+	}
+	app.reviews["impl-reviewed"] = ReviewsLoadedMsg{
+		SessionID: "impl-reviewed",
+		Cycles:    []domain.ReviewCycle{{ID: "cycle-1", AgentSessionID: "impl-reviewed", CycleNumber: 1, Status: domain.ReviewCycleCritiquesFound}},
+		Critiques: map[string][]domain.Critique{"cycle-1": {{ID: "crit-1", ReviewCycleID: "cycle-1", Severity: domain.CritiqueMajor, Description: "Still needs review"}}},
+	}
+	app.currentWorkItemID = "wi-1"
+	app.rebuildSidebar()
+	app.sidebar.SelectWorkItem("wi-1")
+	if cmd := app.updateContentFromState(); cmd != nil {
+		t.Fatalf("updateContentFromState() cmd = %v, want nil", cmd)
+	}
+	if got := len(app.content.overview.data.Actions); got != 1 {
+		t.Fatalf("overview actions = %d, want 1", got)
+	}
+	action := app.content.overview.data.Actions[0]
+	if action.Kind != overviewActionReviewing {
+		t.Fatalf("overview action kind = %q, want %q", action.Kind, overviewActionReviewing)
+	}
+	if len(action.Affected) != 1 || action.Affected[0] != "repo-a" {
+		t.Fatalf("affected repos = %#v, want repo-a", action.Affected)
+	}
+	if !slices.Contains(action.Context, "Escalated repos: 1") {
+		t.Fatalf("action context = %#v, want escalated repo count", action.Context)
+	}
+	hints := app.content.KeybindHints()
+	for _, want := range []string{"Extend review", "Override accept", "Fail session"} {
+		found := false
+		for _, hint := range hints {
+			if hint.Label == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("keybind hints = %#v, want %q", hints, want)
+		}
+	}
+	view := stripBrowseANSI(app.content.View())
+	if !strings.Contains(view, "Review requires decision") {
+		t.Fatalf("content view = %q, want review action", view)
 	}
 }
 

@@ -731,14 +731,21 @@ func interruptedActions(a *App) []Action {
 
 func reviewingActions(a *App) []Action {
 	return []Action{
-		{ID: "reimplement", Label: "Re-implement", Shortcut: "r", Priority: 450, Condition: func(a *App) bool {
-			return a.content.Mode() == ContentModeOverview && a.content.overview.overlay == overviewOverlayReviewing
+		{ID: "extend_review", Label: "Extend review", Shortcut: "r", Priority: 450, Condition: func(a *App) bool {
+			card := a.content.overview.selectedActionCard()
+			return card != nil && card.Kind == overviewActionReviewing
 		}, Handler: func(a *App) tea.Cmd { return func() tea.Msg { return ReimplementMsg{WorkItemID: a.currentWorkItemID} } }},
 		{ID: "override_accept", Label: "Override accept", Shortcut: "o", Priority: 460, Condition: func(a *App) bool {
 			card := a.content.overview.selectedActionCard()
 			return card != nil && card.Kind == overviewActionReviewing
 		}, Handler: func(a *App) tea.Cmd {
 			return func() tea.Msg { return ConfirmOverrideAcceptMsg{WorkItemID: a.currentWorkItemID} }
+		}},
+		{ID: "fail_review", Label: "Fail session", Shortcut: "f", Priority: 470, Condition: func(a *App) bool {
+			card := a.content.overview.selectedActionCard()
+			return card != nil && card.Kind == overviewActionReviewing
+		}, Handler: func(a *App) tea.Cmd {
+			return func() tea.Msg { return ConfirmFailReviewMsg{WorkItemID: a.currentWorkItemID} }
 		}},
 	}
 }

@@ -49,8 +49,9 @@ func (m ReviewModel) KeybindHints() []KeybindHint {
 	return []KeybindHint{
 		{Key: "↑/↓", Label: "Navigate critiques"},
 		{Key: "Tab", Label: "Switch repo"},
-		{Key: "r", Label: "Re-implement"},
+		{Key: "r", Label: "Extend review"},
 		{Key: "o", Label: "Override accept"},
+		{Key: "f", Label: "Fail session"},
 	}
 }
 
@@ -92,6 +93,8 @@ func (m ReviewModel) Update(msg tea.Msg) (ReviewModel, tea.Cmd) {
 			return m, func() tea.Msg { return ReimplementMsg{WorkItemID: m.workItemID} }
 		case "o":
 			return m, func() tea.Msg { return ConfirmOverrideAcceptMsg{WorkItemID: m.workItemID} }
+		case "f":
+			return m, func() tea.Msg { return ConfirmFailReviewMsg{WorkItemID: m.workItemID} }
 		}
 	}
 
