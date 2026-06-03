@@ -79,11 +79,29 @@ while (true) {
 
 ## B — TTSR (Time-Travel Stream Rules) false-positive risk
 
-### Review result
+### Feasibility review
 
-**Needs small state-shape revision before implementation.** The proposed state-machine direction matches current SDK behavior: TTSR sets `#ttsrAbortPending`, calls `agent.abort()`, fire-and-forget emits `ttsr_triggered`, and schedules a tracked post-prompt task with `delayMs: 50` that calls `agent.continue()`. Because `session.prompt()` waits for post-prompt recovery, the bridge watchdog should gate itself while that recovery is in flight.
+**Feasible, but the bridge should not depend solely on seeing `ttsr_triggered`.** Source review confirms `ttsr_triggered` is a real `AgentSessionEvent` that reaches `session.subscribe(...)`, but its delivery is fire-and-forget after `agent.abort()`, so `agent_end (aborted)` may legitimately arrive before it.
 
-However, do not overload the existing `postTurnWorkInFlight` boolean for both retry/compaction and TTSR. The proposed snippet still clears that boolean on `auto_retry_end` / `auto_compaction_end`; if either event is emitted during a TTSR cycle, the watchdog can become armed before the final non-aborted `agent_end`. Add a separate `ttsrContinuationInFlight` (or equivalent) flag and make `shouldFireAgentEndWatchdog` gate on both flags. Only a non-aborted `agent_end` should clear the TTSR flag.
+Observed OMP path:
+
+1. `createAgentSession` always constructs a `TtsrManager` from `settings.getGroup("ttsr")`; `ttsr.enabled` defaults to `true`, but a trigger only exists when discovered rules have a non-empty `condition`.
+2. `AgentSession` subscribes to the core agent event stream and first forwards every core event to `#emitSessionEvent(displayEvent)`, which emits to extension handlers and then to `session.subscribe` listeners.
+3. On `message_update` text/thinking/toolcall deltas, `AgentSession` checks `ttsrManager.checkDelta(...)` after forwarding that `message_update` event.
+4. `ttsr_triggered` is emitted only for matches where `#shouldInterruptForTtsrMatch(...)` returns true. Non-interrupt/deferred TTSR injections are queued for a follow-up without emitting `ttsr_triggered`, and they do not create an aborted `agent_end` watchdog false positive.
+5. On an interrupting match, it sets `#ttsrAbortPending = true`, creates `#ttsrResumePromise`, calls `agent.abort()`, then calls `#emitSessionEvent({ type: "ttsr_triggered", rules })` without awaiting it, and schedules a tracked post-prompt task with `delayMs: 50` that injects the TTSR reminder and calls `agent.continue()`.
+6. The core `pi-agent-core` loop emits `agent_end` when the aborted assistant response exits the loop. Because the TTSR event is fire-and-forget after abort, core listeners do not await async session handling, and session `ttsr_triggered` fanout waits for extension handlers before bridge subscribers, subscription ordering is not a hard guarantee. Normal/no-slow-extension runs should observe `ttsr_triggered` before the aborted `agent_end`; slow extensions can let `agent_end` overtake it at the bridge.
+7. `session.prompt()` waits for `#waitForPostPromptRecovery()`, which waits for `#ttsrResumePromise`, tracked post-prompt tasks, and idle streaming. So the SDK itself treats TTSR continuation as part of the same prompt lifecycle.
+
+Conclusion: the watchdog fix is valid for the immediate-interrupt path. The robust signal is **not** “we saw `ttsr_triggered` before `agent_end`”. The robust state is “an aborted agent_end may be terminal unless a TTSR continuation signal arrives within the watchdog grace window.” Keeping the 2 s grace is essential, and tests must cover both event orders.
+
+Implementation guidance:
+
+- Add `ttsrContinuationInFlight` as a separate state flag, not a reuse of `postTurnWorkInFlight`.
+- Set it on `ttsr_triggered` and clear `agentEndTerminalAt`.
+- Do not clear it on `auto_retry_end` or `auto_compaction_end`.
+- Clear it only on a non-aborted `agent_end`, because TTSR has no explicit end event and cascading TTSR aborts are still in-flight work.
+- Keep plain user abort behavior unchanged: an `agent_end (aborted)` with no subsequent `ttsr_triggered` should still arm the watchdog and fire after grace if the bridge does not exit via its abort handler.
 
 ### Problem
 
@@ -91,7 +109,7 @@ TTSR (`ttsr.enabled: true` by default) works by:
 
 1. Detecting a TTSR rule match in streaming assistant content.
 2. Calling `agent.abort()` — agent loop exits, emitting `agent_end { stopReason: "aborted" }`.
-3. Async-emitting `ttsr_triggered { rules }` to subscribers.
+3. Fire-and-forget emitting `ttsr_triggered { rules }` to extension handlers and then subscribers.
 4. Scheduling a post-prompt task (`delayMs: 50`) that calls `agent.continue()`.
 5. The retry produces a new `agent_end` (typically `stopReason: "stop"`).
 
