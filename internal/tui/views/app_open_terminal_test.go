@@ -38,6 +38,78 @@ func TestAppTKeyOpensTerminalInWorktree(t *testing.T) {
 	_ = model // cmd is verified by presence
 }
 
+func TestAppTKeyOpensTerminalForFocusedSidebarAgentSession(t *testing.T) {
+	t.Parallel()
+
+	app := newSidebarDrilldownTestApp()
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	updated := model.(*App)
+	for i := range updated.sessions {
+		if updated.sessions[i].ID == "sess-1" {
+			updated.sessions[i].WorktreePath = "/workspace/repo-a"
+			break
+		}
+	}
+	updated.mainFocus = mainFocusSidebar
+	updated.sidebarMode = sidebarPaneTasks
+	updated.taskSessionSelectionByWorkItem[updated.currentWorkItemID] = "sess-1"
+
+	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd from 't' key for focused sidebar agent session with worktree")
+	}
+	_ = model
+}
+
+func TestCurrentHintsIncludeOpenTerminalForFocusedSidebarAgentSession(t *testing.T) {
+	t.Parallel()
+
+	app := newSidebarDrilldownTestApp()
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	updated := model.(*App)
+	for i := range updated.sessions {
+		if updated.sessions[i].ID == "sess-1" {
+			updated.sessions[i].WorktreePath = "/workspace/repo-a"
+			break
+		}
+	}
+	updated.mainFocus = mainFocusSidebar
+	updated.sidebarMode = sidebarPaneTasks
+	updated.taskSessionSelectionByWorkItem[updated.currentWorkItemID] = "sess-1"
+
+	assertHasHint(t, updated.currentHints(), "t", "Open terminal")
+}
+
+func TestCurrentHintsIncludeOpenTerminalForAgentSessionLog(t *testing.T) {
+	t.Parallel()
+
+	app := newSidebarDrilldownTestApp()
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	updated := model.(*App)
+	for i := range updated.sessions {
+		if updated.sessions[i].ID == "sess-1" {
+			updated.sessions[i].WorktreePath = "/workspace/repo-a"
+			break
+		}
+	}
+	updated.mainFocus = mainFocusContent
+	updated.content.SetMode(ContentModeAgentSession)
+	updated.content.sessionLog.SetLogPath("sess-1", "/tmp/session.log")
+	updated.taskSessionSelectionByWorkItem[updated.currentWorkItemID] = "sess-1"
+
+	assertHasHint(t, updated.currentHints(), "t", "Open terminal")
+}
+
+func assertHasHint(t *testing.T, hints []KeybindHint, key, label string) {
+	t.Helper()
+	for _, hint := range hints {
+		if hint.Key == key && hint.Label == label {
+			return
+		}
+	}
+	t.Fatalf("hints = %#v, want {%q, %q}", hints, key, label)
+}
+
 // TestAppTKeyNoOpWithoutWorktree asserts that pressing 't' in a session view
 // with no worktree on the session does NOT return a command.
 func TestAppTKeyNoOpWithoutWorktree(t *testing.T) {

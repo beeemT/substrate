@@ -137,10 +137,10 @@ func TestCommand_WezTermUsesCwdArg(t *testing.T) {
 	assertArgs(t, wezTermStartWindowCmd(dir).Args, []string{"wezterm", "start", "--cwd", dir})
 }
 
-func TestCommand_WarpUsesOpenAppWithPathArg(t *testing.T) {
+func TestCommand_WarpUsesDocumentedURIWithEscapedPath(t *testing.T) {
 	dir := "/tmp/work tree"
 	cmd := warpCmd(dir)
-	assertArgs(t, cmd.Args, []string{"open", "-a", "Warp.app", dir})
+	assertArgs(t, cmd.Args, []string{"open", "warp://action/new_tab?path=%2Ftmp%2Fwork+tree"})
 }
 
 func TestCommand_TerminalFallbackUsesOpenAppWithPathArg(t *testing.T) {

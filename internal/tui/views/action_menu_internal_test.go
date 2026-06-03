@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/bubbles/list"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/beeemT/substrate/internal/domain"
@@ -95,6 +96,142 @@ func TestActionRegistryIncludesOverviewOpenTerminalPicker(t *testing.T) {
 	}
 }
 
+func TestActionRegistryIncludesOverviewOpenTerminalPickerInOverviewSubcontexts(t *testing.T) {
+	st := styles.NewStyles(styles.DefaultTheme)
+	app := &App{
+		content: NewContentModel(st),
+		plans:   make(map[string]*domain.Plan),
+	}
+	app.content.SetMode(ContentModeOverview)
+
+	actions := app.BuildActionRegistry(ContextInterrupted)
+	action := findAction(actions, "open_worktree_picker")
+	if action == nil {
+		t.Fatalf("interrupted overview actions missing open_worktree_picker: %#v", actionIDs(actions))
+	}
+}
+
+func TestActionMenuSearchAcceptsSpaceKey(t *testing.T) {
+	st := styles.NewStyles(styles.DefaultTheme)
+	app := &App{content: NewContentModel(st)}
+	model := NewActionMenuModel(st)
+	model.SetSize(80, 24)
+	model.Open(app, ContextGlobal)
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeySpace})
+	if updated.query != " " {
+		t.Fatalf("query = %q, want single space", updated.query)
+	}
+}
+
+func TestActionMenuOpensAboveActiveOverlay(t *testing.T) {
+	app := newSidebarDrilldownTestApp()
+	app.activeOverlay = overlayRepoManager
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	updated := model.(*App)
+	if updated.activeOverlay != overlayActionMenu {
+		t.Fatalf("active overlay = %v, want action menu", updated.activeOverlay)
+	}
+	if updated.actionMenuReturnOverlay != overlayRepoManager {
+		t.Fatalf("return overlay = %v, want repo manager", updated.actionMenuReturnOverlay)
+	}
+	if updated.actionMenu.context != ContextRepoManager {
+		t.Fatalf("action menu context = %v, want repo manager", updated.actionMenu.context)
+	}
+}
+
+func TestActionRegistryIncludesPreviouslyMissingActions(t *testing.T) {
+	st := styles.NewStyles(styles.DefaultTheme)
+	app := &App{
+		content:      NewContentModel(st),
+		plans:        make(map[string]*domain.Plan),
+		logsOverlay:  NewLogsOverlay(nil, st),
+		settingsPage: NewSettingsPage(&testSettingsService{}, st),
+	}
+	app.content.SetMode(ContentModeAgentSession)
+
+	assertActionIDs(t, app.BuildActionRegistry(ContextAgentSessionLog), "goto_top")
+	assertActionIDs(t, app.BuildActionRegistry(ContextLogs), "copy_log")
+	assertActionIDs(t, app.BuildActionRegistry(ContextNewSession),
+		"cycle_new_session_scope",
+		"cycle_new_session_view",
+		"cycle_new_session_state",
+		"reset_new_session_filters",
+		"save_new_session_filter",
+		"load_new_session_filter",
+		"manual_new_session",
+	)
+	assertActionIDs(t, app.BuildActionRegistry(ContextAddRepo),
+		"manual_clone_url",
+		"reload_repos",
+		"toggle_owned_repos",
+	)
+	assertActionIDs(t, app.BuildActionRegistry(ContextSettings),
+		"test_provider",
+		"reveal_secrets",
+	)
+}
+
+func assertActionIDs(t *testing.T, actions []Action, ids ...string) {
+	t.Helper()
+	for _, id := range ids {
+		if findAction(actions, id) == nil {
+			t.Fatalf("actions missing %s: %#v", id, actionIDs(actions))
+		}
+	}
+}
+
+func TestActionRegistryIncludesFocusedSidebarOpenTerminal(t *testing.T) {
+	app := appWithFocusedTerminalSession(t, mainFocusSidebar)
+
+	actions := app.BuildActionRegistry(ContextGlobal)
+	action := findAction(actions, "open_terminal")
+	if action == nil {
+		t.Fatalf("actions missing open_terminal: %#v", actionIDs(actions))
+	}
+	if action.Shortcut != "t" {
+		t.Fatalf("shortcut = %q, want t", action.Shortcut)
+	}
+	if cmd := action.Handler(app); cmd == nil {
+		t.Fatal("handler returned nil command")
+	}
+}
+
+func TestActionRegistryIncludesAgentSessionLogOpenTerminal(t *testing.T) {
+	app := appWithFocusedTerminalSession(t, mainFocusContent)
+
+	actions := app.BuildActionRegistry(ContextAgentSessionLog)
+	action := findAction(actions, "open_terminal")
+	if action == nil {
+		t.Fatalf("actions missing open_terminal: %#v", actionIDs(actions))
+	}
+	if cmd := action.Handler(app); cmd == nil {
+		t.Fatal("handler returned nil command")
+	}
+}
+
+func appWithFocusedTerminalSession(t *testing.T, focus mainFocusArea) *App {
+	t.Helper()
+	app := newSidebarDrilldownTestApp()
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	updated := model.(*App)
+	for i := range updated.sessions {
+		if updated.sessions[i].ID == "sess-1" {
+			updated.sessions[i].WorktreePath = "/workspace/repo-a"
+			break
+		}
+	}
+	updated.mainFocus = focus
+	updated.sidebarMode = sidebarPaneTasks
+	updated.taskSessionSelectionByWorkItem[updated.currentWorkItemID] = "sess-1"
+	if focus == mainFocusContent {
+		updated.content.SetMode(ContentModeAgentSession)
+		updated.content.sessionLog.SetLogPath("sess-1", "/tmp/session.log")
+	}
+	return updated
+}
+
 func TestActionRegistryIncludesWorktreePickerActions(t *testing.T) {
 	st := styles.NewStyles(styles.DefaultTheme)
 	app := &App{
@@ -149,7 +286,7 @@ func actionIDs(actions []Action) []string {
 }
 
 func TestTerminalOpenedMessageDescribesLimitedTerminals(t *testing.T) {
-	if got := terminalOpenedMessage(terminal.TerminalWarp); !strings.Contains(got, "does not support programmatic tabs") {
+	if got := terminalOpenedMessage(terminal.TerminalWarp); got != "Opened terminal in Warp tab" {
 		t.Fatalf("Warp message = %q", got)
 	}
 	if got := terminalOpenedMessage(terminal.TerminalAlacritty); !strings.Contains(got, "tmux or zellij") {

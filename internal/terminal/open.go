@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net/url"
 	"os"
 	"os/exec"
 	"runtime"
@@ -94,10 +96,15 @@ func validateDir(dir string) error {
 }
 
 func startDetached(cmd *exec.Cmd) error {
-	if err := cmd.Start(); err != nil {
+	if _, err := exec.LookPath(cmd.Path); err != nil {
 		return err
 	}
-	return cmd.Process.Release()
+	go func() {
+		if err := cmd.Run(); err != nil {
+			slog.Warn("terminal opener failed", "command", cmd.Path, "error", err)
+		}
+	}()
+	return nil
 }
 
 func startDetachedWithFallback(primary *exec.Cmd, fallback func() (TerminalType, error), term TerminalType, errPrefix string) (TerminalType, error) {
@@ -163,10 +170,10 @@ func openTerminalAppFallback(dir string) (TerminalType, error) {
 	return TerminalTerminal, nil
 }
 
-// openWarp opens Warp (limited: new window only, no tab support).
+// openWarp opens a new Warp tab in the target directory using Warp's URI scheme.
 func openWarp(dir string) (TerminalType, error) {
 	if err := startDetached(warpCmd(dir)); err != nil {
-		return TerminalWarp, fmt.Errorf("failed to open Warp.app: %w", err)
+		return TerminalWarp, fmt.Errorf("failed to open Warp URI: %w", err)
 	}
 	return TerminalWarp, nil
 }
@@ -222,7 +229,8 @@ func terminalAppOpenFallbackCmd(dir string) *exec.Cmd {
 }
 
 func warpCmd(dir string) *exec.Cmd {
-	return exec.Command("open", "-a", "Warp.app", sanitizeArgPath(dir))
+	uri := "warp://action/new_tab?path=" + url.QueryEscape(dir)
+	return exec.Command("open", uri)
 }
 
 func alacrittyCmd(dir string) *exec.Cmd {

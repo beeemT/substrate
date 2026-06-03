@@ -145,6 +145,24 @@ func (h *captureHarness) lastOpts() adapter.SessionOpts {
 	return h.captured[len(h.captured)-1]
 }
 
+type completingResumeHarness struct {
+	captureHarness
+}
+
+func (h *completingResumeHarness) StartSession(_ context.Context, opts adapter.SessionOpts) (adapter.AgentSession, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.returnErr != nil {
+		return nil, h.returnErr
+	}
+	h.captured = append(h.captured, opts)
+	if h.sessionsDir != "" {
+		logPath := filepath.Join(h.sessionsDir, opts.SessionID+".log")
+		_ = os.WriteFile(logPath, []byte(`{"type":"event","event":{"type":"progress","text":"ok"}}`+"\n"), 0o644)
+	}
+	return &immediatelyCompletingSession{id: opts.SessionID}, nil
+}
+
 // ============================================================
 // Phase 9b test fixture
 // ============================================================
@@ -456,6 +474,40 @@ func TestResumeSession_OldSessionTransitionsToFailed(t *testing.T) {
 
 	if got := fix.getSessionStatus("sess-int2"); got != domain.AgentSessionFailed {
 		t.Errorf("old session must be failed after resume; got %q", got)
+	}
+}
+
+func TestResumeSession_BackgroundWaitCompletesNewSessionInDB(t *testing.T) {
+	fix := newPhase9bFixture()
+	ctx := context.Background()
+
+	tmpDir := t.TempDir()
+	sessionsDir := filepath.Join(tmpDir, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatalf("create sessions dir: %v", err)
+	}
+	t.Setenv("SUBSTRATE_HOME", tmpDir)
+
+	fix.seedInterruptedSession("sess-int-completes")
+	harness := &completingResumeHarness{captureHarness: captureHarness{sessionsDir: sessionsDir}}
+	r := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.workItemSvc, fix.bus, fix.registry, nil)
+
+	result, err := r.ResumeSession(ctx, fix.sessionRepo.sessions["sess-int-completes"], "inst-complete")
+	if err != nil {
+		t.Fatalf("ResumeSession: %v", err)
+	}
+
+	deadline := time.After(time.Second)
+	for {
+		if got := fix.getSessionStatus(result.NewSession.ID); got == domain.AgentSessionCompleted {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("new session status = %q, want %q", fix.getSessionStatus(result.NewSession.ID), domain.AgentSessionCompleted)
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
 }
 

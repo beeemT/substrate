@@ -154,14 +154,12 @@ func (r *Resumption) ResumeSessionWithPrompt(ctx context.Context, interrupted do
 		}
 	}
 
-	// Register session for steering; deregister when the session finishes.
+	// Register session for steering and route completion through the same
+	// durable wait path used by focused follow-up/retry commands. Bulk resume
+	// does not have a caller that blocks on the harness, so the background
+	// goroutine owns translating ACP/bridge exit into the DB terminal status.
 	r.registry.Register(newSession.ID, harnessSession)
-	go func() {
-		if waitErr := harnessSession.Wait(ctx); waitErr != nil {
-			slog.Warn("harness session wait failed", "error", waitErr)
-		}
-		r.registry.Deregister(newSession.ID)
-	}()
+	go r.WaitAndComplete(ctx, newSession.ID, harnessSession)
 
 	// Transition the old interrupted session to failed now that its replacement
 	// is durably running. This clears the interrupted action from the overview.

@@ -64,6 +64,42 @@ type Action struct {
 	Handler   func(*App) tea.Cmd
 }
 
+func actionKey(key string) tea.KeyMsg {
+	switch key {
+	case "ctrl+s":
+		return tea.KeyMsg{Type: tea.KeyCtrlS}
+	case "ctrl+v":
+		return tea.KeyMsg{Type: tea.KeyCtrlV}
+	case "ctrl+t":
+		return tea.KeyMsg{Type: tea.KeyCtrlT}
+	case "ctrl+r":
+		return tea.KeyMsg{Type: tea.KeyCtrlR}
+	case "ctrl+f":
+		return tea.KeyMsg{Type: tea.KeyCtrlF}
+	case "ctrl+g":
+		return tea.KeyMsg{Type: tea.KeyCtrlG}
+	case "ctrl+l":
+		return tea.KeyMsg{Type: tea.KeyCtrlL}
+	case "ctrl+n":
+		return tea.KeyMsg{Type: tea.KeyCtrlN}
+	case "ctrl+o":
+		return tea.KeyMsg{Type: tea.KeyCtrlO}
+	case keyEnter:
+		return tea.KeyMsg{Type: tea.KeyEnter}
+	case " ":
+		return tea.KeyMsg{Type: tea.KeySpace}
+	default:
+		runes := []rune(key)
+		return tea.KeyMsg{Type: tea.KeyRunes, Runes: runes}
+	}
+}
+
+func updateContentWithKey(a *App, key string) tea.Cmd {
+	var cmd tea.Cmd
+	a.content, cmd = a.content.Update(actionKey(key))
+	return cmd
+}
+
 // ActionMenuModel is the Bubble Tea model for the action menu overlay.
 type ActionMenuModel struct {
 	st     styles.Styles
@@ -203,6 +239,9 @@ func (m ActionMenuModel) handleKeyMsg(msg tea.KeyMsg) (ActionMenuModel, tea.Cmd)
 // isPrintableKey returns true if the key message represents a printable character
 // that should be added to the search query.
 func isPrintableKey(msg tea.KeyMsg) bool {
+	if msg.String() == " " {
+		return true
+	}
 	// Ignore control keys
 	if msg.Type != tea.KeyRunes {
 		return false
@@ -394,7 +433,7 @@ func (a *App) BuildActionRegistry(ctx ActionContext) []Action {
 	// These are intuitive enough that showing them clutters the menu.
 	actions = slices.DeleteFunc(actions, func(a Action) bool {
 		switch a.Shortcut {
-		case "↑", "↓", "←", "→", "←/Esc", "Enter", "Enter/o", "Esc":
+		case "↑", "↓", "←", "→", "←/Esc", "Enter", "Enter/o", "Esc", "Space":
 			return true
 		}
 		return false
@@ -525,12 +564,33 @@ func globalActions(a *App) []Action {
 			return nil
 		}},
 		{ID: "search", Label: "Search sessions", Shortcut: "/", Priority: 50, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd { return a.openSessionSearch() }},
+		{ID: "open_worktree_picker", Label: "Open terminal in worktree", Shortcut: "t", Priority: 55, Condition: func(a *App) bool {
+			return a.content.Mode() == ContentModeOverview
+		}, Handler: func(a *App) tea.Cmd { return func() tea.Msg { return OpenWorktreePickerMsg{} } }},
+		{ID: "open_terminal", Label: "Open terminal", Shortcut: "t", Priority: 56, Condition: func(a *App) bool {
+			return a.focusedTerminalAgentSession() != nil
+		}, Handler: func(a *App) tea.Cmd {
+			if session := a.focusedTerminalAgentSession(); session != nil {
+				return OpenTerminalCmd(session.WorktreePath)
+			}
+			return nil
+		}},
 		{ID: "delete_session", Label: "Delete session", Shortcut: "d", Priority: 60, Condition: func(a *App) bool { return a.deletableSessionID() != "" }, Handler: func(a *App) tea.Cmd { a.showDeleteSessionConfirm(a.deletableSessionID()); return nil }},
 		{ID: "archive_session", Label: "Archive session", Shortcut: "a", Priority: 70, Condition: func(a *App) bool { return a.archivablSessionID() != "" && a.unarchivablSessionID() == "" }, Handler: func(a *App) tea.Cmd { a.showArchiveConfirm(a.archivablSessionID()); return nil }},
 		{ID: "unarchive_session", Label: "Unarchive session", Shortcut: "a", Priority: 71, Condition: func(a *App) bool { return a.unarchivablSessionID() != "" }, Handler: func(a *App) tea.Cmd { a.showUnarchiveConfirm(a.unarchivablSessionID()); return nil }},
 		{ID: "interrupt", Label: "Interrupt sessions", Shortcut: "I", Priority: 80, Condition: func(a *App) bool { return len(a.interruptibleFocusedSessionIDs()) > 0 }, Handler: func(a *App) tea.Cmd {
 			ids := a.interruptibleFocusedSessionIDs()
 			return func() tea.Msg { return ConfirmInterruptSessionsMsg{SessionIDs: ids} }
+		}},
+		{ID: "retry_focused_session", Label: "Retry focused session", Shortcut: "r", Priority: 81, Condition: func(a *App) bool {
+			return a.retryableFocusedSessionID() != ""
+		}, Handler: func(a *App) tea.Cmd {
+			sessionID := a.retryableFocusedSessionID()
+			if sessionID == "" {
+				return nil
+			}
+			ctx := a.pipelineCtxForSession(sessionID)
+			return RetrySessionCmd(ctx, a.provider.Resumption(), a.provider.Task(), a.provider.Implementation(), sessionID, a.runtimeCtx.InstanceID)
 		}},
 		{ID: "quit", Label: "Quit", Shortcut: "q", Priority: 90, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd { _, cmd := a.handleQuitRequest(); return cmd }},
 		{ID: "sidebar_up", Label: "Move sidebar selection up", Shortcut: "↑", Priority: 91, Condition: func(a *App) bool { return a.mainFocus == mainFocusSidebar }, Handler: func(a *App) tea.Cmd { a.sidebar.MoveUp(); return a.onSidebarMove() }},
@@ -576,12 +636,30 @@ func overviewActions(a *App) []Action {
 		Condition: func(a *App) bool {
 			return a.content.Mode() == ContentModeOverview && a.content.overview.selectedActionCard() != nil
 		},
-		Handler: func(a *App) tea.Cmd {
-			var cmd tea.Cmd
-			a.content, cmd = a.content.Update(tea.KeyMsg{Type: tea.KeyEnter})
-			return cmd
-		},
+		Handler: func(a *App) tea.Cmd { return updateContentWithKey(a, keyEnter) },
 	})
+
+	for _, spec := range []struct {
+		id       string
+		label    string
+		shortcut string
+		priority int
+	}{
+		{"overview_links", "Open links", "o", 116},
+		{"overview_approve_or_abandon", "Approve / abandon selected action", "a", 117},
+		{"overview_resume_or_retry", "Resume / retry selected action", "r", 118},
+		{"overview_finalize", "Finalize work item", "f", 119},
+		{"overview_inspect_or_changes", "Inspect / request changes", "i", 121},
+	} {
+		spec := spec
+		actions = append(actions, Action{
+			ID: spec.id, Label: spec.label, Shortcut: spec.shortcut, Priority: spec.priority,
+			Condition: func(a *App) bool {
+				return a.content.Mode() == ContentModeOverview && a.content.overview.overlay == overviewOverlayNone && a.content.overview.selectedActionCard() != nil
+			},
+			Handler: func(a *App) tea.Cmd { return updateContentWithKey(a, spec.shortcut) },
+		})
+	}
 
 	// View full plan
 	plan := a.plans[a.currentWorkItemID]
@@ -596,14 +674,6 @@ func overviewActions(a *App) []Action {
 		})
 	}
 
-	actions = append(actions, Action{
-		ID: "open_worktree_picker", Label: "Open terminal in worktree", Shortcut: "t", Priority: 110,
-		Condition: func(a *App) bool {
-			return a.content.Mode() == ContentModeOverview && a.content.overview.overlay == overviewOverlayNone
-		},
-		Handler: func(a *App) tea.Cmd { return func() tea.Msg { return OpenWorktreePickerMsg{} } },
-	})
-
 	return actions
 }
 
@@ -615,6 +685,12 @@ func planReviewActions(a *App) []Action {
 		{ID: "plan_request_changes", Label: "Request changes", Shortcut: "i", Priority: 210, Condition: func(a *App) bool {
 			return a.content.Mode() == ContentModeOverview && a.content.overview.overlay == overviewOverlayPlan
 		}, Handler: func(a *App) tea.Cmd { return a.content.overview.openPlanOverlayForChanges() }},
+		{ID: "plan_copy", Label: "Copy plan", Shortcut: "c", Priority: 220, Condition: func(a *App) bool {
+			return a.content.Mode() == ContentModeOverview && a.content.overview.overlay == overviewOverlayPlan
+		}, Handler: func(a *App) tea.Cmd { return updateContentWithKey(a, "c") }},
+		{ID: "plan_edit", Label: "Edit plan in editor", Shortcut: "e", Priority: 230, Condition: func(a *App) bool {
+			return a.content.Mode() == ContentModeOverview && a.content.overview.overlay == overviewOverlayPlan
+		}, Handler: func(a *App) tea.Cmd { return updateContentWithKey(a, "e") }},
 	}
 }
 
@@ -680,13 +756,15 @@ func completedActions(a *App) []Action {
 			feedback := c.feedbackInput.Value()
 			return func() tea.Msg { return FollowUpSessionMsg{TaskID: a.currentWorkItemID, Feedback: feedback} }
 		}},
+		{ID: "copy_completed_plan", Label: "Copy plan", Shortcut: "c", Priority: 491, Condition: func(a *App) bool {
+			return a.content.Mode() == ContentModeOverview && a.content.overview.overlay == overviewOverlayCompleted
+		}, Handler: func(a *App) tea.Cmd { return updateContentWithKey(a, "c") }},
 	}
 }
 
 func sessionLogActions(a *App, ctx ActionContext) []Action {
 	var actions []Action
 
-	// Steer / prompt
 	actions = append(actions, Action{
 		ID: "steer", Label: "Steer / prompt", Shortcut: "p", Priority: 300,
 		Condition: func(a *App) bool {
@@ -706,8 +784,6 @@ func sessionLogActions(a *App, ctx ActionContext) []Action {
 			return nil
 		},
 	})
-
-	// Open overview
 	if a.content.sessionLog.notice != nil {
 		actions = append(actions, Action{
 			ID: "open_overview_log", Label: "Open overview", Shortcut: "Enter", Priority: 305,
@@ -715,23 +791,26 @@ func sessionLogActions(a *App, ctx ActionContext) []Action {
 			Handler:   func(a *App) tea.Cmd { return a.jumpFromSourceDetailsToOverview() },
 		})
 	}
-
-	// Follow tail / go to bottom
 	actions = append(actions, Action{
 		ID: "goto_bottom", Label: "Follow tail / go to bottom", Shortcut: "f", Priority: 310,
 		Condition: func(a *App) bool { return true },
 		Handler:   func(a *App) tea.Cmd { a.content.sessionLog.viewport.GotoBottom(); return nil },
 	})
-
-	// Go to top
-	// Toggle verbose
+	actions = append(actions, Action{
+		ID: "goto_top", Label: "Go to top", Shortcut: "g", Priority: 311,
+		Condition: func(a *App) bool { return true },
+		Handler:   func(a *App) tea.Cmd { a.content.sessionLog.viewport.GotoTop(); return nil },
+	})
+	actions = append(actions, Action{
+		ID: "toggle_thinking", Label: "Toggle thinking", Shortcut: "Ctrl+T", Priority: 312,
+		Condition: func(a *App) bool { return hasThinkingBlocks(a.content.sessionLog.entries) },
+		Handler:   func(a *App) tea.Cmd { return updateContentWithKey(a, "ctrl+t") },
+	})
 	actions = append(actions, Action{
 		ID: "toggle_verbose", Label: "Toggle verbose", Shortcut: "v", Priority: 330,
 		Condition: func(a *App) bool { return true },
 		Handler:   func(a *App) tea.Cmd { a.content.sessionLog.verbose = !a.content.sessionLog.verbose; return nil },
 	})
-
-	// Open plan
 	actions = append(actions, Action{
 		ID: "open_plan", Label: "Open plan", Shortcut: "i", Priority: 345,
 		Condition: func(a *App) bool {
@@ -747,26 +826,10 @@ func sessionLogActions(a *App, ctx ActionContext) []Action {
 			}
 		},
 	})
-
-	// Open terminal
 	actions = append(actions, Action{
-		ID: "open_terminal", Label: "Open terminal", Shortcut: "t", Priority: 355,
-		Condition: func(a *App) bool {
-			if a.content.Mode() != ContentModeAgentSession {
-				return false
-			}
-			sessionID := a.content.sessionLog.SessionID()
-			session := a.workItemTaskSession(a.currentWorkItemID, sessionID)
-			return session != nil && session.WorktreePath != ""
-		},
-		Handler: func(a *App) tea.Cmd {
-			sessionID := a.content.sessionLog.SessionID()
-			session := a.workItemTaskSession(a.currentWorkItemID, sessionID)
-			if session != nil && session.WorktreePath != "" {
-				return OpenTerminalCmd(session.WorktreePath)
-			}
-			return nil
-		},
+		ID: "copy_plan_overlay", Label: "Copy plan", Shortcut: "c", Priority: 346,
+		Condition: func(a *App) bool { return a.content.sessionLog.planOverlay && a.content.sessionLog.planDocument != "" },
+		Handler:   func(a *App) tea.Cmd { return updateContentWithKey(a, "c") },
 	})
 
 	return actions
@@ -781,7 +844,10 @@ func artifactsActions(a *App) []Action {
 				return OpenExternalURLMsg{URL: a.content.artifacts.items[a.content.artifacts.cursor].URL}
 			}
 		}},
-		{ID: "start_review_followup", Label: "Start review followup", Shortcut: "f", Priority: 640, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd {
+		{ID: "open_artifact_links", Label: "Open artifact links", Shortcut: "O", Priority: 630, Condition: func(a *App) bool {
+			return len(a.content.artifacts.items) > 0
+		}, Handler: func(a *App) tea.Cmd { return updateContentWithKey(a, "O") }},
+		{ID: "start_review_followup", Label: "Start review followup", Shortcut: "f", Priority: 640, Condition: func(a *App) bool { return a.content.artifacts.reviewFollowupEnabled() }, Handler: func(a *App) tea.Cmd {
 			return func() tea.Msg {
 				return FetchReviewCommentsMsg{WorkItemID: a.currentWorkItemID, Items: a.content.artifacts.items}
 			}
@@ -804,7 +870,7 @@ func sourceDetailsActions(a *App) []Action {
 
 func sourceItemsActions(a *App) []Action {
 	return []Action{
-		{ID: "open_source_urls", Label: "Open selected source URLs", Shortcut: "Enter/o", Priority: 870, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd {
+		{ID: "open_source_urls", Label: "Open selected source URLs", Shortcut: "o", Priority: 870, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd {
 			urls := a.sourceItemsOverlay.selectedURLs()
 			if len(urls) > 0 {
 				return func() tea.Msg { return openSourceItemURLsMsg{URLs: urls} }
@@ -817,11 +883,14 @@ func sourceItemsActions(a *App) []Action {
 
 func overviewLinksActions(a *App) []Action {
 	return []Action{
-		{ID: "open_focused_link", Label: "Open focused link", Shortcut: "Enter/o", Priority: 890, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd {
+		{ID: "open_focused_link", Label: "Open focused link", Shortcut: "o", Priority: 890, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd {
 			if url := a.overviewLinksOverlay.selectedURL(); url != "" {
 				return func() tea.Msg { return OpenExternalURLMsg{URL: url} }
 			}
 			return nil
+		}},
+		{ID: "open_all_links", Label: "Open all links", Shortcut: "a", Priority: 891, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd {
+			return a.overviewLinksOverlay.openAllCmd()
 		}},
 		{ID: "close_links", Label: "Close links", Shortcut: "Esc", Priority: 900, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd {
 			if a.overviewLinksReturnOverlay != overlayNone {
@@ -849,6 +918,54 @@ func newSessionActions(a *App) []Action {
 			return a.newSession.showManual && a.newSession.manualTitle.Value() != "" && a.newSession.manualDesc.Value() != ""
 		}, Handler: func(a *App) tea.Cmd { return func() tea.Msg { return NewSessionManualMsg{} } }},
 		{ID: "close_extra_context", Label: "Close extra-context modal", Shortcut: "Esc", Priority: 738, Condition: func(a *App) bool { return a.newSession.showExtraContext }, Handler: func(a *App) tea.Cmd { a.newSession.showExtraContext = false; return nil }},
+		{ID: "cycle_new_session_scope", Label: "Cycle scope", Shortcut: "Ctrl+S", Priority: 739, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd {
+			var cmd tea.Cmd
+			a.newSession, cmd = a.newSession.Update(actionKey("ctrl+s"))
+			return cmd
+		}},
+		{ID: "cycle_new_session_view", Label: "Cycle view", Shortcut: "Ctrl+V", Priority: 740, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd {
+			var cmd tea.Cmd
+			a.newSession, cmd = a.newSession.Update(actionKey("ctrl+v"))
+			return cmd
+		}},
+		{ID: "cycle_new_session_state", Label: "Cycle state", Shortcut: "Ctrl+T", Priority: 741, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd {
+			var cmd tea.Cmd
+			a.newSession, cmd = a.newSession.Update(actionKey("ctrl+t"))
+			return cmd
+		}},
+		{ID: "reset_new_session_filters", Label: "Reset filters", Shortcut: "Ctrl+R", Priority: 742, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd {
+			var cmd tea.Cmd
+			a.newSession, cmd = a.newSession.Update(actionKey("ctrl+r"))
+			return cmd
+		}},
+		{ID: "save_new_session_filter", Label: "Save filter", Shortcut: "Ctrl+F", Priority: 743, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd {
+			var cmd tea.Cmd
+			a.newSession, cmd = a.newSession.Update(actionKey("ctrl+f"))
+			return cmd
+		}},
+		{ID: "load_new_session_filter", Label: "Load filter", Shortcut: "Ctrl+L", Priority: 744, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd {
+			var cmd tea.Cmd
+			a.newSession, cmd = a.newSession.Update(actionKey("ctrl+l"))
+			return cmd
+		}},
+		{ID: "manual_new_session", Label: "Manual session", Shortcut: "Ctrl+N", Priority: 745, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd {
+			var cmd tea.Cmd
+			a.newSession, cmd = a.newSession.Update(actionKey("ctrl+n"))
+			return cmd
+		}},
+		{ID: "open_new_session_item", Label: "Open current item in browser", Shortcut: "Ctrl+O", Priority: 746, Condition: func(a *App) bool {
+			_, ok := a.newSession.currentListItem()
+			return ok
+		}, Handler: func(a *App) tea.Cmd {
+			return a.newSession.openCurrentItemInBrowserCmd()
+		}},
+		{ID: "delete_saved_filter", Label: "Delete saved filter", Shortcut: "d", Priority: 747, Condition: func(a *App) bool {
+			return a.newSession.filterModalMode == newSessionFilterModalLoadPicker && a.newSession.loadFilterList.Index() >= 0 && a.newSession.loadFilterList.Index() < len(a.newSession.loadFilterChoices)
+		}, Handler: func(a *App) tea.Cmd {
+			var cmd tea.Cmd
+			a.newSession, cmd = a.newSession.Update(actionKey("d"))
+			return cmd
+		}},
 	}
 }
 
@@ -862,13 +979,49 @@ func newSessionAutonomousActions(a *App) []Action {
 func addRepoActions(a *App) []Action {
 	return []Action{
 		{ID: "confirm_manual_url", Label: "Confirm manual URL", Shortcut: "Enter", Priority: 775, Condition: func(a *App) bool { return a.addRepo.showManual }, Handler: func(a *App) tea.Cmd { return func() tea.Msg { return AddRepoCloneMsg{} } }},
-		{ID: "close_add_repo", Label: "Close add repo", Shortcut: "Esc", Priority: 778, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd { return func() tea.Msg { return CloseOverlayMsg{} } }},
+		{ID: "manual_clone_url", Label: "Manual clone URL", Shortcut: "Ctrl+N", Priority: 776, Condition: func(a *App) bool { return !a.addRepo.showManual }, Handler: func(a *App) tea.Cmd {
+			var cmd tea.Cmd
+			a.addRepo, cmd = a.addRepo.Update(actionKey("ctrl+n"))
+			return cmd
+		}},
+		{ID: "back_to_repo_search", Label: "Back to repo search", Shortcut: "Ctrl+N", Priority: 777, Condition: func(a *App) bool { return a.addRepo.showManual }, Handler: func(a *App) tea.Cmd {
+			var cmd tea.Cmd
+			a.addRepo, cmd = a.addRepo.Update(actionKey("ctrl+n"))
+			return cmd
+		}},
+		{ID: "reload_repos", Label: "Reset search and reload", Shortcut: "Ctrl+R", Priority: 778, Condition: func(a *App) bool { return !a.addRepo.showManual }, Handler: func(a *App) tea.Cmd {
+			var cmd tea.Cmd
+			a.addRepo, cmd = a.addRepo.Update(actionKey("ctrl+r"))
+			return cmd
+		}},
+		{ID: "toggle_owned_repos", Label: "Toggle owned/all filter", Shortcut: "Ctrl+G", Priority: 779, Condition: func(a *App) bool { return !a.addRepo.showManual }, Handler: func(a *App) tea.Cmd {
+			var cmd tea.Cmd
+			a.addRepo, cmd = a.addRepo.Update(actionKey("ctrl+g"))
+			return cmd
+		}},
+		{ID: "close_add_repo", Label: "Close add repo", Shortcut: "Esc", Priority: 780, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd { return func() tea.Msg { return CloseOverlayMsg{} } }},
 	}
 }
 
 func repoManagerActions(a *App) []Action {
 	return []Action{
 		{ID: "add_repo_rm", Label: "Add repo", Shortcut: "a", Priority: 650, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd { return a.openAddRepo() }},
+		{ID: "delete_repo", Label: "Delete repo", Shortcut: "d", Priority: 651, Condition: func(a *App) bool {
+			_, ok := a.repoManager.selectedRepo()
+			return ok
+		}, Handler: func(a *App) tea.Cmd {
+			var cmd tea.Cmd
+			a.repoManager, cmd = a.repoManager.Update(actionKey("d"))
+			return cmd
+		}},
+		{ID: "init_repo", Label: "Initialize git-work repo", Shortcut: "i", Priority: 652, Condition: func(a *App) bool {
+			repo, ok := a.repoManager.selectedRepo()
+			return ok && repo.Kind == repoKindPlainGit && a.repoManager.pendingInit == nil
+		}, Handler: func(a *App) tea.Cmd {
+			var cmd tea.Cmd
+			a.repoManager, cmd = a.repoManager.Update(actionKey("i"))
+			return cmd
+		}},
 	}
 }
 
@@ -890,22 +1043,46 @@ func worktreePickerActions(a *App) []Action {
 
 func settingsActions(a *App) []Action {
 	return []Action{
+		{ID: "edit_setting", Label: "Edit setting", Shortcut: "e", Priority: 805, Condition: func(a *App) bool { return a.settingsPage.fieldsFocused() }, Handler: func(a *App) tea.Cmd {
+			a.settingsPage.openFieldEditor()
+			return nil
+		}},
+		{ID: "test_provider", Label: "Test provider", Shortcut: "t", Priority: 806, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd { return a.settingsPage.testProviderCmd() }},
+		{ID: "login_provider", Label: "Login provider", Shortcut: "g", Priority: 807, Condition: func(a *App) bool {
+			return providerSupportsLogin(providerForSection(a.settingsPage.currentSection()))
+		}, Handler: func(a *App) tea.Cmd { return a.settingsPage.loginProviderCmd(*a.provider.GetServices()) }},
 		{ID: "reveal_secrets", Label: "Reveal secrets", Shortcut: "r", Priority: 810, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd { a.settingsPage.revealSecrets = !a.settingsPage.revealSecrets; return nil }},
 	}
 }
 
 func logsActions(a *App) []Action {
 	return []Action{
+		{ID: "copy_log", Label: "Copy log", Shortcut: "c", Priority: 899, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd {
+			var cmd tea.Cmd
+			a.logsOverlay, cmd = a.logsOverlay.Update(actionKey("c"))
+			return cmd
+		}},
 		{ID: "close_logs", Label: "Close logs", Shortcut: "Esc", Priority: 900, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd { return func() tea.Msg { return CloseOverlayMsg{} } }},
 	}
 }
 
 func sessionSearchActions(a *App) []Action {
 	return []Action{
+		{ID: "toggle_search_scope", Label: "Toggle workspace/global scope", Shortcut: "Ctrl+S", Priority: 849, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd { return a.sessionSearch.toggleScope() }},
 		{ID: "open_selected_session", Label: "Open selected session", Shortcut: "Enter", Priority: 850, Condition: func(a *App) bool { return a.sessionSearch.Selected() != nil }, Handler: func(a *App) tea.Cmd {
 			entry := a.sessionSearch.Selected()
 			if entry != nil {
 				return func() tea.Msg { return OpenSessionHistoryMsg{Entry: *entry} }
+			}
+			return nil
+		}},
+		{ID: "delete_selected_session", Label: "Delete selected session", Shortcut: "d", Priority: 851, Condition: func(a *App) bool {
+			entry := a.sessionSearch.Selected()
+			return entry != nil && strings.TrimSpace(entry.WorkItemID) != ""
+		}, Handler: func(a *App) tea.Cmd {
+			entry := a.sessionSearch.Selected()
+			if entry != nil {
+				return func() tea.Msg { return ConfirmDeleteSessionMsg{SessionID: entry.WorkItemID} }
 			}
 			return nil
 		}},
@@ -953,6 +1130,10 @@ func reviewFollowupSelectorActions(a *App) []Action {
 		{ID: "focus_list_selector", Label: "Focus list", Shortcut: "←", Priority: 550, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd { a.reviewFollowupOverlay.focus = reviewSelectorFocusList; return nil }},
 		{ID: "focus_preview_selector", Label: "Focus preview", Shortcut: "→", Priority: 560, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd { a.reviewFollowupOverlay.focus = reviewSelectorFocusPreview; return nil }},
 		{ID: "address_critique", Label: "Address critique", Shortcut: "A", Priority: 570, Condition: func(a *App) bool { return a.reviewFollowupOverlay.HasAnySelection() }, Handler: func(a *App) tea.Cmd { return a.reviewFollowupOverlay.dispatchAddress() }},
+		{ID: "replan_selected_critiques", Label: "Replan selected critiques", Shortcut: "p", Priority: 571, Condition: func(a *App) bool { return a.reviewFollowupOverlay.HasAnySelection() }, Handler: func(a *App) tea.Cmd {
+			a.reviewFollowupOverlay.stage = reviewFollowupStageConfirm
+			return nil
+		}},
 	}
 }
 

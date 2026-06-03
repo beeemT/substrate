@@ -1240,7 +1240,7 @@ func OpenTerminalWithCmd(dir string, termType terminal.TerminalType) tea.Cmd {
 func terminalOpenedMessage(termType terminal.TerminalType) string {
 	switch termType {
 	case terminal.TerminalWarp:
-		return "Opened terminal in Warp window; Warp does not support programmatic tabs"
+		return "Opened terminal in Warp tab"
 	case terminal.TerminalAlacritty:
 		return "Opened terminal in Alacritty window; use tmux or zellij for tabs"
 	default:

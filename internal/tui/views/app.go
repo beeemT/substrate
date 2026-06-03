@@ -761,9 +761,15 @@ func (a App) currentHints() []KeybindHint {
 		}
 		return append([]KeybindHint{{Key: "I", Label: "Interrupt"}}, hints...)
 	}
+	prependOpenTerminal := func(hints []KeybindHint) []KeybindHint {
+		if a.focusedTerminalAgentSession() == nil {
+			return hints
+		}
+		return append([]KeybindHint{{Key: "t", Label: "Open terminal"}}, hints...)
+	}
 	if a.mainFocus == mainFocusContent {
 		hints := a.content.KeybindHints()
-		return append(prependDelete(prependInterrupt(prependArchive(hints))), global...)
+		return append(prependDelete(prependInterrupt(prependArchive(prependOpenTerminal(hints)))), global...)
 	}
 	if a.sidebarMode == sidebarPaneTasks {
 		hints := []KeybindHint{}
@@ -774,7 +780,7 @@ func (a App) currentHints() []KeybindHint {
 		if a.retryableFocusedSessionID() != "" {
 			hints = append([]KeybindHint{{Key: "r", Label: "Retry"}}, hints...)
 		}
-		return append(prependDelete(prependInterrupt(prependArchive(hints))), global...)
+		return append(prependDelete(prependInterrupt(prependArchive(prependOpenTerminal(hints)))), global...)
 	}
 	return append(prependDelete(prependInterrupt(prependArchive([]KeybindHint{{Key: "f", Label: "Filter"}, {Key: "g", Label: "Group"}, {Key: "o", Label: "Sort"}}))), global...)
 }
@@ -1061,6 +1067,27 @@ func (a App) workItemTaskSession(workItemID, sessionID string) *domain.AgentSess
 		if agentSession.ID == sessionID {
 			s := agentSession
 			return &s
+		}
+	}
+	return nil
+}
+
+func (a App) focusedTerminalAgentSession() *domain.AgentSession {
+	if a.mainFocus == mainFocusContent && a.content.Mode() == ContentModeAgentSession {
+		if sessionID := a.content.sessionLog.SessionID(); sessionID != "" {
+			if session := a.workItemTaskSession(a.currentWorkItemID, sessionID); session != nil && session.WorktreePath != "" {
+				return session
+			}
+		}
+		return nil
+	}
+	if a.mainFocus == mainFocusSidebar && a.sidebarMode == sidebarPaneTasks {
+		selectedID := a.selectedTaskSessionID()
+		if selectedID == "" || selectedID == taskSidebarSourceDetailsID || selectedID == taskSidebarArtifactsID {
+			return nil
+		}
+		if session := a.workItemTaskSession(a.currentWorkItemID, selectedID); session != nil && session.WorktreePath != "" {
+			return session
 		}
 	}
 	return nil
@@ -2911,6 +2938,10 @@ func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleQuitRequest()
 	}
 
+	if msg.String() == "x" && !a.anyInputCaptured() {
+		return a, a.openActionMenu()
+	}
+
 	if a.activeOverlay == overlayWorkspaceInit {
 		a.workspaceModal, cmd = a.workspaceModal.Update(msg)
 		return a, cmd
@@ -3068,14 +3099,8 @@ func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 	case "t":
-		// Open terminal in worktree when in session view.
-		if a.mainFocus == mainFocusContent && a.content.Mode() == ContentModeAgentSession {
-			if sessionID := a.content.sessionLog.SessionID(); sessionID != "" {
-				if session := a.workItemTaskSession(a.currentWorkItemID, sessionID); session != nil && session.WorktreePath != "" {
-					return a, OpenTerminalCmd(session.WorktreePath)
-				}
-			}
-			break
+		if session := a.focusedTerminalAgentSession(); session != nil {
+			return a, OpenTerminalCmd(session.WorktreePath)
 		}
 	case "o":
 		if a.sidebarMode == sidebarPaneSessions {
