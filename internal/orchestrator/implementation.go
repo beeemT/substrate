@@ -767,8 +767,9 @@ func (s *ImplementationService) reviewLoopWithFirstReviewParent(
 		outcome.Cycles++
 
 		// Safety bound: the per-session max-cycles check inside ReviewSession
-		// resets after each reimplementation (new session). This outer guard
-		// ensures the total cycle count across all sessions is bounded.
+		// resets after each reimplementation (new implementation session). This
+		// pre-review guard handles resumed loops that are already over budget
+		// before starting another review.
 		if s.cfg.Review.MaxCycles != nil && outcome.Cycles > *s.cfg.Review.MaxCycles {
 			outcome.Escalated = true
 			return outcome
@@ -801,6 +802,16 @@ func (s *ImplementationService) reviewLoopWithFirstReviewParent(
 
 		if !reviewResult.NeedsReimpl || !autoLoop {
 			// Needs reimpl but auto-loop disabled — escalate for human decision.
+			outcome.Escalated = true
+			return outcome
+		}
+
+		// The review budget counts completed review cycles. If the last allowed
+		// review still found critiques, escalate immediately on that review
+		// result. Starting another implementation would spend work the system has
+		// already decided cannot be auto-reviewed, leaving the leaf implementation
+		// with no review result and no useful human decision context.
+		if s.cfg.Review.MaxCycles != nil && outcome.Cycles >= *s.cfg.Review.MaxCycles {
 			outcome.Escalated = true
 			return outcome
 		}

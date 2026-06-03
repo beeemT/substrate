@@ -2157,11 +2157,10 @@ func TestReviewLoop_ReviewError(t *testing.T) {
 	}
 }
 
-// TestReviewLoop_EscalatedByMaxCycles verifies that when the review pipeline
-// reports Escalated (cycle limit exceeded) the loop returns Escalated.
-func TestReviewLoop_EscalatedByMaxCycles(t *testing.T) {
-	// maxCycles=1: first review sees major critiques, second call (cycle 2)
-	// exceeds the limit → ReviewSession returns Escalated.
+// TestReviewLoop_EscalatesAfterLastAllowedReview verifies that the outer review
+// budget stops immediately after the last allowed review reports critiques. It
+// must not launch one more implementation that cannot be reviewed automatically.
+func TestReviewLoop_EscalatesAfterLastAllowedReview(t *testing.T) {
 	svc, fix := reviewLoopFixture(t, 1, true)
 	defer fix.cleanup()
 
@@ -2169,31 +2168,9 @@ func TestReviewLoop_EscalatedByMaxCycles(t *testing.T) {
 	fix.harness.outputs = []string{majors}
 	implSession := fix.seedPlanAndSubPlan(t)
 
-	// With maxCycles=1 and major critiques, the first ReviewSession returns
-	// NeedsReimpl=true. But because reimplementSubPlan will fail (nil deps),
-	// the loop should fail. Instead, to get Escalated from ReviewSession
-	// itself, we need cycle >= maxCycles. ReviewSession tracks cycles via its
-	// review repo. After one NeedsReimpl, the second call escalates.
-	// However, reimplementSubPlan will be called first. We can't easily
-	// test escalation via max cycles without hitting reimpl.
-	//
-	// Alternative: use autoLoop=false so NeedsReimpl → escalated without reimpl.
-	// The max-cycles escalation path is tested in phase9_test.go directly.
-	// See TestReviewLoop_NeedsReimplAutoLoopOff below.
-	//
-	// Instead, test escalation when ReviewSession itself returns Escalated
-	// (cycle limit already hit at the pipeline level). We run 1 cycle of
-	// ReviewSession directly to bump the cycle counter, then let reviewLoop
-	// see Escalated on its call.
-
-	// Cycle 1: direct call bumps pipeline's internal cycle counter.
-	_, err := fix.pipeline.ReviewSession(context.Background(), implSession)
-	if err != nil {
-		t.Fatalf("pre-warming ReviewSession: %v", err)
-	}
-
-	// Cycle 2: reviewLoop calls ReviewSession which now returns Escalated.
-	// No harness output needed — escalation triggers before running agent.
+	// Cycle 1: first review sees major critiques. Because maxCycles=1, this is
+	// the last allowed review cycle, so reviewLoop must escalate immediately
+	// instead of attempting auto-reimplementation.
 	outcome := svc.reviewLoop(
 		context.Background(),
 		implSession,
@@ -2208,7 +2185,7 @@ func TestReviewLoop_EscalatedByMaxCycles(t *testing.T) {
 		t.Errorf("expected Escalated=true, got Passed=%v Escalated=%v Failed=%v", outcome.Passed, outcome.Escalated, outcome.Failed)
 	}
 	if outcome.Cycles != 1 {
-		t.Errorf("expected Cycles=1 (one reviewLoop iteration), got %d", outcome.Cycles)
+		t.Errorf("expected Cycles=1, got %d", outcome.Cycles)
 	}
 }
 
