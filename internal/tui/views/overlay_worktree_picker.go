@@ -264,7 +264,7 @@ func (m *WorktreePickerOverlay) handleKey(msg tea.KeyMsg) (WorktreePickerOverlay
 		return *m, func() tea.Msg { return CloseOverlayMsg{} }
 
 	case "tab", "left", "right":
-		m.picker.SwitchFocus()
+		m.picker.HandleFocusKey(msg.String())
 		return *m, nil
 
 	case "t", "enter":

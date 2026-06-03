@@ -849,6 +849,54 @@ func TestSessionParentAgentSessionIDRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSessionListActiveChildrenByParentID(t *testing.T) {
+	db := setupDB(t)
+	tx := beginTx(t, db)
+	ctx := context.Background()
+
+	ws := makeWorkspace(t, tx)
+	wi := makeWorkItem(t, tx, ws.ID)
+	plan := makePlan(t, tx, wi.ID)
+	sp := makeSubPlan(t, tx, plan.ID)
+	repo := reposqlite.NewAgentSessionRepo(tx)
+
+	parent := makeSession(t, tx, sp.ID, ws.ID)
+	active := domain.AgentSession{
+		ID:                   domain.NewID(),
+		WorkItemID:           wi.ID,
+		SubPlanID:            sp.ID,
+		WorkspaceID:          ws.ID,
+		Kind:                 domain.AgentSessionKindImplementation,
+		RepositoryName:       "test-repo",
+		HarnessName:          "claude",
+		WorktreePath:         "/tmp/worktree",
+		Status:               domain.AgentSessionRunning,
+		CreatedAt:            now(),
+		UpdatedAt:            now(),
+		ParentAgentSessionID: parent.ID,
+	}
+	completed := active
+	completed.ID = domain.NewID()
+	completed.Status = domain.AgentSessionCompleted
+	if err := repo.Create(ctx, active); err != nil {
+		t.Fatalf("create active child: %v", err)
+	}
+	if err := repo.Create(ctx, completed); err != nil {
+		t.Fatalf("create completed child: %v", err)
+	}
+
+	children, err := repo.ListActiveChildrenByParentID(ctx, parent.ID)
+	if err != nil {
+		t.Fatalf("ListActiveChildrenByParentID: %v", err)
+	}
+	if len(children) != 1 {
+		t.Fatalf("active children = %d, want 1", len(children))
+	}
+	if children[0].ID != active.ID {
+		t.Fatalf("active child ID = %q, want %q", children[0].ID, active.ID)
+	}
+}
+
 func TestSessionDeleteCascadesDependents(t *testing.T) {
 	db := setupDB(t)
 	tx := beginTx(t, db)

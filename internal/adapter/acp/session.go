@@ -196,16 +196,19 @@ func (s *Session) setupACPSession(ctx context.Context, opts adapter.SessionOpts,
 		if s.init.AgentCapabilities.SessionCapabilities.supportsResume() {
 			var resp sessionResponse
 			if err := s.client.Call(ctx, "session/resume", params, &resp); err != nil {
-				return resp, "", fmt.Errorf("resume acp session: %w", err)
+				slog.Warn("failed to resume ACP session; starting a new session", "session_id", s.id, "acp_session_id", existing, "error", err)
+				params.SessionID = ""
+			} else {
+				return resp, "resume", nil
 			}
-			return resp, "resume", nil
-		}
-		if s.init.AgentCapabilities.LoadSession {
+		} else if s.init.AgentCapabilities.LoadSession {
 			var resp sessionResponse
 			if err := s.client.Call(ctx, "session/load", params, &resp); err != nil {
-				return resp, "", fmt.Errorf("load acp session: %w", err)
+				slog.Warn("failed to load ACP session; starting a new session", "session_id", s.id, "acp_session_id", existing, "error", err)
+				params.SessionID = ""
+			} else {
+				return resp, "load", nil
 			}
-			return resp, "load", nil
 		}
 		// Resume info present but agent doesn't support resume or load.
 		// Clear the stale session ID before creating a new session.

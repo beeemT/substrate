@@ -22,8 +22,8 @@ func TestSpinnerFrameUsesSharedSpinnerFrames(t *testing.T) {
 	}
 }
 
-func TestSpinnerFramesAreClockwiseWithTwoEmptyDotSlots(t *testing.T) {
-	want := []string{"⣼ ", "⣹ ", "⢻ ", "⠿ ", "⡟ ", "⣏ ", "⣧ ", "⣶ "}
+func TestSpinnerFramesAreCounterClockwiseWithFourEmptyDotSlots(t *testing.T) {
+	want := []string{"⣤ ", "⣆ ", "⡇ ", "⠏ ", "⠛ ", "⠹ ", "⢸ ", "⣰ "}
 	frames := SpinnerFrames()
 	if len(frames) != len(want) {
 		t.Fatalf("frame count = %d, want %d", len(frames), len(want))

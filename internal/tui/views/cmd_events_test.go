@@ -193,6 +193,21 @@ func (r *cmdSessionRepo) ListByWorkspaceID(_ context.Context, workspaceID string
 	return result, nil
 }
 
+func (r *cmdSessionRepo) ListActiveChildrenByParentID(_ context.Context, parentID string) ([]domain.AgentSession, error) {
+	result := make([]domain.AgentSession, 0, len(r.sessions))
+	for _, session := range r.sessions {
+		if session.ParentAgentSessionID != parentID {
+			continue
+		}
+		switch session.Status {
+		case domain.AgentSessionPending, domain.AgentSessionRunning, domain.AgentSessionWaitingForAnswer:
+			result = append(result, session)
+		}
+	}
+
+	return result, nil
+}
+
 func (r *cmdSessionRepo) ListByOwnerInstanceID(_ context.Context, instanceID string) ([]domain.AgentSession, error) {
 	result := make([]domain.AgentSession, 0, len(r.sessions))
 	for _, session := range r.sessions {
@@ -356,6 +371,28 @@ func TestResumeAllSessionsForWorkItemCmd_SkipsSuperseded(t *testing.T) {
 	}
 	if len(fix.harness.starts) != 0 {
 		t.Fatalf("starts = %d, want 0", len(fix.harness.starts))
+	}
+}
+
+func TestResumeAllSessionsForWorkItemCmd_SecondDispatchDoesNotDuplicateResume(t *testing.T) {
+	fix := newResumeAllCmdFixture(t, []domain.AgentSession{
+		resumeAllSession("sess-old", "sp-1", domain.AgentSessionInterrupted),
+	})
+
+	first := ResumeAllSessionsForWorkItemCmd(context.Background(), fix.workItemSvc, fix.planningSvc, fix.resumption, fix.sessionSvc, fix.planSvc, nil, "wi-1", "inst-1")()
+	if _, ok := first.(SessionResumedMsg); !ok {
+		t.Fatalf("first msg = %T, want SessionResumedMsg", first)
+	}
+	second := ResumeAllSessionsForWorkItemCmd(context.Background(), fix.workItemSvc, fix.planningSvc, fix.resumption, fix.sessionSvc, fix.planSvc, nil, "wi-1", "inst-1")()
+	resumed, ok := second.(SessionResumedMsg)
+	if !ok {
+		t.Fatalf("second msg = %T, want SessionResumedMsg", second)
+	}
+	if resumed.Message != "No resumable tasks" {
+		t.Fatalf("second message = %q, want %q", resumed.Message, "No resumable tasks")
+	}
+	if len(fix.harness.starts) != 1 {
+		t.Fatalf("starts = %d, want 1", len(fix.harness.starts))
 	}
 }
 

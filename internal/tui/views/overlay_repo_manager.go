@@ -330,7 +330,7 @@ func (m *RepoManagerOverlay) handleKey(msg tea.KeyMsg) (RepoManagerOverlay, tea.
 		return *m, func() tea.Msg { return CloseOverlayMsg{} }
 
 	case "tab", "left", "right":
-		m.picker.SwitchFocus()
+		m.picker.HandleFocusKey(msg.String())
 		return *m, nil
 
 	case "a":

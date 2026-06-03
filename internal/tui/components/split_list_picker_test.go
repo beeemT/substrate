@@ -43,9 +43,31 @@ func TestSplitListPicker_FocusSwitch(t *testing.T) {
 	}
 }
 
-// Note: HandleFocusKey was removed as dead code.
-// Consumers call picker.SwitchFocus() directly in their key handlers.
-// The test coverage for SwitchFocus is in TestSplitListPicker_FocusSwitch.
+func TestSplitListPicker_HandleFocusKeyConsumesSwitchKeys(t *testing.T) {
+	for _, key := range []string{"tab", "left", "right"} {
+		t.Run(key, func(t *testing.T) {
+			picker := NewSplitListPicker(testSplitOverlaySpec)
+			if !picker.HandleFocusKey(key) {
+				t.Fatalf("HandleFocusKey(%q) did not consume key", key)
+			}
+			if picker.Focus() != SplitPaneFocusRight {
+				t.Fatalf("focus = %v, want right", picker.Focus())
+			}
+		})
+	}
+}
+
+func TestSplitListPicker_DoesNotConsumeNavigationKeys(t *testing.T) {
+	picker := NewSplitListPicker(testSplitOverlaySpec)
+	for _, key := range []string{"up", "down", "j", "k", "enter", "t"} {
+		if picker.HandleFocusKey(key) {
+			t.Fatalf("HandleFocusKey(%q) consumed navigation/action key", key)
+		}
+	}
+	if picker.Focus() != SplitPaneFocusLeft {
+		t.Fatalf("focus = %v, want left", picker.Focus())
+	}
+}
 
 func TestSplitListPicker_SetSize(t *testing.T) {
 	spec := testSplitOverlaySpec

@@ -35,6 +35,7 @@ const (
 	ContextNewSessionAutonomous
 	ContextAddRepo
 	ContextRepoManager
+	ContextWorktreePicker
 	ContextOverview
 	ContextPlanReview
 	ContextQuestion
@@ -370,6 +371,8 @@ func (a *App) BuildActionRegistry(ctx ActionContext) []Action {
 		actions = append(actions, addRepoActions(a)...)
 	case ContextRepoManager:
 		actions = append(actions, repoManagerActions(a)...)
+	case ContextWorktreePicker:
+		actions = append(actions, worktreePickerActions(a)...)
 	case ContextSettings:
 		actions = append(actions, settingsActions(a)...)
 	case ContextLogs:
@@ -452,6 +455,8 @@ func (a *App) currentActionContext() ActionContext {
 		return ContextAddRepo
 	case overlayRepoManager:
 		return ContextRepoManager
+	case overlayWorktreePicker:
+		return ContextWorktreePicker
 	case overlayOverviewLinks:
 		return ContextOverviewLinks
 	case overlayReviewFollowup:
@@ -591,6 +596,14 @@ func overviewActions(a *App) []Action {
 		})
 	}
 
+	actions = append(actions, Action{
+		ID: "open_worktree_picker", Label: "Open terminal in worktree", Shortcut: "t", Priority: 110,
+		Condition: func(a *App) bool {
+			return a.content.Mode() == ContentModeOverview && a.content.overview.overlay == overviewOverlayNone
+		},
+		Handler: func(a *App) tea.Cmd { return func() tea.Msg { return OpenWorktreePickerMsg{} } },
+	})
+
 	return actions
 }
 
@@ -621,7 +634,10 @@ func questionActions(a *App) []Action {
 
 func interruptedActions(a *App) []Action {
 	return []Action{
-		{ID: "resume", Label: "Resume", Shortcut: "r", Priority: 410, Condition: func(a *App) bool { card := a.content.overview.selectedActionCard(); return card != nil && card.CanAct }, Handler: func(a *App) tea.Cmd {
+		{ID: "resume", Label: "Resume", Shortcut: "r", Priority: 410, Condition: func(a *App) bool {
+			card := a.content.overview.selectedActionCard()
+			return card != nil && card.CanAct && !a.resumeInFlight[a.currentWorkItemID]
+		}, Handler: func(a *App) tea.Cmd {
 			return func() tea.Msg { return ResumeSessionMsg{WorkItemID: a.currentWorkItemID} }
 		}},
 		{ID: "abandon", Label: "Abandon", Shortcut: "a", Priority: 420, Condition: func(a *App) bool {
@@ -853,6 +869,22 @@ func addRepoActions(a *App) []Action {
 func repoManagerActions(a *App) []Action {
 	return []Action{
 		{ID: "add_repo_rm", Label: "Add repo", Shortcut: "a", Priority: 650, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd { return a.openAddRepo() }},
+	}
+}
+
+func worktreePickerActions(a *App) []Action {
+	return []Action{
+		{ID: "open_selected_worktree_terminal", Label: "Open selected worktree terminal", Shortcut: "t", Priority: 660, Condition: func(a *App) bool {
+			return a.worktreePicker.active && !a.worktreePicker.worktreeLoading && len(a.worktreePicker.worktrees) > 0
+		}, Handler: func(a *App) tea.Cmd {
+			return a.worktreePicker.openTerminalCmd()
+		}},
+		{ID: "switch_worktree_picker_focus", Label: "Switch picker focus", Shortcut: "Tab", Priority: 670, Condition: func(a *App) bool {
+			return a.worktreePicker.active
+		}, Handler: func(a *App) tea.Cmd {
+			a.worktreePicker.picker.SwitchFocus()
+			return nil
+		}},
 	}
 }
 

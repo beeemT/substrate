@@ -4,8 +4,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/gitwork"
+	"github.com/beeemT/substrate/internal/terminal"
+	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
@@ -65,5 +70,92 @@ func TestActionMenuViewUsesAtLeastHalfScreen(t *testing.T) {
 	}
 	if got := ansi.StringWidth(lines[0]); got < 100 {
 		t.Fatalf("view width = %d, want at least 100", got)
+	}
+}
+
+func TestActionRegistryIncludesOverviewOpenTerminalPicker(t *testing.T) {
+	st := styles.NewStyles(styles.DefaultTheme)
+	app := &App{
+		content: NewContentModel(st),
+		plans:   make(map[string]*domain.Plan),
+	}
+	app.content.SetMode(ContentModeOverview)
+
+	actions := app.BuildActionRegistry(ContextOverview)
+	action := findAction(actions, "open_worktree_picker")
+	if action == nil {
+		t.Fatalf("overview actions missing open_worktree_picker: %#v", actionIDs(actions))
+	}
+	if action.Shortcut != "t" {
+		t.Fatalf("shortcut = %q, want t", action.Shortcut)
+	}
+	msg := action.Handler(app)()
+	if _, ok := msg.(OpenWorktreePickerMsg); !ok {
+		t.Fatalf("handler msg = %#v, want OpenWorktreePickerMsg", msg)
+	}
+}
+
+func TestActionRegistryIncludesWorktreePickerActions(t *testing.T) {
+	st := styles.NewStyles(styles.DefaultTheme)
+	app := &App{
+		content:        NewContentModel(st),
+		worktreePicker: NewWorktreePickerOverlay("/workspace", nil, st),
+	}
+	app.worktreePicker.active = true
+	app.worktreePicker.worktrees = []gitwork.Worktree{{Path: "/workspace/repo/main", Branch: "main", IsMain: true}}
+	app.worktreePicker.worktreeList.SetItems([]list.Item{worktreePickerItem{worktree: app.worktreePicker.worktrees[0]}})
+
+	actions := app.BuildActionRegistry(ContextWorktreePicker)
+	openAction := findAction(actions, "open_selected_worktree_terminal")
+	if openAction == nil {
+		t.Fatalf("worktree picker actions missing terminal action: %#v", actionIDs(actions))
+	}
+	if openAction.Shortcut != "t" {
+		t.Fatalf("shortcut = %q, want t", openAction.Shortcut)
+	}
+	msg := openAction.Handler(app)()
+	if got, ok := msg.(OpenTerminalInWorktreeMsg); !ok || got.WorktreePath != "/workspace/repo/main" {
+		t.Fatalf("handler msg = %#v, want OpenTerminalInWorktreeMsg for selected path", msg)
+	}
+
+	switchAction := findAction(actions, "switch_worktree_picker_focus")
+	if switchAction == nil {
+		t.Fatalf("worktree picker actions missing focus action: %#v", actionIDs(actions))
+	}
+	if app.worktreePicker.picker.Focus() != components.SplitPaneFocusLeft {
+		t.Fatalf("initial focus = %v, want left", app.worktreePicker.picker.Focus())
+	}
+	switchAction.Handler(app)
+	if app.worktreePicker.picker.Focus() != components.SplitPaneFocusRight {
+		t.Fatalf("focus = %v, want right", app.worktreePicker.picker.Focus())
+	}
+}
+
+func findAction(actions []Action, id string) *Action {
+	for i := range actions {
+		if actions[i].ID == id {
+			return &actions[i]
+		}
+	}
+	return nil
+}
+
+func actionIDs(actions []Action) []string {
+	ids := make([]string, len(actions))
+	for i := range actions {
+		ids[i] = actions[i].ID
+	}
+	return ids
+}
+
+func TestTerminalOpenedMessageDescribesLimitedTerminals(t *testing.T) {
+	if got := terminalOpenedMessage(terminal.TerminalWarp); !strings.Contains(got, "does not support programmatic tabs") {
+		t.Fatalf("Warp message = %q", got)
+	}
+	if got := terminalOpenedMessage(terminal.TerminalAlacritty); !strings.Contains(got, "tmux or zellij") {
+		t.Fatalf("Alacritty message = %q", got)
+	}
+	if got := terminalOpenedMessage(terminal.TerminalTerminal); got != "Opened terminal" {
+		t.Fatalf("Terminal.app message = %q", got)
 	}
 }

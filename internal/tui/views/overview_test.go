@@ -2017,3 +2017,15 @@ func TestBuildFailedActionCard_IncludesInterruptedLeafRepos(t *testing.T) {
 		t.Fatalf("Context = %v, want failed or interrupted count", action.Context)
 	}
 }
+
+func TestAppCanActOnSession_ResumeInFlightDisablesInterruptedSession(t *testing.T) {
+	app := &App{resumeInFlight: map[string]bool{"wi-1": true}}
+	session := domain.AgentSession{
+		ID:         "sess-1",
+		WorkItemID: "wi-1",
+		Status:     domain.AgentSessionInterrupted,
+	}
+	if app.canActOnSession(session) {
+		t.Fatal("canActOnSession = true, want false while resume is in flight")
+	}
+}

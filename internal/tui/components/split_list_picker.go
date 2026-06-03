@@ -59,6 +59,17 @@ func (m *SplitListPicker) SwitchFocus() {
 	m.focus = SplitPaneFocusLeft
 }
 
+// HandleFocusKey handles only focus-switching keys and reports whether it consumed the key.
+func (m *SplitListPicker) HandleFocusKey(key string) bool {
+	switch key {
+	case "tab", "left", "right":
+		m.SwitchFocus()
+		return true
+	default:
+		return false
+	}
+}
+
 // View renders the split-pane body using the computed layout.
 func (m SplitListPicker) View(st styles.Styles, left, right SplitListPaneSpec) string {
 	return RenderSplitOverlayBody(st, m.layout, SplitOverlaySpec{

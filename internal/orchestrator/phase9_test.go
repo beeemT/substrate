@@ -265,6 +265,8 @@ type mockSessionRepo struct {
 	mu              sync.Mutex
 	sessions        map[string]domain.AgentSession
 	searchHistory   []domain.SessionHistoryEntry
+	createErr       error
+	createHook      func(context.Context, domain.AgentSession) error
 	updateErr       error
 	updateErrStatus domain.AgentSessionStatus
 	deleteErr       error
@@ -325,6 +327,23 @@ func (r *mockSessionRepo) ListByWorkspaceID(_ context.Context, workspaceID strin
 	return result, nil
 }
 
+func (r *mockSessionRepo) ListActiveChildrenByParentID(_ context.Context, parentID string) ([]domain.AgentSession, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var result []domain.AgentSession
+	for _, s := range r.sessions {
+		if s.ParentAgentSessionID != parentID {
+			continue
+		}
+		switch s.Status {
+		case domain.AgentSessionPending, domain.AgentSessionRunning, domain.AgentSessionWaitingForAnswer:
+			result = append(result, s)
+		}
+	}
+
+	return result, nil
+}
+
 func (r *mockSessionRepo) ListByOwnerInstanceID(_ context.Context, instanceID string) ([]domain.AgentSession, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -347,9 +366,15 @@ func (r *mockSessionRepo) SearchHistory(_ context.Context, _ domain.SessionHisto
 	return entries, nil
 }
 
-func (r *mockSessionRepo) Create(_ context.Context, s domain.AgentSession) error {
+func (r *mockSessionRepo) Create(ctx context.Context, s domain.AgentSession) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.createHook != nil {
+		return r.createHook(ctx, s)
+	}
+	if r.createErr != nil {
+		return r.createErr
+	}
 	r.sessions[s.ID] = s
 
 	return nil

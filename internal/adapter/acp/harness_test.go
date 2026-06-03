@@ -37,7 +37,11 @@ func TestHelperACPProcess(t *testing.T) {
 				writeHelper(map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": -32602, "message": err.Error()}})
 				continue
 			}
-			writeHelper(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{"protocolVersion": 1, "agentInfo": map[string]any{"name": os.Getenv("ACP_AGENT_NAME"), "version": "test"}, "agentCapabilities": map[string]any{"loadSession": true, "sessionCapabilities": map[string]any{"resume": map[string]any{}, "close": map[string]any{}, "setConfigOption": map[string]any{}}}, "authMethods": []map[string]any{{"id": os.Getenv("ACP_AUTH_ID")}}}})
+			sessionCapabilities := map[string]any{"close": map[string]any{}, "setConfigOption": map[string]any{}}
+			if os.Getenv("ACP_DISABLE_RESUME") != "1" {
+				sessionCapabilities["resume"] = map[string]any{}
+			}
+			writeHelper(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{"protocolVersion": 1, "agentInfo": map[string]any{"name": os.Getenv("ACP_AGENT_NAME"), "version": "test"}, "agentCapabilities": map[string]any{"loadSession": true, "sessionCapabilities": sessionCapabilities}, "authMethods": []map[string]any{{"id": os.Getenv("ACP_AUTH_ID")}}}})
 		case "session/new":
 			if err := validateHelperSessionParams(msg); err != nil {
 				writeHelper(map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": -32602, "message": err.Error()}})
@@ -45,7 +49,17 @@ func TestHelperACPProcess(t *testing.T) {
 			}
 			writeHelper(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{"sessionId": "acp-sess-1", "configOptions": []map[string]any{{"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": "old", "options": []map[string]any{{"value": "new", "name": "New"}}}}}})
 		case "session/resume":
+			if os.Getenv("ACP_FAIL_RESUME") == "1" {
+				writeHelper(map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": -32603, "message": "Internal error"}})
+				continue
+			}
 			writeHelper(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{"sessionId": "acp-resumed"}})
+		case "session/load":
+			if os.Getenv("ACP_FAIL_LOAD") == "1" {
+				writeHelper(map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": -32603, "message": "Internal error"}})
+				continue
+			}
+			writeHelper(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{"sessionId": "acp-loaded"}})
 		case "session/set_config_option":
 			writeHelper(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{"configOptions": []map[string]any{{"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": "new", "options": []map[string]any{{"value": "new", "name": "New"}}}}}})
 		case "session/prompt":
@@ -163,6 +177,47 @@ func TestStartSessionLifecycleMapsACPEvents(t *testing.T) {
 	}
 	if err := sess.Wait(context.Background()); err != nil {
 		t.Fatalf("Wait: %v", err)
+	}
+}
+
+func TestStartSessionFallsBackToNewWhenACPLoadFails(t *testing.T) {
+	cfg := helperACPConfig(t)
+	cfg.Env["ACP_DISABLE_RESUME"] = "1"
+	cfg.Env["ACP_FAIL_LOAD"] = "1"
+	h := NewHarness(cfg, t.TempDir())
+	sess, err := h.StartSession(context.Background(), adapter.SessionOpts{
+		SessionID:     "s-load-fallback",
+		WorktreePath:  t.TempDir(),
+		SessionLogDir: t.TempDir(),
+		ResumeInfo:    map[string]string{"acp_agent_session_id": "stale-acp-session"},
+	})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	defer sess.Abort(context.Background())
+	info := sess.ResumeInfo()
+	if info["acp_agent_session_id"] != "acp-sess-1" || info["acp_resume_method"] != "new" {
+		t.Fatalf("ResumeInfo = %#v, want new ACP session after load failure", info)
+	}
+}
+
+func TestStartSessionFallsBackToNewWhenACPResumeFails(t *testing.T) {
+	cfg := helperACPConfig(t)
+	cfg.Env["ACP_FAIL_RESUME"] = "1"
+	h := NewHarness(cfg, t.TempDir())
+	sess, err := h.StartSession(context.Background(), adapter.SessionOpts{
+		SessionID:     "s-resume-fallback",
+		WorktreePath:  t.TempDir(),
+		SessionLogDir: t.TempDir(),
+		ResumeInfo:    map[string]string{"acp_agent_session_id": "stale-acp-session"},
+	})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	defer sess.Abort(context.Background())
+	info := sess.ResumeInfo()
+	if info["acp_agent_session_id"] != "acp-sess-1" || info["acp_resume_method"] != "new" {
+		t.Fatalf("ResumeInfo = %#v, want new ACP session after resume failure", info)
 	}
 }
 

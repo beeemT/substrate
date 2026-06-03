@@ -188,6 +188,10 @@ func (r AgentSessionRepo) ListByWorkspaceID(ctx context.Context, workspaceID str
 	return r.list(ctx, `SELECT * FROM agent_sessions WHERE workspace_id = ? ORDER BY created_at`, workspaceID)
 }
 
+func (r AgentSessionRepo) ListActiveChildrenByParentID(ctx context.Context, parentID string) ([]domain.AgentSession, error) {
+	return r.list(ctx, `SELECT * FROM agent_sessions WHERE parent_agent_session_id = ? AND status IN ('pending', 'running', 'waiting_for_answer') ORDER BY created_at`, parentID)
+}
+
 func (r AgentSessionRepo) ListByOwnerInstanceID(ctx context.Context, instanceID string) ([]domain.AgentSession, error) {
 	return r.list(ctx, `SELECT * FROM agent_sessions WHERE owner_instance_id = ? ORDER BY created_at`, instanceID)
 }

@@ -139,6 +139,7 @@ func TestActionContextValues(t *testing.T) {
 		views.ContextNewSessionAutonomous,
 		views.ContextAddRepo,
 		views.ContextRepoManager,
+		views.ContextWorktreePicker,
 		views.ContextOverview,
 		views.ContextPlanReview,
 		views.ContextQuestion,

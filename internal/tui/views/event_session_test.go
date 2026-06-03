@@ -63,7 +63,7 @@ func TestDomainEventMsg_AgentSessionStarted(t *testing.T) {
 		ID:          "session-1",
 		WorkItemID:  "wi-1",
 		WorkspaceID: "ws-integration",
-		Kind: domain.AgentSessionKindPlanning,
+		Kind:        domain.AgentSessionKindPlanning,
 		Status:      domain.AgentSessionRunning,
 		CreatedAt:   now,
 		UpdatedAt:   now,
@@ -158,7 +158,7 @@ func TestDomainEventMsg_AgentSessionStartedAppliesTypedPayload(t *testing.T) {
 		ID:          "impl-session-1",
 		WorkItemID:  "wi-1",
 		WorkspaceID: "ws-integration",
-		Kind: domain.AgentSessionKindImplementation,
+		Kind:        domain.AgentSessionKindImplementation,
 		Status:      domain.AgentSessionRunning,
 		CreatedAt:   now,
 		UpdatedAt:   now,
@@ -367,6 +367,10 @@ func (r *mockTaskRepoForSession) ListBySubPlanID(ctx context.Context, subPlanID 
 }
 
 func (r *mockTaskRepoForSession) ListByWorkspaceID(ctx context.Context, workspaceID string) ([]domain.AgentSession, error) {
+	return nil, nil
+}
+
+func (r *mockTaskRepoForSession) ListActiveChildrenByParentID(ctx context.Context, parentID string) ([]domain.AgentSession, error) {
 	return nil, nil
 }
 

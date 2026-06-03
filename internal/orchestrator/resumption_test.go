@@ -270,7 +270,7 @@ func (f *phase9bFixture) seedRunningSession(sessionID, ownerInstanceID string) {
 		ID:              sessionID,
 		WorkItemID:      "wi-1",
 		WorkspaceID:     f.workspaceID,
-		Kind: domain.AgentSessionKindImplementation,
+		Kind:            domain.AgentSessionKindImplementation,
 		SubPlanID:       "sub-plan-1",
 		RepositoryName:  "repo-a",
 		WorktreePath:    "/tmp/worktrees/repo-a",
@@ -286,7 +286,7 @@ func (f *phase9bFixture) seedInterruptedSession(sessionID string) {
 		ID:             sessionID,
 		WorkItemID:     "wi-1",
 		WorkspaceID:    f.workspaceID,
-		Kind: domain.AgentSessionKindImplementation,
+		Kind:           domain.AgentSessionKindImplementation,
 		SubPlanID:      "sub-plan-1",
 		RepositoryName: "repo-a",
 		WorktreePath:   "/tmp/worktrees/repo-a",
@@ -301,7 +301,7 @@ func (f *phase9bFixture) seedInterruptedSessionWithResumeInfo(sessionID string, 
 		ID:             sessionID,
 		WorkItemID:     "wi-1",
 		WorkspaceID:    f.workspaceID,
-		Kind: domain.AgentSessionKindImplementation,
+		Kind:           domain.AgentSessionKindImplementation,
 		SubPlanID:      "sub-plan-1",
 		RepositoryName: "repo-a",
 		WorktreePath:   "/tmp/worktrees/repo-a",
@@ -459,7 +459,7 @@ func TestResumeSession_OldSessionTransitionsToFailed(t *testing.T) {
 	}
 }
 
-func TestResumeSession_StartTransitionFailureDeletesPendingSessionWithoutStartingHarness(t *testing.T) {
+func TestResumeSession_CreateFailureDoesNotStartHarness(t *testing.T) {
 	fix := newPhase9bFixture()
 	ctx := context.Background()
 
@@ -471,15 +471,14 @@ func TestResumeSession_StartTransitionFailureDeletesPendingSessionWithoutStartin
 	t.Setenv("SUBSTRATE_HOME", tmpDir)
 
 	fix.seedInterruptedSession("sess-int3")
-	fix.sessionRepo.updateErr = repository.ErrNotFound
-	fix.sessionRepo.updateErrStatus = domain.AgentSessionRunning
+	fix.sessionRepo.createErr = repository.ErrNotFound
 
 	harness := &captureHarness{sessionsDir: sessionsDir}
 	r := NewResumption(harness, fix.sessionSvc, fix.planSvc, fix.workItemSvc, fix.bus, fix.registry, nil)
 	interrupted := fix.sessionRepo.sessions["sess-int3"]
 	_, err := r.ResumeSession(ctx, interrupted, "inst-new3")
 	if err == nil {
-		t.Fatal("expected ResumeSession to fail when transition to running fails")
+		t.Fatal("expected ResumeSession to fail when resumed session create fails")
 	}
 	if !strings.Contains(err.Error(), "create resumed session") {
 		t.Fatalf("expected resumed session error, got %v", err)
@@ -501,7 +500,7 @@ func TestResumeSession_StartTransitionFailureDeletesPendingSessionWithoutStartin
 	}
 }
 
-func TestResumeSession_StartTransitionFailureCleansPendingSessionAfterCancellation(t *testing.T) {
+func TestResumeSession_CreateFailureAfterCancellationDoesNotStartHarness(t *testing.T) {
 	fix := newPhase9bFixture()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -514,16 +513,8 @@ func TestResumeSession_StartTransitionFailureCleansPendingSessionAfterCancellati
 	t.Setenv("SUBSTRATE_HOME", tmpDir)
 
 	fix.seedInterruptedSession("sess-int4")
-	fix.sessionRepo.updateHook = func(_ context.Context, session domain.AgentSession) error {
-		if session.Status == domain.AgentSessionRunning {
-			cancel()
-		}
-
-		return nil
-	}
-	fix.sessionRepo.updateErr = repository.ErrNotFound
-	fix.sessionRepo.updateErrStatus = domain.AgentSessionRunning
-	fix.sessionRepo.deleteHook = func(ctx context.Context, _ string) error {
+	fix.sessionRepo.createHook = func(ctx context.Context, _ domain.AgentSession) error {
+		cancel()
 		return ctx.Err()
 	}
 
@@ -533,7 +524,7 @@ func TestResumeSession_StartTransitionFailureCleansPendingSessionAfterCancellati
 	interrupted := fix.sessionRepo.sessions["sess-int4"]
 	_, err := r.ResumeSession(ctx, interrupted, "inst-new4")
 	if err == nil {
-		t.Fatal("expected ResumeSession to fail when transition to running fails")
+		t.Fatal("expected ResumeSession to fail when resumed session create fails")
 	}
 	if !strings.Contains(err.Error(), "create resumed session") {
 		t.Fatalf("expected resumed session error, got %v", err)
@@ -800,7 +791,7 @@ func (f *phase9bFixture) seedCompletedSession(sessionID string) {
 		ID:             sessionID,
 		WorkItemID:     "wi-1",
 		WorkspaceID:    f.workspaceID,
-		Kind: domain.AgentSessionKindImplementation,
+		Kind:           domain.AgentSessionKindImplementation,
 		SubPlanID:      "sub-plan-1",
 		RepositoryName: "repo-a",
 		WorktreePath:   "/tmp/worktrees/repo-a",
@@ -865,7 +856,7 @@ func (f *phase9bFixture) seedFailedSession(sessionID string) {
 		ID:             sessionID,
 		WorkItemID:     "wi-1",
 		WorkspaceID:    f.workspaceID,
-		Kind: domain.AgentSessionKindImplementation,
+		Kind:           domain.AgentSessionKindImplementation,
 		SubPlanID:      "sub-plan-1",
 		RepositoryName: "repo-a",
 		WorktreePath:   "/tmp/worktrees/repo-a",

@@ -9,7 +9,7 @@ import (
 )
 
 var activitySpinner = spinner.Spinner{
-	Frames: []string{"⣼ ", "⣹ ", "⢻ ", "⠿ ", "⡟ ", "⣏ ", "⣧ ", "⣶ "},
+	Frames: []string{"⣤ ", "⣆ ", "⡇ ", "⠏ ", "⠛ ", "⠹ ", "⢸ ", "⣰ "},
 	FPS:    spinner.Dot.FPS,
 }
 

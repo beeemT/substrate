@@ -1219,7 +1219,7 @@ func OpenTerminalCmd(dir string) tea.Cmd {
 			return ErrMsg{Err: fmt.Errorf("open terminal in %s: %w", dir, err)}
 		}
 		slog.Debug("opened terminal", "path", dir, "terminal", termType)
-		return ActionDoneMsg{Message: "Opened terminal"}
+		return ActionDoneMsg{Message: terminalOpenedMessage(termType)}
 	}
 }
 
@@ -1233,7 +1233,18 @@ func OpenTerminalWithCmd(dir string, termType terminal.TerminalType) tea.Cmd {
 			return ErrMsg{Err: fmt.Errorf("open terminal in %s: %w", dir, err)}
 		}
 		slog.Debug("opened terminal", "path", dir, "terminal", used)
-		return ActionDoneMsg{Message: "Opened terminal"}
+		return ActionDoneMsg{Message: terminalOpenedMessage(used)}
+	}
+}
+
+func terminalOpenedMessage(termType terminal.TerminalType) string {
+	switch termType {
+	case terminal.TerminalWarp:
+		return "Opened terminal in Warp window; Warp does not support programmatic tabs"
+	case terminal.TerminalAlacritty:
+		return "Opened terminal in Alacritty window; use tmux or zellij for tabs"
+	default:
+		return "Opened terminal"
 	}
 }
 

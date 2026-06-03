@@ -133,6 +133,21 @@ func (r *sessionSearchDeleteRepo) ListByWorkspaceID(_ context.Context, workspace
 	return result, nil
 }
 
+func (r *sessionSearchDeleteRepo) ListActiveChildrenByParentID(_ context.Context, parentID string) ([]domain.AgentSession, error) {
+	result := make([]domain.AgentSession, 0, len(r.sessions))
+	for _, session := range r.sessions {
+		if session.ParentAgentSessionID != parentID {
+			continue
+		}
+		switch session.Status {
+		case domain.AgentSessionPending, domain.AgentSessionRunning, domain.AgentSessionWaitingForAnswer:
+			result = append(result, session)
+		}
+	}
+
+	return result, nil
+}
+
 func (r *sessionSearchDeleteRepo) ListByOwnerInstanceID(_ context.Context, instanceID string) ([]domain.AgentSession, error) {
 	result := make([]domain.AgentSession, 0, len(r.sessions))
 	for _, session := range r.sessions {

@@ -190,6 +190,20 @@ func (r *cmdTaskRepo) ListByWorkspaceID(_ context.Context, workspaceID string) (
 	return r.list(r.byWorkspace[workspaceID]), nil
 }
 
+func (r *cmdTaskRepo) ListActiveChildrenByParentID(_ context.Context, parentID string) ([]domain.AgentSession, error) {
+	result := make([]domain.AgentSession, 0, len(r.tasks))
+	for _, task := range r.tasks {
+		if task.ParentAgentSessionID != parentID {
+			continue
+		}
+		switch task.Status {
+		case domain.AgentSessionPending, domain.AgentSessionRunning, domain.AgentSessionWaitingForAnswer:
+			result = append(result, task)
+		}
+	}
+	return result, nil
+}
+
 func (r *cmdTaskRepo) ListByOwnerInstanceID(_ context.Context, _ string) ([]domain.AgentSession, error) {
 	return nil, nil
 }

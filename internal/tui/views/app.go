@@ -210,6 +210,7 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 	// orchestrator goroutine (implementation/planning). Used to tear down
 	// agent processes when the session is deleted.
 	pipelineCancels map[string]context.CancelFunc
+	resumeInFlight  map[string]bool
 
 	// program is the bubble tea program instance, used to send messages from goroutines.
 	program *tea.Program
@@ -250,6 +251,7 @@ func NewApp(provider ServiceProvider, runtimeCtx RuntimeContext) *App {
 		liveInstanceIDs:                make(map[string]bool),
 		reviewSessionLogs:              make(map[string]string),
 		taskSessionSelectionByWorkItem: make(map[string]string),
+		resumeInFlight:                 make(map[string]bool),
 		pipelineCancels:                make(map[string]context.CancelFunc),
 		sessionsDir:                    sessionsDir,
 		hasWorkspace:                   runtimeCtx.WorkspaceID != "",
@@ -2220,6 +2222,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case ResumeSessionMsg:
+		if a.resumeInFlight[msg.WorkItemID] {
+			return a, nil
+		}
+		a.resumeInFlight[msg.WorkItemID] = true
+		cmds = append(cmds, a.updateContentFromState())
 		if a.provider.Resumption() != nil {
 			cmds = append(cmds, ResumeAllSessionsForWorkItemCmd(
 				context.Background(),
@@ -2234,6 +2241,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			))
 		} else {
 			a.toasts.AddToast("Resume not available (no resumption service)", components.ToastError)
+			delete(a.resumeInFlight, msg.WorkItemID)
 		}
 		return a, tea.Batch(cmds...)
 
@@ -2662,6 +2670,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case SessionResumedMsg:
+		if msg.WorkItemID != "" {
+			delete(a.resumeInFlight, msg.WorkItemID)
+		}
 		if msg.Message != "" {
 			a.toasts.AddToast(msg.Message, components.ToastSuccess)
 		}
@@ -2788,6 +2799,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case ErrMsg:
+		clear(a.resumeInFlight)
 		// Route workspace init errors to the modal for cleanup (overlay close + progress reset).
 		if a.activeOverlay == overlayWorkspaceInit {
 			a.workspaceModal, cmd = a.workspaceModal.Update(msg)
@@ -3360,6 +3372,9 @@ func (a *App) showForemanContent(wi *domain.Session, foremanSession *domain.Agen
 }
 
 func (a *App) canActOnSession(s domain.AgentSession) bool {
+	if s.Status == domain.AgentSessionInterrupted && s.WorkItemID != "" && a.resumeInFlight[s.WorkItemID] {
+		return false
+	}
 	if a.runtimeCtx.InstanceID == "" || s.OwnerInstanceID == nil {
 		return true
 	}

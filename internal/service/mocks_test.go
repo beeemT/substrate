@@ -383,6 +383,24 @@ func (m *MockSessionRepository) ListByWorkspaceID(_ context.Context, workspaceID
 	return result, nil
 }
 
+func (m *MockSessionRepository) ListActiveChildrenByParentID(_ context.Context, parentID string) ([]domain.AgentSession, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	var result []domain.AgentSession
+	for _, session := range m.sessions {
+		if session.ParentAgentSessionID != parentID {
+			continue
+		}
+		switch session.Status {
+		case domain.AgentSessionPending, domain.AgentSessionRunning, domain.AgentSessionWaitingForAnswer:
+			result = append(result, session)
+		}
+	}
+
+	return result, nil
+}
+
 func (m *MockSessionRepository) ListByOwnerInstanceID(_ context.Context, instanceID string) ([]domain.AgentSession, error) {
 	if m.err != nil {
 		return nil, m.err

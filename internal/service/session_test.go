@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -14,7 +15,7 @@ func implSession(id, workItemID, workspaceID, subPlanID string, status domain.Ag
 		ID:             id,
 		WorkItemID:     workItemID,
 		WorkspaceID:    workspaceID,
-		Kind: domain.AgentSessionKindImplementation,
+		Kind:           domain.AgentSessionKindImplementation,
 		SubPlanID:      subPlanID,
 		RepositoryName: "repo1",
 		HarnessName:    "omp",
@@ -65,7 +66,7 @@ func TestSessionService_Create(t *testing.T) {
 			ID:          "plan-1",
 			WorkItemID:  "wi-1",
 			WorkspaceID: "ws-1",
-			Kind: domain.AgentSessionKindPlanning,
+			Kind:        domain.AgentSessionKindPlanning,
 			HarnessName: "omp",
 		}
 		if err := svc.Create(ctx, session); err != nil {
@@ -78,7 +79,7 @@ func TestSessionService_Create(t *testing.T) {
 			ID:             "manual-1",
 			WorkItemID:     "wi-1",
 			WorkspaceID:    "ws-1",
-			Kind: domain.AgentSessionKindManual,
+			Kind:           domain.AgentSessionKindManual,
 			RepositoryName: "repo1",
 			WorktreePath:   "/path/to/worktree",
 			HarnessName:    "omp",
@@ -93,7 +94,7 @@ func TestSessionService_Create(t *testing.T) {
 			ID:           "manual-2",
 			WorkItemID:   "wi-1",
 			WorkspaceID:  "ws-1",
-			Kind: domain.AgentSessionKindManual,
+			Kind:         domain.AgentSessionKindManual,
 			WorktreePath: "/path/to/worktree",
 			HarnessName:  "omp",
 		}
@@ -111,7 +112,7 @@ func TestSessionService_Create(t *testing.T) {
 			ID:             "manual-3",
 			WorkItemID:     "wi-1",
 			WorkspaceID:    "ws-1",
-			Kind: domain.AgentSessionKindManual,
+			Kind:           domain.AgentSessionKindManual,
 			RepositoryName: "repo1",
 			HarnessName:    "omp",
 		}
@@ -129,7 +130,7 @@ func TestSessionService_Create(t *testing.T) {
 			ID:          "manual-4",
 			WorkItemID:  "wi-1",
 			WorkspaceID: "ws-1",
-			Kind: domain.AgentSessionKindManual,
+			Kind:        domain.AgentSessionKindManual,
 			HarnessName: "omp",
 		}
 		err := svc.Create(ctx, session)
@@ -389,6 +390,26 @@ func TestSessionService_Resume_SetsParentAgentSessionID(t *testing.T) {
 	}
 	if stored.ID == interrupted.ID {
 		t.Error("Resume must create a new row; got same ID")
+	}
+}
+
+func TestSessionService_Resume_RejectsActiveResumedChild(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMockSessionRepository()
+	svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, newTestBus())
+
+	interrupted := implSession("session-old", "wi-1", "ws-1", "sp-1", domain.AgentSessionInterrupted)
+	activeChild := implSession("session-child", "wi-1", "ws-1", "sp-1", domain.AgentSessionRunning)
+	activeChild.ParentAgentSessionID = interrupted.ID
+	repo.sessions[interrupted.ID] = interrupted
+	repo.sessions[activeChild.ID] = activeChild
+
+	_, err := svc.Resume(ctx, interrupted, "omp", nil)
+	if !errors.Is(err, ErrAgentSessionAlreadyResumed) {
+		t.Fatalf("Resume error = %v, want ErrAgentSessionAlreadyResumed", err)
+	}
+	if len(repo.sessions) != 2 {
+		t.Fatalf("session count = %d, want 2 (no duplicate resume child)", len(repo.sessions))
 	}
 }
 

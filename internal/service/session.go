@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -40,63 +41,53 @@ func marshalAgentSessionPayload(agentSession domain.AgentSession) string {
 	return string(b)
 }
 
+var ErrAgentSessionAlreadyResumed = errors.New("agent session already has an active resumed child")
+
 // Resume creates a new agent session as a replacement for an interrupted one and emits
 // EventAgentSessionResumed with both session IDs. The interrupted session is NOT
 // transitioned by this method — callers must handle that separately.
 func (s *AgentSessionService) Resume(ctx context.Context, interrupted domain.AgentSession, harnessName string, ownerInstanceID *string) (domain.AgentSession, error) {
-	now := time.Now()
-	newSession := domain.AgentSession{
-		ID:                   domain.NewID(),
-		WorkItemID:           interrupted.WorkItemID,
-		WorkspaceID:          interrupted.WorkspaceID,
-		Kind:                 interrupted.Kind,
-		SubPlanID:            interrupted.SubPlanID,
-		RepositoryName:       interrupted.RepositoryName,
-		WorktreePath:         interrupted.WorktreePath,
-		HarnessName:          harnessName,
-		OwnerInstanceID:      ownerInstanceID,
-		Status:               domain.AgentSessionPending,
-		CreatedAt:            now,
-		UpdatedAt:            now,
-		ParentAgentSessionID: interrupted.ID,
-	}
-
-	if err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		return res.AgentSessions.Create(ctx, newSession)
-	}); err != nil {
-		return domain.AgentSession{}, err
-	}
-
-	// Transition to running and emit EventAgentSessionResumed.
 	var created domain.AgentSession
 	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
-		var err error
-		created, err = res.AgentSessions.Get(ctx, newSession.ID)
+		current, err := res.AgentSessions.Get(ctx, interrupted.ID)
 		if err != nil {
-			return newNotFoundError("agent session", newSession.ID)
+			return newNotFoundError("agent session", interrupted.ID)
 		}
-
-		if !canTransitionAgentSession(created.Status, domain.AgentSessionRunning) {
+		if current.Status != domain.AgentSessionInterrupted {
 			return newInvalidTransitionError(
-				sessionStatusName(created.Status),
-				sessionStatusName(domain.AgentSessionRunning),
+				sessionStatusName(current.Status),
+				sessionStatusName(domain.AgentSessionInterrupted),
 				"agent session",
 			)
 		}
+		activeChildren, err := res.AgentSessions.ListActiveChildrenByParentID(ctx, interrupted.ID)
+		if err != nil {
+			return fmt.Errorf("list active resumed children: %w", err)
+		}
+		if len(activeChildren) > 0 {
+			return ErrAgentSessionAlreadyResumed
+		}
 
 		now := time.Now()
-		created.Status = domain.AgentSessionRunning
-		created.StartedAt = &now
-		created.UpdatedAt = now
-
-		return res.AgentSessions.Update(ctx, created)
+		created = domain.AgentSession{
+			ID:                   domain.NewID(),
+			WorkItemID:           current.WorkItemID,
+			WorkspaceID:          current.WorkspaceID,
+			Kind:                 current.Kind,
+			SubPlanID:            current.SubPlanID,
+			RepositoryName:       current.RepositoryName,
+			WorktreePath:         current.WorktreePath,
+			HarnessName:          harnessName,
+			OwnerInstanceID:      ownerInstanceID,
+			Status:               domain.AgentSessionRunning,
+			StartedAt:            &now,
+			CreatedAt:            now,
+			UpdatedAt:            now,
+			ParentAgentSessionID: current.ID,
+		}
+		return res.AgentSessions.Create(ctx, created)
 	})
 	if err != nil {
-		// Transition failed: clean up the created pending session.
-		// Use a context detached from the caller's cancellation so cleanup always runs.
-		_ = s.transacter.Transact(context.WithoutCancel(ctx), func(ctx context.Context, res repository.Resources) error {
-			return res.AgentSessions.Delete(ctx, newSession.ID)
-		})
 		return domain.AgentSession{}, err
 	}
 
