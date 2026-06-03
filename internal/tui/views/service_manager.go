@@ -175,6 +175,7 @@ func (sm *ServiceManager) buildServicesWithOptions(ctx context.Context, cfg *con
 	workItemSvc := service.NewSessionService(sm.transacter, bus)
 	workspaceSvc := service.NewWorkspaceService(sm.transacter, bus)
 	sessionSvc := service.NewAgentSessionService(sm.transacter, bus)
+	continuationSvc := service.NewAgentSessionContinuationService(sm.transacter)
 	planSvc := service.NewPlanService(sm.transacter, bus)
 	questionSvc := service.NewQuestionService(sm.transacter, bus)
 	instanceSvc := service.NewInstanceService(sm.transacter)
@@ -313,7 +314,21 @@ func (sm *ServiceManager) buildServicesWithOptions(ctx context.Context, cfg *con
 
 	var implSvc *orchestrator.ImplementationService
 	if harnesses.Implementation != nil {
-		implSvc = orchestrator.NewImplementationService(cfg, harnesses.Implementation, gitClient, bus, planSvc, workItemSvc, sessionSvc, workspaceSvc, registry, reviewPipeline, harnesses.Foreman, questionSvc, reviewSvc, hookRegistry)
+		implSvc = orchestrator.NewImplementationService(cfg, harnesses.Implementation, gitClient, bus, planSvc, workItemSvc, sessionSvc, continuationSvc, workspaceSvc, registry, reviewPipeline, harnesses.Foreman, questionSvc, reviewSvc, hookRegistry)
+		implSvc.SetPlanningService(planningSvc)
+	}
+	if implSvc != nil && current.WorkspaceID != "" && serviceManagerHasContinuationRepository(sm.transacter) {
+		recoveryCtx := context.WithoutCancel(ctx)
+		go func(workspaceID string) {
+			result, recoverErr := implSvc.RecoverContinuationsForWorkspace(recoveryCtx, workspaceID)
+			if recoverErr != nil {
+				slog.Error("recover implementation continuations failed", "workspace_id", workspaceID, "error", recoverErr)
+				return
+			}
+			if result.Recovered > 0 || len(result.Skipped) > 0 {
+				slog.Debug("implementation continuation recovery completed", "workspace_id", workspaceID, "recovered", result.Recovered, "skipped", len(result.Skipped))
+			}
+		}(current.WorkspaceID)
 	}
 
 	// Build QuestionRouter for stage-aware question routing.
@@ -330,11 +345,6 @@ func (sm *ServiceManager) buildServicesWithOptions(ctx context.Context, cfg *con
 	var reviewFollowup *orchestrator.ReviewFollowup
 	if harnesses.Foreman != nil {
 		reviewFollowup = orchestrator.NewReviewFollowup(cfg, harnesses.Foreman, registry, planSvc, questionSvc, sessionSvc, workItemSvc, bus)
-	}
-
-	var resumption *orchestrator.Resumption
-	if harnesses.Resume != nil {
-		resumption = orchestrator.NewResumption(harnesses.Resume, sessionSvc, planSvc, workItemSvc, bus, registry, questionRouter)
 	}
 
 	// Build ManualSessionService with default agent harness
@@ -366,6 +376,7 @@ func (sm *ServiceManager) buildServicesWithOptions(ctx context.Context, cfg *con
 		Settings:              settingsSvc,
 		RefreshStoppers:       refreshStoppers,
 		Session:               workItemSvc,
+		Continuation:          continuationSvc,
 		Plan:                  planSvc,
 		Task:                  sessionSvc,
 		Question:              questionSvc,
@@ -385,25 +396,32 @@ func (sm *ServiceManager) buildServicesWithOptions(ctx context.Context, cfg *con
 		Planning:              planningSvc,
 		Implementation:        implSvc,
 		ReviewPipeline:        reviewPipeline,
-		Resumption:            resumption,
 		AnswerRouter:          answerRouter,
 		ReviewFollowup:        reviewFollowup,
 		SessionRegistry:       registry,
 		QuestionRouter:        questionRouter,
 		Manual:                manualSvc,
-		Cfg:                   cfg,
-		Adapters:              adapters,
-		RepoSources:           repoSources,
-		Harnesses:             harnesses,
-		GitClient:             gitClient,
-		Bus:                   bus,
-		ReviewComments:        reviewCommentDispatcher,
-		StartupWarnings:       adapterWarnings,
-		InstanceID:            current.InstanceID,
-		WorkspaceID:           current.WorkspaceID,
-		WorkspaceDir:          current.WorkspaceDir,
-		WorkspaceName:         current.WorkspaceName,
+
+		Cfg:             cfg,
+		Adapters:        adapters,
+		RepoSources:     repoSources,
+		Harnesses:       harnesses,
+		GitClient:       gitClient,
+		Bus:             bus,
+		ReviewComments:  reviewCommentDispatcher,
+		StartupWarnings: adapterWarnings,
+		InstanceID:      current.InstanceID,
+		WorkspaceID:     current.WorkspaceID,
+		WorkspaceDir:    current.WorkspaceDir,
+		WorkspaceName:   current.WorkspaceName,
 	}, nil
+}
+
+func serviceManagerHasContinuationRepository(transacter atomic.Transacter[repository.Resources]) bool {
+	if noop, ok := transacter.(repository.NoopTransacter); ok {
+		return noop.Res.AgentSessionContinuations != nil
+	}
+	return true
 }
 
 // wireAdapterToBus bridges an adapter to the event bus with retry logic.
@@ -492,6 +510,13 @@ func (sm *ServiceManager) Plan() *service.PlanService {
 func (sm *ServiceManager) Task() *service.AgentSessionService {
 	if s := sm.GetServices(); s != nil {
 		return s.Task
+	}
+	return nil
+}
+
+func (sm *ServiceManager) Continuation() *service.AgentSessionContinuationService {
+	if s := sm.GetServices(); s != nil {
+		return s.Continuation
 	}
 	return nil
 }
@@ -618,13 +643,6 @@ func (sm *ServiceManager) Implementation() *orchestrator.ImplementationService {
 func (sm *ServiceManager) ReviewPipeline() *orchestrator.ReviewPipeline {
 	if s := sm.GetServices(); s != nil {
 		return s.ReviewPipeline
-	}
-	return nil
-}
-
-func (sm *ServiceManager) Resumption() *orchestrator.Resumption {
-	if s := sm.GetServices(); s != nil {
-		return s.Resumption
 	}
 	return nil
 }

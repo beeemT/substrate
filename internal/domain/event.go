@@ -86,10 +86,11 @@ const (
 	EventWorktreeRemoved EventType = "worktree.removed"
 
 	// Agent task events (lifecycle of individual agent sessions within a work item)
-	EventAgentSessionStarted     EventType = "agent_session.started"
-	EventAgentSessionCompleted   EventType = "agent_session.completed"
-	EventAgentSessionFailed      EventType = "agent_session.failed"
-	EventAgentSessionInterrupted EventType = "agent_session.interrupted"
+	EventAgentSessionStarted            EventType = "agent_session.started"
+	EventAgentSessionCompleted          EventType = "agent_session.completed"
+	EventAgentSessionFailed             EventType = "agent_session.failed"
+	EventAgentSessionInterrupted        EventType = "agent_session.interrupted"
+	EventAgentSessionContinuationFailed EventType = "agent_session.continuation_failed"
 
 	// Agent session events (resumption lifecycle)
 	EventAgentSessionResumed          EventType = "agent_session.resumed"

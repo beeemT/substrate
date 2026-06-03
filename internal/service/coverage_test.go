@@ -233,7 +233,7 @@ func TestSessionService_AdditionalMethods(t *testing.T) {
 		ID:             "session-1",
 		WorkItemID:     "wi-1",
 		WorkspaceID:    "ws-1",
-		Kind: domain.AgentSessionKindImplementation,
+		Kind:           domain.AgentSessionKindImplementation,
 		SubPlanID:      "sp-1",
 		RepositoryName: "repo1",
 		HarnessName:    "omp",

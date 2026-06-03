@@ -590,7 +590,7 @@ func globalActions(a *App) []Action {
 				return nil
 			}
 			ctx := a.pipelineCtxForSession(sessionID)
-			return RetrySessionCmd(ctx, a.provider.Resumption(), a.provider.Task(), a.provider.Implementation(), sessionID, a.runtimeCtx.InstanceID)
+			return RetrySessionCmd(ctx, a.provider.Task(), a.provider.Implementation(), a.sendAsyncMsg, sessionID, a.runtimeCtx.InstanceID)
 		}},
 		{ID: "quit", Label: "Quit", Shortcut: "q", Priority: 90, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd { _, cmd := a.handleQuitRequest(); return cmd }},
 		{ID: "sidebar_up", Label: "Move sidebar selection up", Shortcut: "↑", Priority: 91, Condition: func(a *App) bool { return a.mainFocus == mainFocusSidebar }, Handler: func(a *App) tea.Cmd { a.sidebar.MoveUp(); return a.onSidebarMove() }},
@@ -754,7 +754,7 @@ func completedActions(a *App) []Action {
 			c := a.content.overview.completed
 			c.feedbackInput.Flush()
 			feedback := c.feedbackInput.Value()
-			return func() tea.Msg { return FollowUpSessionMsg{TaskID: a.currentWorkItemID, Feedback: feedback} }
+			return func() tea.Msg { return FollowUpPlanMsg{WorkItemID: a.currentWorkItemID, Feedback: feedback} }
 		}},
 		{ID: "copy_completed_plan", Label: "Copy plan", Shortcut: "c", Priority: 491, Condition: func(a *App) bool {
 			return a.content.Mode() == ContentModeOverview && a.content.overview.overlay == overviewOverlayCompleted

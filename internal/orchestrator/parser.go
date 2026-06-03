@@ -283,12 +283,12 @@ func countMarkdownListItems(content string) int {
 	// - Parenthesized: "(1) Item"
 	// - Checkbox: "- [ ] Item", "- [x] Item"
 	patterns := []string{
-		`(?m)^\s*[-*+][ 	]+\S`,      // Bullets
-		`(?m)^\s*\d+\.[ 	]+\S`,     // Numbered with dot: "1. Item"
-		`(?m)^\s*\d+\)[ 	]+\S`,     // Numbered with paren: "1) Item"
-		`(?m)^\s*[a-z]\.[ 	]+\S`,   // Lettered with dot: "a. Item"
-		`(?m)^\s*[a-z]\)[ 	]+\S`,   // Lettered with paren: "a) Item"
-		`(?m)^\s*\(\d+\)[ 	]+\S`,   // Parenthesized: "(1) Item"
+		`(?m)^\s*[-*+][ 	]+\S`,          // Bullets
+		`(?m)^\s*\d+\.[ 	]+\S`,          // Numbered with dot: "1. Item"
+		`(?m)^\s*\d+\)[ 	]+\S`,          // Numbered with paren: "1) Item"
+		`(?m)^\s*[a-z]\.[ 	]+\S`,        // Lettered with dot: "a. Item"
+		`(?m)^\s*[a-z]\)[ 	]+\S`,        // Lettered with paren: "a) Item"
+		`(?m)^\s*\(\d+\)[ 	]+\S`,        // Parenthesized: "(1) Item"
 		`(?m)^\s*-\s+\[[ 	Xx]\][ 	]*\S`, // Checkbox: "- [ ] Item" or "- [x] Item"
 	}
 

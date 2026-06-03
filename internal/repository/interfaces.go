@@ -92,6 +92,15 @@ type AgentSessionRepository interface {
 	Delete(ctx context.Context, id string) error
 }
 
+// AgentSessionContinuationRepository provides CRUD for post-agent continuation state.
+type AgentSessionContinuationRepository interface {
+	Get(ctx context.Context, id string) (domain.AgentSessionContinuation, error)
+	GetActive(ctx context.Context, agentSessionID, kind string) (domain.AgentSessionContinuation, error)
+	ListRecoverable(ctx context.Context, workspaceID string) ([]domain.AgentSessionContinuation, error)
+	Create(ctx context.Context, c domain.AgentSessionContinuation) error
+	Update(ctx context.Context, c domain.AgentSessionContinuation) error
+}
+
 // ReviewRepository provides CRUD for review cycles and critiques.
 type ReviewRepository interface {
 	GetCycle(ctx context.Context, id string) (domain.ReviewCycle, error)

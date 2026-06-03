@@ -49,9 +49,6 @@ func (r *recoveryWorkspaceRepo) Delete(_ context.Context, id string) error {
 	return nil
 }
 
-
-
-
 func TestInitWorkspaceCmd_RecoversExistingWorkspaceFile(t *testing.T) {
 	cwd := t.TempDir()
 	wsFile := &gitwork.WorkspaceFile{

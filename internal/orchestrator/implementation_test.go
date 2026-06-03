@@ -749,6 +749,7 @@ func newImplementationServiceForTest(workspaceRoot, repoName string) (*Implement
 		service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo, Sessions: workItemRepo, Events: eventRepo}}, bus),
 		service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, bus),
 		service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, bus),
+		nil,
 		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, &mockPublisher{}),
 		registry,
 		nil,
@@ -1228,6 +1229,17 @@ func (s *completingMockSession) Abort(_ context.Context) error                { 
 func (s *completingMockSession) ResumeInfo() map[string]string                { return nil }
 func (s *completingMockSession) Compact(_ context.Context) error              { return nil }
 
+type captureHarness struct {
+	captured []adapter.SessionOpts
+}
+
+func (h *captureHarness) SupportsCompact() bool { return true }
+func (h *captureHarness) Name() string          { return "capture" }
+func (h *captureHarness) StartSession(_ context.Context, opts adapter.SessionOpts) (adapter.AgentSession, error) {
+	h.captured = append(h.captured, opts)
+	return &completingMockSession{id: opts.SessionID, events: make(chan adapter.AgentEvent, 1)}, nil
+}
+
 // completingHarness returns sessions that complete immediately on Wait.
 type completingHarness struct {
 	mu       sync.Mutex
@@ -1370,6 +1382,7 @@ func TestRunImplementation_WithResumeInfo(t *testing.T) {
 		service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, &mockPublisher{}),
 		service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, &mockPublisher{}),
 		service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, bus),
+		nil,
 		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, &mockPublisher{}),
 		registry, nil,
 		nil, nil, // foreman, questionSvc
@@ -1404,7 +1417,7 @@ func TestRunImplementation_WithResumeInfo(t *testing.T) {
 	workItem := &domain.Session{ID: "wi-1", WorkspaceID: "ws-1"}
 	plan := &domain.Plan{ID: "plan-1"}
 
-	newSess, err := svc.runImplementation(ctx, subPlan, workspace, plan, workItem, workspaceRoot, "Fix the bug", &prevSession, prevSession.ID)
+	newSess, err := svc.runImplementation(ctx, subPlan, workspace, plan, workItem, workspaceRoot, "Fix the bug", &prevSession, prevSession.ID, false)
 	if err != nil {
 		t.Fatalf("runImplementation: %v", err)
 	}
@@ -1481,6 +1494,7 @@ func TestRunImplementation_WithResumeInfo_NoCritique_SendsOrientation(t *testing
 		service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, &mockPublisher{}),
 		service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, &mockPublisher{}),
 		service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, bus),
+		nil,
 		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, &mockPublisher{}),
 		registry, nil,
 		nil, nil, // foreman, questionSvc
@@ -1518,7 +1532,7 @@ func TestRunImplementation_WithResumeInfo_NoCritique_SendsOrientation(t *testing
 	plan := &domain.Plan{ID: "plan-1"}
 
 	// critiqueFeedback is empty — this is the bulk-retry / escalation-reset shape.
-	if _, err := svc.runImplementation(ctx, subPlan, workspace, plan, workItem, workspaceRoot, "", &prevSession, prevSession.ID); err != nil {
+	if _, err := svc.runImplementation(ctx, subPlan, workspace, plan, workItem, workspaceRoot, "", &prevSession, prevSession.ID, false); err != nil {
 		t.Fatalf("runImplementation: %v", err)
 	}
 
@@ -1582,6 +1596,7 @@ func TestRunImplementation_WithoutResumeInfo(t *testing.T) {
 		service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, &mockPublisher{}),
 		service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, &mockPublisher{}),
 		service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, bus),
+		nil,
 		service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, &mockPublisher{}),
 		registry, nil,
 		nil, nil, // foreman, questionSvc
@@ -1599,7 +1614,7 @@ func TestRunImplementation_WithoutResumeInfo(t *testing.T) {
 	workItem := &domain.Session{ID: "wi-1", WorkspaceID: "ws-1"}
 	plan := &domain.Plan{ID: "plan-1"}
 
-	newSess, err := svc.runImplementation(ctx, subPlan, workspace, plan, workItem, workspaceRoot, "Fix the bug", nil, "")
+	newSess, err := svc.runImplementation(ctx, subPlan, workspace, plan, workItem, workspaceRoot, "Fix the bug", nil, "", false)
 	if err != nil {
 		t.Fatalf("runImplementation: %v", err)
 	}
@@ -1634,8 +1649,420 @@ func TestRunImplementation_WithoutResumeInfo(t *testing.T) {
 	}
 }
 
+func TestRunImplementation_GraphManagedCompletionCreatesPendingContinuation(t *testing.T) {
+	ctx := context.Background()
+	workspaceRoot := t.TempDir()
+	svc, _, _, sessionRepo, subPlanRepo := newImplementationServiceForTest(workspaceRoot, "repo-a")
+	continuationRepo := newImplementationContinuationRepo()
+	bus := event.NewBus(event.BusConfig{})
+	svc.sessionSvc = service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo, AgentSessionContinuations: continuationRepo}}, bus)
+	svc.continuationSvc = service.NewAgentSessionContinuationService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo, AgentSessionContinuations: continuationRepo}})
+	svc.harness = &completingHarness{}
+
+	subPlan := subPlanRepo.subPlans["sp-1"]
+	subPlan.Status = domain.SubPlanInProgress
+	workspace := &domain.Workspace{ID: "ws-1", RootPath: workspaceRoot, Status: domain.WorkspaceReady}
+	plan := &domain.Plan{ID: "plan-1", WorkItemID: "wi-1", Status: domain.PlanApproved}
+	workItem := &domain.Session{ID: "wi-1", WorkspaceID: "ws-1", ExternalID: "MAN-1", Source: "manual", Title: "Implement", State: domain.SessionImplementing}
+
+	impl, err := svc.runImplementation(ctx, subPlan, workspace, plan, workItem, workspaceRoot, "", nil, "review-parent", true)
+	if err != nil {
+		t.Fatalf("runImplementation failed: %v", err)
+	}
+	continuation := continuationRepo.only(t)
+	if continuation.AgentSessionID != impl.ID {
+		t.Fatalf("continuation session id = %s, want %s", continuation.AgentSessionID, impl.ID)
+	}
+	if continuation.Status != domain.AgentSessionContinuationPending {
+		t.Fatalf("continuation status = %s, want pending", continuation.Status)
+	}
+}
+
 // TestLoadCritiqueFeedback_NoImplSession verifies that loadCritiqueFeedback returns
 // empty string when there is no prior completed implementation session.
+type implementationContinuationRepo struct {
+	mu    sync.Mutex
+	items map[string]domain.AgentSessionContinuation
+}
+
+func newImplementationContinuationRepo() *implementationContinuationRepo {
+	return &implementationContinuationRepo{items: make(map[string]domain.AgentSessionContinuation)}
+}
+
+func (r *implementationContinuationRepo) Get(_ context.Context, id string) (domain.AgentSessionContinuation, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	c, ok := r.items[id]
+	if !ok {
+		return domain.AgentSessionContinuation{}, repository.ErrNotFound
+	}
+	return c, nil
+}
+
+func (r *implementationContinuationRepo) GetActive(_ context.Context, agentSessionID, kind string) (domain.AgentSessionContinuation, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var latest domain.AgentSessionContinuation
+	found := false
+	for _, c := range r.items {
+		if c.AgentSessionID != agentSessionID || c.Kind != kind {
+			continue
+		}
+		switch c.Status {
+		case domain.AgentSessionContinuationPending, domain.AgentSessionContinuationRunning, domain.AgentSessionContinuationFailed:
+		default:
+			continue
+		}
+		if !found || c.Attempt > latest.Attempt {
+			latest = c
+			found = true
+		}
+	}
+	if !found {
+		return domain.AgentSessionContinuation{}, repository.ErrNotFound
+	}
+	return latest, nil
+}
+
+func (r *implementationContinuationRepo) ListRecoverable(_ context.Context, _ string) ([]domain.AgentSessionContinuation, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []domain.AgentSessionContinuation
+	for _, c := range r.items {
+		switch c.Status {
+		case domain.AgentSessionContinuationPending, domain.AgentSessionContinuationRunning, domain.AgentSessionContinuationFailed:
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
+
+func (r *implementationContinuationRepo) Create(_ context.Context, c domain.AgentSessionContinuation) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.items[c.ID] = c
+	return nil
+}
+
+func (r *implementationContinuationRepo) Update(_ context.Context, c domain.AgentSessionContinuation) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.items[c.ID]; !ok {
+		return repository.ErrNotFound
+	}
+	r.items[c.ID] = c
+	return nil
+}
+
+func (r *implementationContinuationRepo) only(t *testing.T) domain.AgentSessionContinuation {
+	t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.items) != 1 {
+		t.Fatalf("continuation count = %d, want 1", len(r.items))
+	}
+	for _, c := range r.items {
+		return c
+	}
+	return domain.AgentSessionContinuation{}
+}
+
+func TestNearestCompletedImplementationAncestor_WalksThroughReviewChain(t *testing.T) {
+	impl := domain.AgentSession{
+		ID:         "impl-1",
+		Kind:       domain.AgentSessionKindImplementation,
+		Status:     domain.AgentSessionCompleted,
+		WorkItemID: "wi-1",
+		SubPlanID:  "sp-1",
+	}
+	failedReview := domain.AgentSession{
+		ID:                   "review-1",
+		Kind:                 domain.AgentSessionKindReview,
+		Status:               domain.AgentSessionFailed,
+		WorkItemID:           "wi-1",
+		SubPlanID:            "sp-1",
+		ParentAgentSessionID: impl.ID,
+	}
+	replacementReview := domain.AgentSession{
+		ID:                   "review-2",
+		Kind:                 domain.AgentSessionKindReview,
+		Status:               domain.AgentSessionFailed,
+		WorkItemID:           "wi-1",
+		SubPlanID:            "sp-1",
+		ParentAgentSessionID: failedReview.ID,
+	}
+
+	got, err := nearestCompletedImplementationAncestor(replacementReview, []domain.AgentSession{impl, failedReview, replacementReview})
+	if err != nil {
+		t.Fatalf("nearestCompletedImplementationAncestor failed: %v", err)
+	}
+	if got.ID != impl.ID {
+		t.Fatalf("ancestor = %s, want %s", got.ID, impl.ID)
+	}
+}
+
+func TestStartImplementationGraphRun_RejectsHistoricalImplementation(t *testing.T) {
+	ctx := context.Background()
+	svc, _, _, sessionRepo, _ := newImplementationServiceForTest(t.TempDir(), "repo-a")
+	source := domain.AgentSession{
+		ID:             "impl-1",
+		Kind:           domain.AgentSessionKindImplementation,
+		Status:         domain.AgentSessionFailed,
+		WorkItemID:     "wi-1",
+		WorkspaceID:    "ws-1",
+		SubPlanID:      "sp-1",
+		RepositoryName: "repo-a",
+		WorktreePath:   t.TempDir(),
+	}
+	child := domain.AgentSession{
+		ID:                   "impl-2",
+		Kind:                 domain.AgentSessionKindImplementation,
+		Status:               domain.AgentSessionFailed,
+		WorkItemID:           "wi-1",
+		WorkspaceID:          "ws-1",
+		SubPlanID:            "sp-1",
+		RepositoryName:       "repo-a",
+		ParentAgentSessionID: source.ID,
+	}
+	sessionRepo.sessions[source.ID] = source
+	sessionRepo.sessions[child.ID] = child
+
+	_, err := svc.StartImplementationGraphRun(ctx, AgentGraphIntent{
+		SourceSessionID: source.ID,
+		Trigger:         AgentGraphTriggerRetryFailed,
+	})
+	if !errors.Is(err, service.ErrAgentSessionNotLeaf) {
+		t.Fatalf("StartImplementationGraphRun error = %v, want ErrAgentSessionNotLeaf", err)
+	}
+}
+
+func TestRetryReviewLeaf_RejectsHistoricalReview(t *testing.T) {
+	ctx := context.Background()
+	sessionRepo := newMockSessionRepo()
+	impl := domain.AgentSession{
+		ID:         "impl-1",
+		Kind:       domain.AgentSessionKindImplementation,
+		Status:     domain.AgentSessionCompleted,
+		WorkItemID: "wi-1",
+		SubPlanID:  "sp-1",
+	}
+	failedReview := domain.AgentSession{
+		ID:                   "review-1",
+		Kind:                 domain.AgentSessionKindReview,
+		Status:               domain.AgentSessionFailed,
+		WorkItemID:           "wi-1",
+		SubPlanID:            "sp-1",
+		ParentAgentSessionID: impl.ID,
+	}
+	replacementReview := domain.AgentSession{
+		ID:                   "review-2",
+		Kind:                 domain.AgentSessionKindReview,
+		Status:               domain.AgentSessionFailed,
+		WorkItemID:           "wi-1",
+		SubPlanID:            "sp-1",
+		ParentAgentSessionID: failedReview.ID,
+	}
+	sessionRepo.sessions[impl.ID] = impl
+	sessionRepo.sessions[failedReview.ID] = failedReview
+	sessionRepo.sessions[replacementReview.ID] = replacementReview
+	svc := &ImplementationService{
+		sessionSvc: service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, nil),
+	}
+
+	_, err := svc.RetryReviewLeaf(ctx, AgentGraphIntent{SourceSessionID: failedReview.ID})
+	if !errors.Is(err, service.ErrAgentSessionNotLeaf) {
+		t.Fatalf("RetryReviewLeaf error = %v, want ErrAgentSessionNotLeaf", err)
+	}
+}
+
+func TestContinueImplementationGraph_RecordsCompletedContinuation(t *testing.T) {
+	ctx := context.Background()
+	planRepo := newMockPlanRepo()
+	subPlanRepo := newMockSubPlanRepo()
+	sessionRepo := newMockSessionRepo()
+	continuationRepo := newImplementationContinuationRepo()
+	workItemRepo := &implementationWorkItemRepo{items: map[string]domain.Session{
+		"wi-1": {ID: "wi-1", WorkspaceID: "ws-1", State: domain.SessionImplementing, ExternalID: "ISS-1", Title: "Test"},
+	}}
+	workspaceRepo := &implementationWorkspaceRepo{workspaces: map[string]domain.Workspace{
+		"ws-1": {ID: "ws-1", RootPath: t.TempDir(), Status: domain.WorkspaceReady},
+	}}
+	planRepo.plans["plan-1"] = domain.Plan{ID: "plan-1", WorkItemID: "wi-1"}
+	subPlanRepo.subPlans["sp-1"] = domain.TaskPlan{ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a", Status: domain.SubPlanInProgress}
+	subPlanRepo.subPlans["sp-2"] = domain.TaskPlan{ID: "sp-2", PlanID: "plan-1", RepositoryName: "repo-b", Status: domain.SubPlanPending}
+	sessionRepo.sessions["impl-1"] = domain.AgentSession{
+		ID:             "impl-1",
+		WorkItemID:     "wi-1",
+		WorkspaceID:    "ws-1",
+		Kind:           domain.AgentSessionKindImplementation,
+		SubPlanID:      "sp-1",
+		RepositoryName: "repo-a",
+		WorktreePath:   t.TempDir(),
+		HarnessName:    "mock",
+		Status:         domain.AgentSessionCompleted,
+		CreatedAt:      time.Now(),
+	}
+	bus := event.NewBus(event.BusConfig{})
+	svc := &ImplementationService{
+		planSvc:         service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo, Sessions: workItemRepo}}, bus),
+		workItemSvc:     service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, bus),
+		sessionSvc:      service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, bus),
+		continuationSvc: service.NewAgentSessionContinuationService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo, AgentSessionContinuations: continuationRepo}}),
+		workspaceSvc:    service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, bus),
+		eventBus:        bus,
+	}
+
+	if err := svc.ContinueImplementationGraph(ctx, ContinuationContext{CompletedImplementationID: "impl-1"}); err != nil {
+		t.Fatalf("ContinueImplementationGraph failed: %v", err)
+	}
+	continuation := continuationRepo.only(t)
+	if continuation.Status != domain.AgentSessionContinuationCompleted {
+		t.Fatalf("continuation status = %s, want completed", continuation.Status)
+	}
+	if continuation.AgentSessionID != "impl-1" || continuation.WorkItemID != "wi-1" || continuation.SubPlanID != "sp-1" {
+		t.Fatalf("continuation identifiers = %+v, want session/work item/sub-plan copied", continuation)
+	}
+	if got := subPlanRepo.subPlans["sp-1"].Status; got != domain.SubPlanCompleted {
+		t.Fatalf("sub-plan status = %s, want completed", got)
+	}
+}
+
+func TestContinueImplementationGraph_RecordsFailedContinuation(t *testing.T) {
+	ctx := context.Background()
+	planRepo := newMockPlanRepo()
+	subPlanRepo := newMockSubPlanRepo()
+	sessionRepo := newMockSessionRepo()
+	continuationRepo := newImplementationContinuationRepo()
+	sessionRepo.sessions["impl-1"] = domain.AgentSession{
+		ID:          "impl-1",
+		WorkItemID:  "wi-1",
+		WorkspaceID: "ws-1",
+		Kind:        domain.AgentSessionKindImplementation,
+		SubPlanID:   "missing-sub-plan",
+		HarnessName: "mock",
+		Status:      domain.AgentSessionCompleted,
+	}
+	bus := event.NewBus(event.BusConfig{})
+	svc := &ImplementationService{
+		planSvc:         service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo}}, bus),
+		sessionSvc:      service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, bus),
+		continuationSvc: service.NewAgentSessionContinuationService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo, AgentSessionContinuations: continuationRepo}}),
+		eventBus:        bus,
+	}
+
+	err := svc.ContinueImplementationGraph(ctx, ContinuationContext{CompletedImplementationID: "impl-1"})
+	if err == nil {
+		t.Fatal("expected continuation failure")
+	}
+	continuation := continuationRepo.only(t)
+	if continuation.Status != domain.AgentSessionContinuationFailed {
+		t.Fatalf("continuation status = %s, want failed", continuation.Status)
+	}
+	if !strings.Contains(continuation.LastError, "get sub-plan") {
+		t.Fatalf("continuation LastError = %q, want get sub-plan context", continuation.LastError)
+	}
+}
+
+func TestRecoverContinuationsForWorkspace_ResumesPendingContinuation(t *testing.T) {
+	ctx := context.Background()
+	planRepo := newMockPlanRepo()
+	subPlanRepo := newMockSubPlanRepo()
+	sessionRepo := newMockSessionRepo()
+	continuationRepo := newImplementationContinuationRepo()
+	workItemRepo := &implementationWorkItemRepo{items: map[string]domain.Session{
+		"wi-1": {ID: "wi-1", WorkspaceID: "ws-1", State: domain.SessionImplementing, ExternalID: "ISS-1", Title: "Test"},
+	}}
+	workspaceRepo := &implementationWorkspaceRepo{workspaces: map[string]domain.Workspace{
+		"ws-1": {ID: "ws-1", RootPath: t.TempDir(), Status: domain.WorkspaceReady},
+	}}
+	planRepo.plans["plan-1"] = domain.Plan{ID: "plan-1", WorkItemID: "wi-1"}
+	subPlanRepo.subPlans["sp-1"] = domain.TaskPlan{ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a", Status: domain.SubPlanInProgress}
+	subPlanRepo.subPlans["sp-2"] = domain.TaskPlan{ID: "sp-2", PlanID: "plan-1", RepositoryName: "repo-b", Status: domain.SubPlanPending}
+	sessionRepo.sessions["impl-1"] = domain.AgentSession{
+		ID:             "impl-1",
+		WorkItemID:     "wi-1",
+		WorkspaceID:    "ws-1",
+		Kind:           domain.AgentSessionKindImplementation,
+		SubPlanID:      "sp-1",
+		RepositoryName: "repo-a",
+		WorktreePath:   t.TempDir(),
+		HarnessName:    "mock",
+		Status:         domain.AgentSessionCompleted,
+		CreatedAt:      time.Now(),
+	}
+	now := time.Now()
+	if err := continuationRepo.Create(ctx, domain.AgentSessionContinuation{
+		ID:             "cont-1",
+		AgentSessionID: "impl-1",
+		WorkItemID:     "wi-1",
+		SubPlanID:      "sp-1",
+		Kind:           implementationReviewContinuationKind,
+		Status:         domain.AgentSessionContinuationPending,
+		Attempt:        1,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}); err != nil {
+		t.Fatalf("seed continuation: %v", err)
+	}
+	bus := event.NewBus(event.BusConfig{})
+	svc := &ImplementationService{
+		planSvc:         service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo, Sessions: workItemRepo}}, bus),
+		workItemSvc:     service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, bus),
+		sessionSvc:      service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, bus),
+		continuationSvc: service.NewAgentSessionContinuationService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo, AgentSessionContinuations: continuationRepo}}),
+		workspaceSvc:    service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, bus),
+		eventBus:        bus,
+	}
+
+	result, err := svc.RecoverContinuationsForWorkspace(ctx, "ws-1")
+	if err != nil {
+		t.Fatalf("RecoverContinuationsForWorkspace failed: %v", err)
+	}
+	if result.Recovered != 1 || len(result.Skipped) != 0 {
+		t.Fatalf("recovery result = %+v, want one recovered", result)
+	}
+	continuation := continuationRepo.only(t)
+	if continuation.Status != domain.AgentSessionContinuationCompleted {
+		t.Fatalf("continuation status = %s, want completed", continuation.Status)
+	}
+}
+
+func TestRecoverContinuationsForWorkspace_SkipsFailedContinuation(t *testing.T) {
+	ctx := context.Background()
+	sessionRepo := newMockSessionRepo()
+	continuationRepo := newImplementationContinuationRepo()
+	now := time.Now()
+	if err := continuationRepo.Create(ctx, domain.AgentSessionContinuation{
+		ID:             "cont-1",
+		AgentSessionID: "impl-1",
+		WorkItemID:     "wi-1",
+		SubPlanID:      "sp-1",
+		Kind:           implementationReviewContinuationKind,
+		Status:         domain.AgentSessionContinuationFailed,
+		LastError:      "review unavailable",
+		Attempt:        1,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}); err != nil {
+		t.Fatalf("seed continuation: %v", err)
+	}
+	svc := &ImplementationService{
+		sessionSvc:      service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, nil),
+		continuationSvc: service.NewAgentSessionContinuationService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo, AgentSessionContinuations: continuationRepo}}),
+	}
+
+	result, err := svc.RecoverContinuationsForWorkspace(ctx, "ws-1")
+	if err != nil {
+		t.Fatalf("RecoverContinuationsForWorkspace failed: %v", err)
+	}
+	if result.Recovered != 0 || len(result.Skipped) != 1 {
+		t.Fatalf("recovery result = %+v, want one skipped failed continuation", result)
+	}
+	if result.Skipped[0].Reason != "continuation previously failed" {
+		t.Fatalf("skip reason = %q", result.Skipped[0].Reason)
+	}
+}
+
 func TestLoadCritiqueFeedback_NoImplSession(t *testing.T) {
 	repo := newMockSessionRepo()
 	sessionSvc := service.NewAgentSessionService(
@@ -2341,11 +2768,7 @@ func TestRunImplementation_ContextCanceled_MarksInterrupted(t *testing.T) {
 	workItem := &domain.Session{ID: "wi-1", WorkspaceID: "ws-1"}
 	plan := &domain.Plan{ID: "plan-1"}
 
-	_, err := svc.runImplementation(
-		context.Background(),
-		subPlan, workspace, plan, workItem,
-		t.TempDir(), "", nil, "",
-	)
+	_, err := svc.runImplementation(context.Background(), subPlan, workspace, plan, workItem, t.TempDir(), "", nil, "", false)
 	if err == nil {
 		t.Fatal("expected error from runImplementation, got nil")
 	}
@@ -2386,11 +2809,7 @@ func TestRunImplementation_NonCanceledError_MarksFailed(t *testing.T) {
 	workItem := &domain.Session{ID: "wi-1", WorkspaceID: "ws-1"}
 	plan := &domain.Plan{ID: "plan-1"}
 
-	_, err := svc.runImplementation(
-		context.Background(),
-		subPlan, workspace, plan, workItem,
-		t.TempDir(), "", nil, "",
-	)
+	_, err := svc.runImplementation(context.Background(), subPlan, workspace, plan, workItem, t.TempDir(), "", nil, "", false)
 	if err == nil {
 		t.Fatal("expected error from runImplementation, got nil")
 	}

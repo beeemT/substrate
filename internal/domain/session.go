@@ -80,6 +80,47 @@ func LeafAgentSessions(sessions []AgentSession) []AgentSession {
 	return leaves
 }
 
+// FindLeafAgentSessionByID returns the current graph leaf with id, if id is a
+// leaf in sessions according to LeafAgentSessions.
+func FindLeafAgentSessionByID(sessions []AgentSession, id string) (AgentSession, bool) {
+	for _, leaf := range LeafAgentSessions(sessions) {
+		if leaf.ID == id {
+			return leaf, true
+		}
+	}
+	return AgentSession{}, false
+}
+
+// IsLeafAgentSessionID reports whether id is a current agent-session graph leaf.
+func IsLeafAgentSessionID(sessions []AgentSession, id string) bool {
+	_, ok := FindLeafAgentSessionByID(sessions, id)
+	return ok
+}
+
+// RetryableAgentSessionLeaves returns current non-manual failed leaves.
+func RetryableAgentSessionLeaves(sessions []AgentSession) []AgentSession {
+	return agentSessionLeavesWithStatus(sessions, AgentSessionFailed)
+}
+
+// ResumableAgentSessionLeaves returns current non-manual interrupted leaves.
+func ResumableAgentSessionLeaves(sessions []AgentSession) []AgentSession {
+	return agentSessionLeavesWithStatus(sessions, AgentSessionInterrupted)
+}
+
+func agentSessionLeavesWithStatus(sessions []AgentSession, status AgentSessionStatus) []AgentSession {
+	leaves := LeafAgentSessions(sessions)
+	if len(leaves) == 0 {
+		return nil
+	}
+	eligible := make([]AgentSession, 0, len(leaves))
+	for i := range leaves {
+		if leaves[i].Status == status {
+			eligible = append(eligible, leaves[i])
+		}
+	}
+	return eligible
+}
+
 func leafAgentSessionIsNewer(a, b AgentSession) bool {
 	if !a.CreatedAt.Equal(b.CreatedAt) {
 		return a.CreatedAt.After(b.CreatedAt)

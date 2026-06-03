@@ -18,10 +18,13 @@ type testProvider struct {
 	svcs Services
 }
 
-func (tp *testProvider) GetServices() *Services               { return &tp.svcs }
-func (tp *testProvider) Session() *service.SessionService     { return tp.svcs.Session }
-func (tp *testProvider) Plan() *service.PlanService           { return tp.svcs.Plan }
-func (tp *testProvider) Task() *service.AgentSessionService   { return tp.svcs.Task }
+func (tp *testProvider) GetServices() *Services             { return &tp.svcs }
+func (tp *testProvider) Session() *service.SessionService   { return tp.svcs.Session }
+func (tp *testProvider) Plan() *service.PlanService         { return tp.svcs.Plan }
+func (tp *testProvider) Task() *service.AgentSessionService { return tp.svcs.Task }
+func (tp *testProvider) Continuation() *service.AgentSessionContinuationService {
+	return tp.svcs.Continuation
+}
 func (tp *testProvider) Question() *service.QuestionService   { return tp.svcs.Question }
 func (tp *testProvider) Instance() *service.InstanceService   { return tp.svcs.Instance }
 func (tp *testProvider) Workspace() *service.WorkspaceService { return tp.svcs.Workspace }
@@ -55,7 +58,6 @@ func (tp *testProvider) Implementation() *orchestrator.ImplementationService {
 	return tp.svcs.Implementation
 }
 func (tp *testProvider) ReviewPipeline() *orchestrator.ReviewPipeline { return tp.svcs.ReviewPipeline }
-func (tp *testProvider) Resumption() *orchestrator.Resumption         { return tp.svcs.Resumption }
 func (tp *testProvider) AnswerRouter() orchestrator.AnswerRouter      { return tp.svcs.AnswerRouter }
 func (tp *testProvider) ReviewFollowup() *orchestrator.ReviewFollowup { return tp.svcs.ReviewFollowup }
 func (tp *testProvider) SessionRegistry() orchestrator.SessionRegistry {

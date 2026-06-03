@@ -19,19 +19,23 @@ func (r *noopEventRepo) ListByType(_ context.Context, _ string, _ int) ([]domain
 func (r *noopEventRepo) ListByWorkspaceID(_ context.Context, _ string, _ int) ([]domain.SystemEvent, error) {
 	return nil, nil
 }
-func (r *noopEventRepo) DeleteByID(_ context.Context, _ string) error { return nil }
+func (r *noopEventRepo) DeleteByID(_ context.Context, _ string) error         { return nil }
 func (r *noopEventRepo) DeleteByWorkItemID(_ context.Context, _ string) error { return nil }
 
 type noopSessionArtifactRepo struct{}
 
-func (r noopSessionArtifactRepo) Upsert(_ context.Context, _ domain.SessionReviewArtifact) error { return nil }
+func (r noopSessionArtifactRepo) Upsert(_ context.Context, _ domain.SessionReviewArtifact) error {
+	return nil
+}
 func (r noopSessionArtifactRepo) ListByWorkItemID(_ context.Context, _ string) ([]domain.SessionReviewArtifact, error) {
 	return nil, nil
 }
 func (r noopSessionArtifactRepo) ListByWorkspaceID(_ context.Context, _ string) ([]domain.SessionReviewArtifact, error) {
 	return nil, nil
 }
-func (r noopSessionArtifactRepo) TransferArtifactLinks(_ context.Context, _, _ string) error { return nil }
+func (r noopSessionArtifactRepo) TransferArtifactLinks(_ context.Context, _, _ string) error {
+	return nil
+}
 func (r noopSessionArtifactRepo) DeleteByWorkItemID(_ context.Context, _ string) error { return nil }
 
 func TestTaskSidebarEntries_ForemanSession(t *testing.T) {
@@ -55,14 +59,14 @@ func TestTaskSidebarEntries_ForemanSession(t *testing.T) {
 		UpdatedAt:   now,
 	}}
 	app.sessions = []domain.AgentSession{{
-		ID:           "foreman-session-1",
-		WorkItemID:   "wi-1",
-		WorkspaceID:  "ws-1",
-		Kind:         domain.AgentSessionKindForeman,
-		HarnessName:  "omp",
-		Status:       domain.AgentSessionRunning,
-		CreatedAt:    now.Add(-10 * time.Minute),
-		UpdatedAt:    now,
+		ID:          "foreman-session-1",
+		WorkItemID:  "wi-1",
+		WorkspaceID: "ws-1",
+		Kind:        domain.AgentSessionKindForeman,
+		HarnessName: "omp",
+		Status:      domain.AgentSessionRunning,
+		CreatedAt:   now.Add(-10 * time.Minute),
+		UpdatedAt:   now,
 	}}
 
 	entries := app.taskSidebarEntries("wi-1")

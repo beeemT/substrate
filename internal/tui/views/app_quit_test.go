@@ -648,8 +648,8 @@ func TestRetryableFocusedSessionID_InSessionView(t *testing.T) {
 	t.Parallel()
 
 	sessions := []domain.AgentSession{
-		{ID: "sess-failed", WorkItemID: "wi-1", WorkspaceID: "ws-1", Status: domain.AgentSessionFailed},
-		{ID: "sess-running", WorkItemID: "wi-1", WorkspaceID: "ws-1", Status: domain.AgentSessionRunning},
+		{ID: "sess-failed", WorkItemID: "wi-1", WorkspaceID: "ws-1", SubPlanID: "sp-failed", Kind: domain.AgentSessionKindImplementation, Status: domain.AgentSessionFailed},
+		{ID: "sess-running", WorkItemID: "wi-1", WorkspaceID: "ws-1", SubPlanID: "sp-running", Kind: domain.AgentSessionKindImplementation, Status: domain.AgentSessionRunning},
 	}
 	app := newQuitTestApp(sessions)
 	app.currentWorkItemID = "wi-1"
@@ -669,8 +669,8 @@ func TestRetryableFocusedSessionID_InTaskSidebar(t *testing.T) {
 	t.Parallel()
 
 	sessions := []domain.AgentSession{
-		{ID: "sess-failed", WorkItemID: "wi-1", WorkspaceID: "ws-1", Status: domain.AgentSessionFailed},
-		{ID: "sess-running", WorkItemID: "wi-1", WorkspaceID: "ws-1", Status: domain.AgentSessionRunning},
+		{ID: "sess-failed", WorkItemID: "wi-1", WorkspaceID: "ws-1", SubPlanID: "sp-failed", Kind: domain.AgentSessionKindReview, Status: domain.AgentSessionFailed},
+		{ID: "sess-running", WorkItemID: "wi-1", WorkspaceID: "ws-1", SubPlanID: "sp-running", Kind: domain.AgentSessionKindImplementation, Status: domain.AgentSessionRunning},
 	}
 	app := newQuitTestApp(sessions)
 	app.currentWorkItemID = "wi-1"
@@ -689,7 +689,7 @@ func TestRetryableFocusedSessionID_NotFailed(t *testing.T) {
 	t.Parallel()
 
 	sessions := []domain.AgentSession{
-		{ID: "sess-running", WorkItemID: "wi-1", WorkspaceID: "ws-1", Status: domain.AgentSessionRunning},
+		{ID: "sess-running", WorkItemID: "wi-1", WorkspaceID: "ws-1", Kind: domain.AgentSessionKindImplementation, Status: domain.AgentSessionRunning},
 	}
 	app := newQuitTestApp(sessions)
 	app.currentWorkItemID = "wi-1"
@@ -708,7 +708,7 @@ func TestRetryableFocusedSessionID_SessionsSidebar(t *testing.T) {
 	t.Parallel()
 
 	sessions := []domain.AgentSession{
-		{ID: "sess-failed", WorkItemID: "wi-1", WorkspaceID: "ws-1", Status: domain.AgentSessionFailed},
+		{ID: "sess-failed", WorkItemID: "wi-1", WorkspaceID: "ws-1", Kind: domain.AgentSessionKindImplementation, Status: domain.AgentSessionFailed},
 	}
 	app := newQuitTestApp(sessions)
 	app.currentWorkItemID = "wi-1"
@@ -718,5 +718,41 @@ func TestRetryableFocusedSessionID_SessionsSidebar(t *testing.T) {
 	id := app.retryableFocusedSessionID()
 	if id != "" {
 		t.Fatalf("retryableFocusedSessionID = %q, want empty in sessions sidebar mode", id)
+	}
+}
+
+func TestRetryableFocusedSessionID_RejectsSupersededFailure(t *testing.T) {
+	t.Parallel()
+
+	sessions := []domain.AgentSession{
+		{ID: "sess-failed", WorkItemID: "wi-1", WorkspaceID: "ws-1", Kind: domain.AgentSessionKindImplementation, Status: domain.AgentSessionFailed},
+		{ID: "sess-child", WorkItemID: "wi-1", WorkspaceID: "ws-1", Kind: domain.AgentSessionKindImplementation, Status: domain.AgentSessionRunning, ParentAgentSessionID: "sess-failed"},
+	}
+	app := newQuitTestApp(sessions)
+	app.currentWorkItemID = "wi-1"
+	app.mainFocus = mainFocusContent
+	app.content.SetMode(ContentModeAgentSession)
+	app.content.sessionLog.SetLogPath("sess-failed", "/tmp/session.log")
+
+	if id := app.retryableFocusedSessionID(); id != "" {
+		t.Fatalf("retryableFocusedSessionID = %q, want empty for superseded failed session", id)
+	}
+}
+
+func TestRetryableFocusedSessionID_RejectsNonGraphManagedKinds(t *testing.T) {
+	t.Parallel()
+
+	for _, kind := range []domain.AgentSessionKind{domain.AgentSessionKindPlanning, domain.AgentSessionKindForeman, domain.AgentSessionKindManual} {
+		app := newQuitTestApp([]domain.AgentSession{
+			{ID: "sess-failed", WorkItemID: "wi-1", WorkspaceID: "ws-1", Kind: kind, Status: domain.AgentSessionFailed},
+		})
+		app.currentWorkItemID = "wi-1"
+		app.mainFocus = mainFocusSidebar
+		app.sidebarMode = sidebarPaneTasks
+		app.setSelectedTaskSessionID("sess-failed")
+
+		if id := app.retryableFocusedSessionID(); id != "" {
+			t.Fatalf("retryableFocusedSessionID(%s) = %q, want empty", kind, id)
+		}
 	}
 }

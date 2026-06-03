@@ -1556,32 +1556,23 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 			Why:     "All linked pull requests have been merged. No further action is needed.",
 		})
 	}
-	// An interrupted session that has a child in the agent-session graph
-	// has been replaced by that child (retry, follow-up, reimplementation)
-	// and must not appear in the action list. Use the graph leaves as the
-	// authoritative "this session is the live state" set; any session not
-	// in that set is considered superseded by its descendants.
-	superseded := make(map[string]bool)
 	wiSessions := a.sessionsForWorkItem(wi.ID)
-	{
-		leafSet := make(map[string]bool, len(wiSessions))
-		for _, leaf := range leafAgentSessions(wiSessions) {
-			leafSet[leaf.ID] = true
-		}
-		for _, s := range wiSessions {
-			if leafSet[s.ID] {
-				continue
-			}
-			superseded[s.ID] = true
-		}
+	leafSet := make(map[string]bool, len(wiSessions))
+	for _, leaf := range domain.LeafAgentSessions(wiSessions) {
+		leafSet[leaf.ID] = true
 	}
-	interruptedSessions := make([]domain.AgentSession, 0)
+	resumableLeaves := domain.ResumableAgentSessionLeaves(wiSessions)
+	planningInterrupted := make(map[string]domain.AgentSession)
+	interruptedSessions := make([]domain.AgentSession, 0, len(resumableLeaves))
+	for _, leaf := range resumableLeaves {
+		if leaf.Kind == domain.AgentSessionKindPlanning {
+			planningInterrupted[leaf.ID] = leaf
+			continue
+		}
+		interruptedSessions = append(interruptedSessions, leaf)
+	}
 	for _, agentSession := range wiSessions {
-		// Sessions that are not in the leaf set have been replaced by a child
-		// (retry / follow-up / reimplementation) or are out-of-scope for the
-		// review-loop graph (manual sessions). Either way they must not
-		// surface as work-item-level actions.
-		if superseded[agentSession.ID] {
+		if !leafSet[agentSession.ID] {
 			continue
 		}
 		if agentSession.Status == domain.AgentSessionWaitingForAnswer {
@@ -1620,23 +1611,21 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 			}
 		}
 		if agentSession.Status == domain.AgentSessionInterrupted {
-			if agentSession.Kind == domain.AgentSessionKindPlanning {
-				session := agentSession
+			if planning, ok := planningInterrupted[agentSession.ID]; ok {
+				session := planning
 				actions = append(actions, OverviewActionCard{
 					Kind:    overviewActionInterrupted,
 					Title:   "Planning was interrupted",
 					Blocked: "Planning",
 					Why:     "The planning harness was explicitly stopped. Resume will restart planning from the beginning.",
 					Context: []string{
-						"Last update: " + formatAbsoluteTime(agentSession.UpdatedAt),
+						"Last update: " + formatAbsoluteTime(planning.UpdatedAt),
 						"Cause: planning harness was explicitly stopped",
 					},
 					Session: &session,
-					CanAct:  a.canActOnSession(agentSession),
+					CanAct:  a.canActOnSession(planning),
 				})
-				continue
 			}
-			interruptedSessions = append(interruptedSessions, agentSession)
 		}
 	}
 	// Build a set of work-item IDs that are currently in planning or implementing
@@ -1771,10 +1760,10 @@ func (a *App) buildFailedActionCard(wi *domain.Session, subPlans []domain.TaskPl
 	for _, subPlan := range subPlans {
 		subPlanRepos[subPlan.ID] = subPlan.RepositoryName
 	}
-	for _, leaf := range domain.LeafAgentSessions(a.sessionsForWorkItem(wi.ID)) {
-		if leaf.Status != domain.AgentSessionFailed && leaf.Status != domain.AgentSessionInterrupted {
-			continue
-		}
+	for _, leaf := range domain.RetryableAgentSessionLeaves(a.sessionsForWorkItem(wi.ID)) {
+		addAffected(firstNonEmptyString(leaf.RepositoryName, subPlanRepos[leaf.SubPlanID], taskSessionDisplayName(&leaf)))
+	}
+	for _, leaf := range domain.ResumableAgentSessionLeaves(a.sessionsForWorkItem(wi.ID)) {
 		addAffected(firstNonEmptyString(leaf.RepositoryName, subPlanRepos[leaf.SubPlanID], taskSessionDisplayName(&leaf)))
 	}
 	if len(affected) == 0 {

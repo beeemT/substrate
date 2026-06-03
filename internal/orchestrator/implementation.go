@@ -33,6 +33,7 @@ type ImplementationService struct {
 	planSvc          *service.PlanService
 	workItemSvc      *service.SessionService
 	sessionSvc       *service.AgentSessionService
+	continuationSvc  *service.AgentSessionContinuationService
 	workspaceSvc     *service.WorkspaceService
 	registry         SessionRegistry
 	reviewPipeline   *ReviewPipeline
@@ -42,7 +43,72 @@ type ImplementationService struct {
 	questionRouter   *QuestionRouter // session-scoped; recreated per Implement call
 	sessTimeout      time.Duration
 	hookRegistry     *worktree.HookRegistry
+	planningSvc      *PlanningService
 	questionRouterMu sync.Mutex // guards questionRouter read in forwardEvents
+}
+type AgentGraphTrigger string
+
+const (
+	AgentGraphTriggerResumeInterrupted AgentGraphTrigger = "resume_interrupted"
+	AgentGraphTriggerRetryFailed       AgentGraphTrigger = "retry_failed"
+	AgentGraphTriggerFollowUpCompleted AgentGraphTrigger = "follow_up_completed"
+	AgentGraphTriggerFollowUpFailed    AgentGraphTrigger = "follow_up_failed"
+	AgentGraphTriggerAutoReimpl        AgentGraphTrigger = "auto_reimpl"
+)
+
+const implementationReviewContinuationKind = "implementation_review"
+
+type ContinuationContext struct {
+	CompletedImplementationID string
+	SupersededLeafID          string
+	Trigger                   AgentGraphTrigger
+	FirstReviewParentID       string
+}
+
+type AgentGraphIntent struct {
+	SourceSessionID   string
+	WorkItemID        string
+	SubPlanID         string
+	Trigger           AgentGraphTrigger
+	Feedback          string
+	CurrentInstanceID string
+}
+
+type AgentGraphRunResult struct {
+	SourceSession domain.AgentSession
+	NewSession    domain.AgentSession
+	Trigger       AgentGraphTrigger
+}
+
+type ResumeRetryMode string
+
+const (
+	ResumeRetryModeResumeInterrupted ResumeRetryMode = "resume_interrupted"
+	ResumeRetryModeRetryFailed       ResumeRetryMode = "retry_failed"
+)
+
+type ResumeRetrySkippedLeaf struct {
+	SessionID string
+	Kind      domain.AgentSessionKind
+	Status    domain.AgentSessionStatus
+	Reason    string
+}
+
+type ResumeRetryDispatchResult struct {
+	Accepted int
+	Skipped  []ResumeRetrySkippedLeaf
+}
+
+type ContinuationRecoverySkipped struct {
+	ContinuationID string
+	SessionID      string
+	Status         domain.AgentSessionContinuationStatus
+	Reason         string
+}
+
+type ContinuationRecoveryResult struct {
+	Recovered int
+	Skipped   []ContinuationRecoverySkipped
 }
 
 // ImplementationConfig contains configuration for the implementation service.
@@ -65,6 +131,7 @@ func NewImplementationService(
 	planSvc *service.PlanService,
 	workItemSvc *service.SessionService,
 	sessionSvc *service.AgentSessionService,
+	continuationSvc *service.AgentSessionContinuationService,
 	workspaceSvc *service.WorkspaceService,
 	registry SessionRegistry,
 	reviewPipeline *ReviewPipeline,
@@ -77,23 +144,28 @@ func NewImplementationService(
 	// questionRouter is created fresh per Implement call; foreman is looked up dynamically per question.
 	questionRouter := NewQuestionRouter(questionSvc, sessionSvc, registry, eventBus)
 	return &ImplementationService{
-		cfg:            cfg,
-		harness:        harness,
-		gitClient:      gitClient,
-		eventBus:       eventBus,
-		planSvc:        planSvc,
-		workItemSvc:    workItemSvc,
-		sessionSvc:     sessionSvc,
-		workspaceSvc:   workspaceSvc,
-		registry:       registry,
-		reviewPipeline: reviewPipeline,
-		foremanHarness: foremanHarness,
-		questionSvc:    questionSvc,
-		reviewSvc:      reviewSvc,
-		questionRouter: questionRouter,
-		sessTimeout:    implCfg.SessionTimeout,
-		hookRegistry:   hookRegistry,
+		cfg:             cfg,
+		harness:         harness,
+		gitClient:       gitClient,
+		eventBus:        eventBus,
+		planSvc:         planSvc,
+		workItemSvc:     workItemSvc,
+		sessionSvc:      sessionSvc,
+		continuationSvc: continuationSvc,
+		workspaceSvc:    workspaceSvc,
+		registry:        registry,
+		reviewPipeline:  reviewPipeline,
+		foremanHarness:  foremanHarness,
+		questionSvc:     questionSvc,
+		reviewSvc:       reviewSvc,
+		questionRouter:  questionRouter,
+		sessTimeout:     implCfg.SessionTimeout,
+		hookRegistry:    hookRegistry,
 	}
+}
+
+func (s *ImplementationService) SetPlanningService(planningSvc *PlanningService) {
+	s.planningSvc = planningSvc
 }
 
 // BeginForeman starts a foreman for the work item, tied to the plan.
@@ -563,9 +635,9 @@ func (s *ImplementationService) executeSubPlan(
 	// hang on 2026-05-28: Implement() entering runImplementation with prevImpl
 	// + ResumeInfo + empty critique → bridge resumed but had nothing to do.
 	//
-	// This is a strict subset of the focused-retry plan's M5
-	// (`ContinueAfterImplSession`); when M5 lands, this branch is replaced by
-	// a call to the unified entry point with no behavioural change.
+	// This mirrors the graph continuation choice: if a completed implementation
+	// can be reviewed directly, prefer continuation over starting another
+	// implementation child with no new feedback.
 	if s.reviewPipeline != nil {
 		last := s.lastSessionForSubPlan(ctx, subPlan.ID)
 		if prevImpl := s.latestCompletedImplSession(ctx, subPlan.ID); prevImpl != nil {
@@ -619,7 +691,7 @@ func (s *ImplementationService) executeSubPlan(
 	}
 
 	// Run implementation (fresh or with critique context from prior review).
-	implSession, err := s.runImplementation(ctx, subPlan, workspace, plan, workItem, worktreePath, critiqueFeedback, prevImpl, parentSessionID)
+	implSession, err := s.runImplementation(ctx, subPlan, workspace, plan, workItem, worktreePath, critiqueFeedback, prevImpl, parentSessionID, false)
 	if err != nil {
 		result.Status = domain.AgentSessionFailed
 		result.Summary = err.Error()
@@ -745,7 +817,7 @@ func (s *ImplementationService) reviewLoopWithFirstReviewParent(
 		// The reimplementation is created from the review's critique, so the
 		// new impl's parent in the agent-session graph is the review session
 		// that produced the critique (not the impl that was reviewed).
-		newSession, err := s.runImplementation(ctx, subPlan, workspace, plan, workItem, worktreePath, feedback, &currentSession, reviewResult.SessionID)
+		newSession, err := s.runImplementation(ctx, subPlan, workspace, plan, workItem, worktreePath, feedback, &currentSession, reviewResult.SessionID, true)
 		if err != nil {
 			slog.Warn("reimplementation failed", "error", err,
 				"sub_plan", subPlan.ID, "cycle", outcome.Cycles)
@@ -756,12 +828,428 @@ func (s *ImplementationService) reviewLoopWithFirstReviewParent(
 	}
 }
 
-// ContinueAfterImplSession resumes the per-sub-plan pipeline starting from a
-// completed implementation session. Used by focused retry to run the review
-// loop and derive work-item state from the aggregate sub-plan outcomes.
-func (s *ImplementationService) ContinueAfterImplSession(ctx context.Context, completedSessionID string) error {
-	// 1. Load session
-	session, err := s.sessionSvc.Get(ctx, completedSessionID)
+// ResumeRetryLeavesForWorkItem dispatches graph-managed resume or retry work
+// for current leaves in a work item. Implementation and review leaves use the
+// agent-session graph. Planning leaves are routed to PlanningService when it is
+// wired. Foreman is restarted once for the current plan before implementation or
+// review work so resumed agents have question routing available.
+func (s *ImplementationService) ResumeRetryLeavesForWorkItem(ctx context.Context, workItemID string, mode ResumeRetryMode, instanceID string) (ResumeRetryDispatchResult, error) {
+	if workItemID == "" {
+		return ResumeRetryDispatchResult{}, fmt.Errorf("work item id is required")
+	}
+	sessions, err := s.sessionSvc.ListByWorkItemID(ctx, workItemID)
+	if err != nil {
+		return ResumeRetryDispatchResult{}, fmt.Errorf("list work item sessions: %w", err)
+	}
+
+	var leaves []domain.AgentSession
+	var trigger AgentGraphTrigger
+	switch mode {
+	case ResumeRetryModeResumeInterrupted:
+		leaves = domain.ResumableAgentSessionLeaves(sessions)
+		trigger = AgentGraphTriggerResumeInterrupted
+	case ResumeRetryModeRetryFailed:
+		leaves = domain.RetryableAgentSessionLeaves(sessions)
+		trigger = AgentGraphTriggerRetryFailed
+	default:
+		return ResumeRetryDispatchResult{}, fmt.Errorf("unsupported resume/retry mode %q", mode)
+	}
+
+	result := ResumeRetryDispatchResult{}
+	foremanStarted := false
+	needsForeman := false
+	for _, leaf := range leaves {
+		if leaf.Kind == domain.AgentSessionKindImplementation || leaf.Kind == domain.AgentSessionKindReview || leaf.Kind == domain.AgentSessionKindForeman {
+			needsForeman = true
+			break
+		}
+	}
+	if needsForeman {
+		plan, err := s.planSvc.GetPlanByWorkItemID(ctx, workItemID)
+		if err != nil {
+			return result, fmt.Errorf("load work item plan before graph resume: %w", err)
+		}
+		if plan.Status == domain.PlanApproved {
+			if err := s.BeginForeman(ctx, workItemID, plan.ID); err != nil {
+				return result, fmt.Errorf("start foreman before graph resume: %w", err)
+			}
+			foremanStarted = true
+		}
+	}
+
+	for _, leaf := range leaves {
+		intent := AgentGraphIntent{
+			SourceSessionID:   leaf.ID,
+			WorkItemID:        leaf.WorkItemID,
+			SubPlanID:         leaf.SubPlanID,
+			Trigger:           trigger,
+			CurrentInstanceID: instanceID,
+		}
+		switch leaf.Kind {
+		case domain.AgentSessionKindImplementation:
+			go func(intent AgentGraphIntent, sessionID string) {
+				if _, err := s.StartImplementationGraphRun(context.WithoutCancel(ctx), intent); err != nil {
+					slog.Error("dispatch implementation graph run failed", "error", err, "agent_session_id", sessionID)
+				}
+			}(intent, leaf.ID)
+			result.Accepted++
+		case domain.AgentSessionKindReview:
+			go func(intent AgentGraphIntent, sessionID string) {
+				if _, err := s.RetryReviewLeaf(context.WithoutCancel(ctx), intent); err != nil {
+					slog.Error("dispatch review graph run failed", "error", err, "agent_session_id", sessionID)
+				}
+			}(intent, leaf.ID)
+			result.Accepted++
+		case domain.AgentSessionKindPlanning:
+			if mode != ResumeRetryModeResumeInterrupted || leaf.Status != domain.AgentSessionInterrupted {
+				result.Skipped = append(result.Skipped, ResumeRetrySkippedLeaf{SessionID: leaf.ID, Kind: leaf.Kind, Status: leaf.Status, Reason: "planning retry is not supported by bulk graph orchestration"})
+				continue
+			}
+			if s.planningSvc == nil {
+				result.Skipped = append(result.Skipped, ResumeRetrySkippedLeaf{SessionID: leaf.ID, Kind: leaf.Kind, Status: leaf.Status, Reason: "planning service is not configured"})
+				continue
+			}
+			if _, err := s.planningSvc.ResumeInterruptedPlanning(ctx, leaf, ""); err != nil {
+				return result, fmt.Errorf("resume interrupted planning session %s: %w", leaf.ID, err)
+			}
+			result.Accepted++
+		case domain.AgentSessionKindForeman:
+			if !foremanStarted {
+				result.Skipped = append(result.Skipped, ResumeRetrySkippedLeaf{SessionID: leaf.ID, Kind: leaf.Kind, Status: leaf.Status, Reason: "foreman restart was not required"})
+				continue
+			}
+			result.Accepted++
+		case domain.AgentSessionKindManual:
+			result.Skipped = append(result.Skipped, ResumeRetrySkippedLeaf{SessionID: leaf.ID, Kind: leaf.Kind, Status: leaf.Status, Reason: "manual sessions are not graph-managed"})
+		default:
+			result.Skipped = append(result.Skipped, ResumeRetrySkippedLeaf{SessionID: leaf.ID, Kind: leaf.Kind, Status: leaf.Status, Reason: "unsupported agent session kind"})
+		}
+	}
+	return result, nil
+}
+
+// StartImplementationGraphRun starts an implementation child from a current
+// implementation graph leaf, waits for that child, then runs the graph
+// continuation. It is the graph-aware entry point for implementation
+// resume/retry/follow-up paths; callers that must not block should dispatch it
+// from a background goroutine.
+func (s *ImplementationService) StartImplementationGraphRun(ctx context.Context, intent AgentGraphIntent) (AgentGraphRunResult, error) {
+	if intent.SourceSessionID == "" {
+		return AgentGraphRunResult{}, fmt.Errorf("source session id is required")
+	}
+	source, err := s.sessionSvc.Get(ctx, intent.SourceSessionID)
+	if err != nil {
+		return AgentGraphRunResult{}, fmt.Errorf("get source session: %w", err)
+	}
+	if source.Kind != domain.AgentSessionKindImplementation {
+		return AgentGraphRunResult{}, fmt.Errorf("session %s is not an implementation session (kind: %s)", source.ID, source.Kind)
+	}
+	if intent.WorkItemID != "" && source.WorkItemID != intent.WorkItemID {
+		return AgentGraphRunResult{}, fmt.Errorf("implementation session %s belongs to work item %s, not %s", source.ID, source.WorkItemID, intent.WorkItemID)
+	}
+	if intent.SubPlanID != "" && source.SubPlanID != intent.SubPlanID {
+		return AgentGraphRunResult{}, fmt.Errorf("implementation session %s belongs to sub-plan %s, not %s", source.ID, source.SubPlanID, intent.SubPlanID)
+	}
+	trigger := intent.Trigger
+	if trigger == "" {
+		trigger = defaultImplementationGraphTrigger(source.Status)
+	}
+	if err := validateImplementationGraphTrigger(source, trigger); err != nil {
+		return AgentGraphRunResult{}, err
+	}
+	sessions, err := s.sessionSvc.ListByWorkItemID(ctx, source.WorkItemID)
+	if err != nil {
+		return AgentGraphRunResult{}, fmt.Errorf("list work item sessions: %w", err)
+	}
+	if !domain.IsLeafAgentSessionID(sessions, source.ID) {
+		return AgentGraphRunResult{}, service.ErrAgentSessionNotLeaf
+	}
+
+	subPlan, err := s.planSvc.GetSubPlan(ctx, source.SubPlanID)
+	if err != nil {
+		return AgentGraphRunResult{}, fmt.Errorf("get sub-plan: %w", err)
+	}
+	plan, err := s.planSvc.GetPlan(ctx, subPlan.PlanID)
+	if err != nil {
+		return AgentGraphRunResult{}, fmt.Errorf("get plan: %w", err)
+	}
+	workItem, err := s.workItemSvc.Get(ctx, plan.WorkItemID)
+	if err != nil {
+		return AgentGraphRunResult{}, fmt.Errorf("get work item: %w", err)
+	}
+	workspace, err := s.workspaceSvc.Get(ctx, workItem.WorkspaceID)
+	if err != nil {
+		return AgentGraphRunResult{}, fmt.Errorf("get workspace: %w", err)
+	}
+	if err := s.prepareImplementationGraphState(ctx, &workItem, &subPlan, trigger); err != nil {
+		return AgentGraphRunResult{}, err
+	}
+
+	worktreePath := source.WorktreePath
+	if worktreePath == "" {
+		return AgentGraphRunResult{}, fmt.Errorf("implementation session %s has no worktree path", source.ID)
+	}
+	feedback := implementationGraphFeedback(intent, trigger)
+	newSession, err := s.runImplementation(ctx, subPlan, &workspace, &plan, &workItem, worktreePath, feedback, &source, source.ID, true)
+	if err != nil {
+		return AgentGraphRunResult{SourceSession: source, Trigger: trigger}, fmt.Errorf("run implementation graph child: %w", err)
+	}
+	if err := s.ContinueImplementationGraph(ctx, ContinuationContext{
+		CompletedImplementationID: newSession.ID,
+		SupersededLeafID:          source.ID,
+		Trigger:                   trigger,
+	}); err != nil {
+		return AgentGraphRunResult{SourceSession: source, NewSession: newSession, Trigger: trigger}, fmt.Errorf("continue implementation graph child: %w", err)
+	}
+	return AgentGraphRunResult{SourceSession: source, NewSession: newSession, Trigger: trigger}, nil
+}
+
+func defaultImplementationGraphTrigger(status domain.AgentSessionStatus) AgentGraphTrigger {
+	switch status {
+	case domain.AgentSessionInterrupted:
+		return AgentGraphTriggerResumeInterrupted
+	case domain.AgentSessionFailed:
+		return AgentGraphTriggerRetryFailed
+	case domain.AgentSessionCompleted:
+		return AgentGraphTriggerFollowUpCompleted
+	default:
+		return ""
+	}
+}
+
+func validateImplementationGraphTrigger(source domain.AgentSession, trigger AgentGraphTrigger) error {
+	switch trigger {
+	case AgentGraphTriggerResumeInterrupted:
+		if source.Status != domain.AgentSessionInterrupted {
+			return fmt.Errorf("implementation session %s is not interrupted (status: %s)", source.ID, source.Status)
+		}
+	case AgentGraphTriggerRetryFailed, AgentGraphTriggerFollowUpFailed:
+		if source.Status != domain.AgentSessionFailed {
+			return fmt.Errorf("implementation session %s is not failed (status: %s)", source.ID, source.Status)
+		}
+	case AgentGraphTriggerFollowUpCompleted:
+		if source.Status != domain.AgentSessionCompleted {
+			return fmt.Errorf("implementation session %s is not completed (status: %s)", source.ID, source.Status)
+		}
+	case AgentGraphTriggerAutoReimpl:
+		if source.Status != domain.AgentSessionCompleted {
+			return fmt.Errorf("implementation session %s is not completed for auto reimplementation (status: %s)", source.ID, source.Status)
+		}
+	default:
+		return fmt.Errorf("unsupported implementation graph trigger %q", trigger)
+	}
+	return nil
+}
+
+func implementationGraphFeedback(intent AgentGraphIntent, trigger AgentGraphTrigger) string {
+	if intent.Feedback != "" {
+		return intent.Feedback
+	}
+	if trigger == AgentGraphTriggerResumeInterrupted || trigger == AgentGraphTriggerRetryFailed {
+		return resumeContinuationMessage
+	}
+	return ""
+}
+
+func (s *ImplementationService) prepareImplementationGraphState(ctx context.Context, workItem *domain.Session, subPlan *domain.TaskPlan, trigger AgentGraphTrigger) error {
+	switch workItem.State {
+	case domain.SessionFailed:
+		if err := s.workItemSvc.RetryFailedWorkItem(ctx, workItem.ID); err != nil {
+			return fmt.Errorf("retry failed work item: %w", err)
+		}
+		workItem.State = domain.SessionImplementing
+	case domain.SessionReviewing:
+		if err := s.workItemSvc.StartImplementation(ctx, workItem.ID); err != nil {
+			return fmt.Errorf("transition reviewing work item to implementing: %w", err)
+		}
+		workItem.State = domain.SessionImplementing
+	case domain.SessionImplementing:
+	case domain.SessionCompleted:
+		if trigger != AgentGraphTriggerFollowUpCompleted {
+			return fmt.Errorf("work item %s is completed; trigger %s cannot start implementation graph run", workItem.ID, trigger)
+		}
+		if err := s.workItemSvc.StartImplementation(ctx, workItem.ID); err != nil {
+			return fmt.Errorf("transition completed work item to implementing: %w", err)
+		}
+		workItem.State = domain.SessionImplementing
+	default:
+		return fmt.Errorf("work item %s is in state %s, cannot start implementation graph run", workItem.ID, workItem.State)
+	}
+	switch subPlan.Status {
+	case domain.SubPlanPending, domain.SubPlanFailed, domain.SubPlanEscalated:
+		if err := s.persistSubPlanStatusStrict(ctx, subPlan, domain.SubPlanInProgress); err != nil {
+			return fmt.Errorf("mark sub-plan in progress: %w", err)
+		}
+		subPlan.Status = domain.SubPlanInProgress
+	case domain.SubPlanCompleted:
+		if trigger != AgentGraphTriggerFollowUpCompleted {
+			return fmt.Errorf("sub-plan %s is completed; trigger %s cannot start implementation graph run", subPlan.ID, trigger)
+		}
+		if err := s.persistSubPlanStatusStrict(ctx, subPlan, domain.SubPlanInProgress); err != nil {
+			return fmt.Errorf("mark completed sub-plan in progress: %w", err)
+		}
+		subPlan.Status = domain.SubPlanInProgress
+	case domain.SubPlanInProgress:
+	default:
+		return fmt.Errorf("sub-plan %s is in status %s, cannot start implementation graph run", subPlan.ID, subPlan.Status)
+	}
+	return nil
+}
+
+// RetryReviewLeaf reruns review continuation from a failed or interrupted review
+// graph leaf while preserving the graph edge from that leaf to the replacement
+// review session. The reviewed implementation is discovered by walking ancestors
+// rather than assuming the review's direct parent is the implementation.
+func (s *ImplementationService) RetryReviewLeaf(ctx context.Context, intent AgentGraphIntent) (AgentGraphRunResult, error) {
+	if intent.SourceSessionID == "" {
+		return AgentGraphRunResult{}, fmt.Errorf("source session id is required")
+	}
+	source, err := s.sessionSvc.Get(ctx, intent.SourceSessionID)
+	if err != nil {
+		return AgentGraphRunResult{}, fmt.Errorf("get source session: %w", err)
+	}
+	if source.Kind != domain.AgentSessionKindReview {
+		return AgentGraphRunResult{}, fmt.Errorf("session %s is not a review session (kind: %s)", source.ID, source.Kind)
+	}
+	switch source.Status {
+	case domain.AgentSessionFailed, domain.AgentSessionInterrupted:
+	default:
+		return AgentGraphRunResult{}, fmt.Errorf("review session %s is not retryable (status: %s)", source.ID, source.Status)
+	}
+	if intent.WorkItemID != "" && source.WorkItemID != intent.WorkItemID {
+		return AgentGraphRunResult{}, fmt.Errorf("review session %s belongs to work item %s, not %s", source.ID, source.WorkItemID, intent.WorkItemID)
+	}
+	if intent.SubPlanID != "" && source.SubPlanID != intent.SubPlanID {
+		return AgentGraphRunResult{}, fmt.Errorf("review session %s belongs to sub-plan %s, not %s", source.ID, source.SubPlanID, intent.SubPlanID)
+	}
+
+	sessions, err := s.sessionSvc.ListByWorkItemID(ctx, source.WorkItemID)
+	if err != nil {
+		return AgentGraphRunResult{}, fmt.Errorf("list work item sessions: %w", err)
+	}
+	if !isAgentSessionLeaf(source.ID, sessions) {
+		return AgentGraphRunResult{}, service.ErrAgentSessionNotLeaf
+	}
+	impl, err := nearestCompletedImplementationAncestor(source, sessions)
+	if err != nil {
+		return AgentGraphRunResult{}, err
+	}
+	if impl.WorkItemID != source.WorkItemID || impl.SubPlanID != source.SubPlanID {
+		return AgentGraphRunResult{}, fmt.Errorf("implementation ancestor %s does not match review leaf %s", impl.ID, source.ID)
+	}
+
+	trigger := intent.Trigger
+	if trigger == "" {
+		trigger = AgentGraphTriggerRetryFailed
+	}
+	if err := s.ContinueImplementationGraph(ctx, ContinuationContext{
+		CompletedImplementationID: impl.ID,
+		SupersededLeafID:          source.ID,
+		FirstReviewParentID:       source.ID,
+		Trigger:                   trigger,
+	}); err != nil {
+		return AgentGraphRunResult{}, fmt.Errorf("continue review retry: %w", err)
+	}
+	return AgentGraphRunResult{SourceSession: source, Trigger: trigger}, nil
+}
+
+func isAgentSessionLeaf(id string, sessions []domain.AgentSession) bool {
+	for _, leaf := range domain.LeafAgentSessions(sessions) {
+		if leaf.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func nearestCompletedImplementationAncestor(source domain.AgentSession, sessions []domain.AgentSession) (domain.AgentSession, error) {
+	byID := make(map[string]domain.AgentSession, len(sessions))
+	for i := range sessions {
+		byID[sessions[i].ID] = sessions[i]
+	}
+	seen := map[string]bool{source.ID: true}
+	parentID := source.ParentAgentSessionID
+	for parentID != "" {
+		if seen[parentID] {
+			return domain.AgentSession{}, fmt.Errorf("agent-session graph cycle at %s", parentID)
+		}
+		seen[parentID] = true
+		parent, ok := byID[parentID]
+		if !ok {
+			return domain.AgentSession{}, fmt.Errorf("parent session %s for %s not found", parentID, source.ID)
+		}
+		if parent.Kind == domain.AgentSessionKindImplementation {
+			if parent.Status != domain.AgentSessionCompleted {
+				return domain.AgentSession{}, fmt.Errorf("implementation ancestor %s is not completed (status: %s)", parent.ID, parent.Status)
+			}
+			return parent, nil
+		}
+		parentID = parent.ParentAgentSessionID
+	}
+	return domain.AgentSession{}, fmt.Errorf("review session %s has no implementation ancestor", source.ID)
+}
+
+// RecoverContinuationsForWorkspace resumes interrupted implementation
+// continuation work that was durably left pending or running by a prior process.
+// Failed continuations are returned as skipped so UI/retry surfaces can expose
+// the recorded error instead of silently replaying a known-bad continuation.
+func (s *ImplementationService) RecoverContinuationsForWorkspace(ctx context.Context, workspaceID string) (ContinuationRecoveryResult, error) {
+	if workspaceID == "" {
+		return ContinuationRecoveryResult{}, fmt.Errorf("workspace id is required")
+	}
+	continuations, err := s.continuationSvc.ListRecoverable(ctx, workspaceID)
+	if err != nil {
+		return ContinuationRecoveryResult{}, fmt.Errorf("list recoverable continuations: %w", err)
+	}
+
+	result := ContinuationRecoveryResult{}
+	for _, continuation := range continuations {
+		if continuation.Kind != implementationReviewContinuationKind {
+			result.Skipped = append(result.Skipped, ContinuationRecoverySkipped{
+				ContinuationID: continuation.ID,
+				SessionID:      continuation.AgentSessionID,
+				Status:         continuation.Status,
+				Reason:         "unsupported continuation kind",
+			})
+			continue
+		}
+		switch continuation.Status {
+		case domain.AgentSessionContinuationPending, domain.AgentSessionContinuationRunning:
+			if err := s.ContinueImplementationGraph(ctx, ContinuationContext{CompletedImplementationID: continuation.AgentSessionID}); err != nil {
+				return result, fmt.Errorf("recover continuation %s for session %s: %w", continuation.ID, continuation.AgentSessionID, err)
+			}
+			result.Recovered++
+		case domain.AgentSessionContinuationFailed:
+			result.Skipped = append(result.Skipped, ContinuationRecoverySkipped{
+				ContinuationID: continuation.ID,
+				SessionID:      continuation.AgentSessionID,
+				Status:         continuation.Status,
+				Reason:         "continuation previously failed",
+			})
+		default:
+			result.Skipped = append(result.Skipped, ContinuationRecoverySkipped{
+				ContinuationID: continuation.ID,
+				SessionID:      continuation.AgentSessionID,
+				Status:         continuation.Status,
+				Reason:         "continuation status is not recoverable",
+			})
+		}
+	}
+	return result, nil
+}
+
+// ContinueImplementationGraph resumes the per-sub-plan pipeline starting from a
+// completed implementation session and records durable continuation state for
+// review, sub-plan, work-item, and finalization work.
+func (s *ImplementationService) ContinueImplementationGraph(ctx context.Context, cc ContinuationContext) error {
+	return s.continueImplementationGraph(ctx, cc)
+}
+
+func (s *ImplementationService) continueImplementationGraph(ctx context.Context, cc ContinuationContext) (err error) {
+	completedSessionID := cc.CompletedImplementationID
+	firstReviewParentSessionID := cc.FirstReviewParentID
+	var session domain.AgentSession
+	session, err = s.sessionSvc.Get(ctx, completedSessionID)
 	if err != nil {
 		return fmt.Errorf("get session: %w", err)
 	}
@@ -775,11 +1263,28 @@ func (s *ImplementationService) ContinueAfterImplSession(ctx context.Context, co
 		return fmt.Errorf("session %s has no sub-plan assigned", completedSessionID)
 	}
 
-	// 2. Load sub-plan, plan, work item, workspace
+	continuation, err := s.continuationSvc.CreatePending(ctx, session.ID, implementationReviewContinuationKind)
+	if err != nil {
+		return fmt.Errorf("create pending continuation: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			if _, failErr := s.continuationSvc.Fail(ctx, continuation.ID, err); failErr != nil {
+				slog.Error("record continuation failure failed", "continuation_id", continuation.ID, "error", failErr)
+			}
+			s.emitContinuationFailed(ctx, session, err)
+		}
+	}()
+
+	if _, err := s.continuationSvc.Start(ctx, continuation.ID); err != nil {
+		return fmt.Errorf("start continuation: %w", err)
+	}
+
 	subPlan, err := s.planSvc.GetSubPlan(ctx, session.SubPlanID)
 	if err != nil {
 		return fmt.Errorf("get sub-plan: %w", err)
 	}
+
 	plan, err := s.planSvc.GetPlan(ctx, subPlan.PlanID)
 	if err != nil {
 		return fmt.Errorf("get plan: %w", err)
@@ -793,7 +1298,6 @@ func (s *ImplementationService) ContinueAfterImplSession(ctx context.Context, co
 		return fmt.Errorf("get workspace: %w", err)
 	}
 
-	// 3. Ensure work item is Implementing
 	switch workItem.State {
 	case domain.SessionFailed:
 		if err := s.workItemSvc.RetryFailedWorkItem(ctx, workItem.ID); err != nil {
@@ -804,39 +1308,37 @@ func (s *ImplementationService) ContinueAfterImplSession(ctx context.Context, co
 			return fmt.Errorf("transition reviewing work item to implementing: %w", err)
 		}
 	case domain.SessionImplementing:
-		// Already in the right state
 	default:
 		return fmt.Errorf("work item %s is in state %s, cannot continue retry", workItem.ID, workItem.State)
 	}
 
-	// 4. Ensure sub-plan is InProgress
 	if subPlan.Status == domain.SubPlanFailed || subPlan.Status == domain.SubPlanEscalated {
-		s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanInProgress)
+		if err := s.persistSubPlanStatusStrict(ctx, &subPlan, domain.SubPlanInProgress); err != nil {
+			return fmt.Errorf("mark sub-plan in progress: %w", err)
+		}
 	}
 
-	// 5. Build worktreePaths from the session's worktree path
-	worktreePaths := map[string]string{
-		subPlan.RepositoryName: session.WorktreePath,
-	}
-
-	// 6. Run review loop (if configured)
+	worktreePaths := map[string]string{subPlan.RepositoryName: session.WorktreePath}
 	if s.reviewPipeline != nil {
-		outcome := s.reviewLoop(ctx, session, subPlan, &workspace, &plan, &workItem, worktreePaths)
-
+		outcome := s.reviewLoopWithFirstReviewParent(ctx, session, subPlan, &workspace, &plan, &workItem, worktreePaths, firstReviewParentSessionID)
 		switch {
 		case outcome.Passed:
-			s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanCompleted)
+			if err := s.persistSubPlanStatusStrict(ctx, &subPlan, domain.SubPlanCompleted); err != nil {
+				return fmt.Errorf("mark sub-plan completed: %w", err)
+			}
 		case outcome.Failed:
-			s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanFailed)
+			if err := s.persistSubPlanStatusStrict(ctx, &subPlan, domain.SubPlanFailed); err != nil {
+				return fmt.Errorf("mark sub-plan failed: %w", err)
+			}
 		case outcome.Escalated:
-			s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanEscalated)
+			if err := s.persistSubPlanStatusStrict(ctx, &subPlan, domain.SubPlanEscalated); err != nil {
+				return fmt.Errorf("mark sub-plan escalated: %w", err)
+			}
 		}
-	} else {
-		// No review pipeline — mark completed immediately
-		s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanCompleted)
+	} else if err := s.persistSubPlanStatusStrict(ctx, &subPlan, domain.SubPlanCompleted); err != nil {
+		return fmt.Errorf("mark sub-plan completed without review: %w", err)
 	}
 
-	// 7. Re-derive work-item state from all sub-plans
 	allSubPlans, err := s.planSvc.ListSubPlansByPlanID(ctx, plan.ID)
 	if err != nil {
 		return fmt.Errorf("list sub-plans for state derivation: %w", err)
@@ -854,7 +1356,6 @@ func (s *ImplementationService) ContinueAfterImplSession(ctx context.Context, co
 			hasEscalated = true
 			allCompleted = false
 		case domain.SubPlanCompleted:
-			// ok
 		default:
 			allCompleted = false
 		}
@@ -863,30 +1364,34 @@ func (s *ImplementationService) ContinueAfterImplSession(ctx context.Context, co
 	switch {
 	case hasFailed:
 		if err := s.workItemSvc.FailWorkItem(ctx, workItem.ID); err != nil {
-			slog.Warn("failed to transition work item to failed", "error", err)
+			return fmt.Errorf("transition work item to failed: %w", err)
 		}
 	case hasEscalated:
 		if err := s.workItemSvc.SubmitForReview(ctx, workItem.ID); err != nil {
-			slog.Warn("failed to transition work item to reviewing", "error", err)
+			return fmt.Errorf("transition work item to reviewing: %w", err)
 		}
 	case allCompleted:
-		repoPaths, discoverErr := s.discoverRepoPaths(ctx, workspace.RootPath)
-		if discoverErr != nil {
-			slog.Warn("failed to discover repo paths for finalization", "error", discoverErr)
-			break
+		repoPaths, err := s.discoverRepoPaths(ctx, workspace.RootPath)
+		if err != nil {
+			return fmt.Errorf("discover repo paths for finalization: %w", err)
 		}
 		branch := GenerateBranchName(workItem.ExternalID, workItem.Title)
-		tasks, _ := s.sessionSvc.ListByWorkItemID(ctx, workItem.ID)
-		sessions, sessErr := completedSessionResultsForSubPlans(allSubPlans, tasks, branch)
-		if sessErr != nil {
-			slog.Warn("failed to build session results for finalization", "error", sessErr)
-			break
+		tasks, err := s.sessionSvc.ListByWorkItemID(ctx, workItem.ID)
+		if err != nil {
+			return fmt.Errorf("list sessions for finalization: %w", err)
+		}
+		sessions, err := completedSessionResultsForSubPlans(allSubPlans, tasks, branch)
+		if err != nil {
+			return fmt.Errorf("build session results for finalization: %w", err)
 		}
 		if err := s.finalizeCompletedWorkItem(ctx, &workItem, workspace.ID, sessions, repoPaths, branch, allSubPlans); err != nil {
-			slog.Warn("failed to finalize completed work item", "error", err)
+			return fmt.Errorf("finalize completed work item: %w", err)
 		}
 	}
 
+	if _, err := s.continuationSvc.Complete(ctx, continuation.ID); err != nil {
+		return fmt.Errorf("complete continuation: %w", err)
+	}
 	return nil
 }
 
@@ -912,6 +1417,7 @@ func (s *ImplementationService) runImplementation(
 	critiqueFeedback string,
 	prevSession *domain.AgentSession,
 	parentSessionID string,
+	createCompletionContinuation bool,
 ) (domain.AgentSession, error) {
 	sessionID := domain.NewID()
 	agentSession := domain.AgentSession{
@@ -951,96 +1457,78 @@ func (s *ImplementationService) runImplementation(
 		opts.SystemPrompt += "\n\n" + critiqueFeedback
 	}
 
-	harnessSession, err := s.harness.StartSession(ctx, opts)
-	if err != nil {
-		if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
-			slog.Warn("failed to fail session after harness start error", "error", failErr,
-				"agent_session_id", sessionID)
-		}
-		return domain.AgentSession{}, fmt.Errorf("start agent: %w", err)
+	completeContinuationKind := ""
+	if createCompletionContinuation {
+		completeContinuationKind = implementationReviewContinuationKind
 	}
-
-	// Compact the conversation before sending critique so the model starts with
-	// a clean summary of its prior work rather than the full transcript.
-	if canCompact {
-		if err := harnessSession.Compact(ctx); err != nil {
-			slog.Warn("failed to compact resumed session, continuing without compact", "error", err,
-				"agent_session_id", sessionID)
-		}
+	done := make(chan error, 1)
+	supervisor := &AgentRunSupervisor{
+		harnesses:  staticHarnessSelector{harness: s.harness},
+		sessionSvc: s.sessionSvc,
+		registry:   s.registry,
+		forward:    s.forwardEvents,
+		timeout:    s.sessTimeout,
 	}
-
-	// Deliver guidance to the resumed session. Without an explicit user-turn
-	// after resume + compact-skip, the bridge sits idle until sessTimeout —
-	// the SDK does not auto-prompt on its own. Send either the critique
-	// feedback (auto-reimpl path) or a generic continuation orientation
-	// (bulk retry / escalation reset / any other path that lands here with
-	// no critique).
-	switch {
-	case canCompact && critiqueFeedback != "":
-		// Auto-reimpl after critique: the critique is the user's turn.
-		if err := harnessSession.SendMessage(ctx, critiqueFeedback); err != nil {
-			slog.Warn("failed to send critique feedback to resumed session", "error", err,
-				"agent_session_id", sessionID)
-			// Non-fatal: session continues without the explicit critique prompt.
-		}
-	case canCompact:
-		// Resumed with no critique to deliver — bulk retry of a failed work
-		// item, escalation reset, or any other path that reaches us here.
-		// Mirrors Resumption.ResumeSessionWithPrompt orientation wording.
-		if err := harnessSession.SendMessage(ctx, resumeContinuationMessage); err != nil {
-			slog.Warn("failed to send orientation to resumed session", "error", err,
-				"agent_session_id", sessionID)
-			// Non-fatal: session continues without the orientation message.
-			// The bridge will most likely sit idle until sessTimeout, but we
-			// don't want to fail the session pre-emptively over a transient
-			// stdin write error.
-		}
-	}
-
-	sessionCtx, sessionCancel := context.WithTimeout(ctx, s.sessTimeout)
-	defer sessionCancel()
-
-	s.registry.Register(sessionID, harnessSession)
-	defer s.registry.Deregister(sessionID)
-
-	go s.forwardEvents(sessionCtx, harnessSession.Events(), sessionID)
-
-	waitErr := harnessSession.Wait(sessionCtx)
-
-	if waitErr != nil {
-		if errors.Is(waitErr, context.Canceled) {
-			if info := harnessSession.ResumeInfo(); len(info) > 0 {
-				cleanupCtx, cleanupCancel := durableCleanupContext(ctx)
-				defer cleanupCancel()
-				if err := s.sessionSvc.UpdateResumeInfo(cleanupCtx, sessionID, info); err != nil {
-					slog.Warn("failed to store resume info before interrupting session", "error", err, "agent_session_id", sessionID)
+	_, err := supervisor.Start(ctx, AgentRunRequest{
+		Session:                  agentSession,
+		Opts:                     opts,
+		CompleteContinuationKind: completeContinuationKind,
+		AfterStart: func(ctx context.Context, harnessSession adapter.AgentSession) error {
+			// a clean summary of its prior work rather than the full transcript.
+			if canCompact {
+				if err := harnessSession.Compact(ctx); err != nil {
+					slog.Warn("failed to compact resumed session, continuing without compact", "error", err,
+						"agent_session_id", sessionID)
 				}
 			}
-			// Pipeline was cancelled (user quit) — mark as interrupted for resume on next startup.
-			if interruptErr := interruptSessionDurably(ctx, s.sessionSvc, sessionID); interruptErr != nil {
-				slog.Warn("failed to interrupt session on context cancellation",
-					"error", interruptErr, "agent_session_id", sessionID)
+
+			// Deliver guidance to the resumed session. Without an explicit user-turn
+			// after resume + compact-skip, the bridge sits idle until sessTimeout —
+			// the SDK does not auto-prompt on its own. Send either the critique
+			// feedback (auto-reimpl path) or a generic continuation orientation
+			// (bulk retry / escalation reset / any other path that lands here with
+			// no critique).
+			switch {
+			case canCompact && critiqueFeedback != "":
+				// Auto-reimpl after critique: the critique is the user's turn.
+				if err := harnessSession.SendMessage(ctx, critiqueFeedback); err != nil {
+					slog.Warn("failed to send critique feedback to resumed session", "error", err,
+						"agent_session_id", sessionID)
+				}
+			case canCompact:
+				// Resumed with no critique to deliver — bulk retry of a failed work
+				// item, escalation reset, or any other path that reaches us here.
+				if err := harnessSession.SendMessage(ctx, resumeContinuationMessage); err != nil {
+					slog.Warn("failed to send orientation to resumed session", "error", err,
+						"agent_session_id", sessionID)
+				}
 			}
-		} else if !agentSessionAlreadyInterrupted(ctx, s.sessionSvc, sessionID) {
-			if failErr := failSessionDurably(ctx, s.sessionSvc, sessionID, ptrInt(1)); failErr != nil {
-				slog.Warn("failed to fail session", "error", failErr, "agent_session_id", sessionID)
-			}
-		}
-		return domain.AgentSession{}, fmt.Errorf("agent session failed: %w", waitErr)
+			return nil
+		},
+		OnCompleted: func(context.Context, domain.AgentSession) error {
+			done <- nil
+			return nil
+		},
+		OnFailed: func(_ context.Context, _ domain.AgentSession, err error) error {
+			done <- fmt.Errorf("agent session failed: %w", err)
+			return nil
+		},
+		OnInterrupted: func(context.Context, domain.AgentSession) error {
+			done <- fmt.Errorf("agent session failed: %w", context.Canceled)
+			return nil
+		},
+	})
+	if err != nil {
+		return domain.AgentSession{}, err
 	}
-
-	if completeErr := completeSessionDurably(ctx, s.sessionSvc, sessionID); completeErr != nil {
-		slog.Warn("failed to complete session", "error", completeErr, "agent_session_id", sessionID)
+	if err := <-done; err != nil {
+		return domain.AgentSession{}, err
 	}
-
-	// Persist harness-specific resume data generically — no harness-specific knowledge here.
-	if info := harnessSession.ResumeInfo(); len(info) > 0 {
-		agentSession.ResumeInfo = info
-		if err := s.sessionSvc.UpdateResumeInfo(ctx, sessionID, info); err != nil {
-			slog.Warn("failed to store resume info", "error", err, "agent_session_id", sessionID)
-		}
+	if info, err := s.sessionSvc.Get(ctx, sessionID); err == nil {
+		agentSession.ResumeInfo = info.ResumeInfo
+	} else {
+		slog.Warn("failed to reload completed implementation session", "error", err, "agent_session_id", sessionID)
 	}
-
 	return agentSession, nil
 }
 
@@ -2157,6 +2645,36 @@ func (s *ImplementationService) latestCompletedImplSession(ctx context.Context, 
 	return latest
 }
 
+func (s *ImplementationService) emitContinuationFailed(ctx context.Context, session domain.AgentSession, cause error) {
+	if s.eventBus == nil {
+		return
+	}
+	payload := fmt.Sprintf(`{"agent_session_id":%q,"work_item_id":%q,"sub_plan_id":%q,"error":%q}`,
+		session.ID,
+		session.WorkItemID,
+		session.SubPlanID,
+		cause.Error(),
+	)
+	service.Emit(s.eventBus, domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventAgentSessionContinuationFailed),
+		WorkspaceID: session.WorkspaceID,
+		Payload:     payload,
+		CreatedAt:   time.Now(),
+	})
+}
+
+// persistSubPlanStatusStrict persists a sub-plan transition and returns the
+// error to callers that cannot safely continue with stale durable state.
+func (s *ImplementationService) persistSubPlanStatusStrict(ctx context.Context, sp *domain.TaskPlan, status domain.TaskPlanStatus) error {
+	if err := s.planSvc.TransitionSubPlan(ctx, sp.ID, status); err != nil {
+		return err
+	}
+	sp.Status = status
+	sp.UpdatedAt = time.Now()
+	return nil
+}
+
 // persistSubPlanStatus sets the sub-plan status, timestamps the update, and
 // persists it. Errors are logged as warnings since the in-memory state is
 // already consistent and the next Implement call will reconcile.
@@ -2196,10 +2714,8 @@ const (
 // initial user-turn after resume + compact-skip, the SDK sits idle: there is
 // nothing for it to respond to, and the bridge process therefore never reaches
 // its post-prompt exit path.
-//
-// Mirrors the orientation copy in Resumption.ResumeSessionWithPrompt so the
-// agent sees the same prompt regardless of whether bulk retry or focused
-// resume put it back on the work item.
+// This matches the graph retry/resume orientation used when a resumed harness
+// session has no more specific critique or operator feedback to handle.
 const resumeContinuationMessage = "You are continuing work on this sub-plan. " +
 	"The worktree may contain partial changes from a previous session. " +
 	"Run `git status` and `git diff` to understand current state, then " +
@@ -2219,38 +2735,6 @@ func durableCleanupContext(parent context.Context) (context.Context, context.Can
 
 func durableFinalizationContext(parent context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(parent), durableFinalizationTimeout)
-}
-
-func failSessionDurably(parent context.Context, sessionSvc *service.AgentSessionService, sessionID string, exitCode *int) error {
-	cleanupCtx, cleanupCancel := durableCleanupContext(parent)
-	defer cleanupCancel()
-	return sessionSvc.Fail(cleanupCtx, sessionID, exitCode)
-}
-
-func agentSessionAlreadyInterrupted(parent context.Context, sessionSvc *service.AgentSessionService, sessionID string) bool {
-	cleanupCtx, cleanupCancel := durableCleanupContext(parent)
-	defer cleanupCancel()
-
-	agentSession, err := sessionSvc.Get(cleanupCtx, sessionID)
-	if err != nil {
-		slog.Warn("failed to inspect agent session before failure transition", "error", err, "agent_session_id", sessionID)
-		return false
-	}
-	return agentSession.Status == domain.AgentSessionInterrupted
-}
-
-// interruptSessionDurably marks a session as interrupted using a context detached from
-// parent cancellation, ensuring the DB write completes even if the pipeline is shutting down.
-func interruptSessionDurably(parent context.Context, sessionSvc *service.AgentSessionService, sessionID string) error {
-	cleanupCtx, cleanupCancel := durableCleanupContext(parent)
-	defer cleanupCancel()
-	return sessionSvc.Interrupt(cleanupCtx, sessionID)
-}
-
-func completeSessionDurably(parent context.Context, sessionSvc *service.AgentSessionService, sessionID string) error {
-	cleanupCtx, cleanupCancel := durableCleanupContext(parent)
-	defer cleanupCancel()
-	return sessionSvc.Complete(cleanupCtx, sessionID)
 }
 
 func marshalJSONOrEmpty(eventType string, v any) string {

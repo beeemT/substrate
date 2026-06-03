@@ -148,6 +148,7 @@ type planRunRequest struct {
 	repoResults      []RepoResultSummary
 	priorSessionID   string
 	priorResumeInfo  map[string]string
+	parentSessionID  string
 	// replacePlanID, when non-empty, names the plan that buildAndPersistPlan
 	// must atomically supersede. The old plan's status is set to 'superseded'
 	// in the same transaction that inserts the new one; the partial unique
@@ -227,6 +228,9 @@ func (s *PlanningService) ResumeInterruptedPlanning(ctx context.Context, interru
 		replacePlanID = existing.ID
 	}
 	// Capture plan text so the revision prompt has context (same as PlanWithFeedback).
+	if err := s.workItemSvc.RollbackPlanningInterrupt(ctx, interrupted.WorkItemID); err != nil {
+		return nil, fmt.Errorf("rollback planning interrupt: %w", err)
+	}
 	currentPlanText := s.buildPlanText(ctx, replacePlanID)
 	return s.planRun(ctx, planRunRequest{
 		workItemID:       interrupted.WorkItemID,
@@ -234,6 +238,7 @@ func (s *PlanningService) ResumeInterruptedPlanning(ctx context.Context, interru
 		currentPlanText:  currentPlanText,
 		priorSessionID:   interrupted.ID,
 		priorResumeInfo:  interrupted.ResumeInfo,
+		parentSessionID:  interrupted.ID,
 		replacePlanID:    replacePlanID,
 	})
 }
@@ -460,11 +465,12 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 	// 6. Allocate and persist the planning session before launching the harness.
 	sessionID := domain.NewID()
 	planningSession := domain.AgentSession{
-		ID:          sessionID,
-		WorkItemID:  workItem.ID,
-		WorkspaceID: workspace.ID,
-		Kind:        domain.AgentSessionKindPlanning,
-		HarnessName: s.harness.Name(),
+		ID:                   sessionID,
+		WorkItemID:           workItem.ID,
+		WorkspaceID:          workspace.ID,
+		Kind:                 domain.AgentSessionKindPlanning,
+		HarnessName:          s.harness.Name(),
+		ParentAgentSessionID: req.parentSessionID,
 	}
 	if err := s.sessionSvc.Create(ctx, planningSession); err != nil {
 		revertWorkItemToIngested(ctx, s.workItemSvc, req.workItemID)

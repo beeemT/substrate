@@ -9,24 +9,25 @@ import (
 // Resources groups all transaction-bound repositories. Every field is bound
 // to the same database transaction when created inside a Transact call.
 type Resources struct {
-	Sessions               SessionRepository
-	Plans                  PlanRepository
-	SubPlans               TaskPlanRepository
-	Workspaces             WorkspaceRepository
-	NewSessionFilters      NewSessionFilterRepository
-	NewSessionFilterLocks  NewSessionFilterLockRepository
-	AgentSessions          AgentSessionRepository
-	Reviews                ReviewRepository
-	Questions              QuestionRepository
-	Events                 EventRepository
-	Instances              InstanceRepository
-	GithubPRs              GithubPullRequestRepository
-	GitlabMRs              GitlabMergeRequestRepository
-	SessionReviewArtifacts SessionReviewArtifactRepository
-	GithubPRReviews        GithubPRReviewRepository
-	GitlabMRReviews        GitlabMRReviewRepository
-	GithubPRChecks         GithubPRCheckRepository
-	GitlabMRChecks         GitlabMRCheckRepository
+	Sessions                  SessionRepository
+	Plans                     PlanRepository
+	SubPlans                  TaskPlanRepository
+	Workspaces                WorkspaceRepository
+	NewSessionFilters         NewSessionFilterRepository
+	NewSessionFilterLocks     NewSessionFilterLockRepository
+	AgentSessions             AgentSessionRepository
+	AgentSessionContinuations AgentSessionContinuationRepository
+	Reviews                   ReviewRepository
+	Questions                 QuestionRepository
+	Events                    EventRepository
+	Instances                 InstanceRepository
+	GithubPRs                 GithubPullRequestRepository
+	GitlabMRs                 GitlabMergeRequestRepository
+	SessionReviewArtifacts    SessionReviewArtifactRepository
+	GithubPRReviews           GithubPRReviewRepository
+	GitlabMRReviews           GitlabMRReviewRepository
+	GithubPRChecks            GithubPRCheckRepository
+	GitlabMRChecks            GitlabMRCheckRepository
 }
 
 // NoopTransacter calls fn directly with the stored Resources without

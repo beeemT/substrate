@@ -295,7 +295,7 @@ func (s *ManualSessionService) FollowUpManualSession(ctx context.Context, comple
 
 	// If the harness supports native resume, reuse the existing row.
 	if len(completed.ResumeInfo) > 0 {
-		if err := s.sessionSvc.FollowUpRestart(ctx, completed.ID, completed.OwnerInstanceID); err != nil {
+		if err := s.sessionSvc.RestartCompletedManualSession(ctx, completed.ID, completed.OwnerInstanceID); err != nil {
 			return domain.AgentSession{}, fmt.Errorf("follow up restart manual session: %w", err)
 		}
 

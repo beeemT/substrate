@@ -352,8 +352,16 @@ func (m *MockSessionRepository) ListByWorkItemID(_ context.Context, workItemID s
 		return nil, m.err
 	}
 	var result []domain.AgentSession
-	for _, id := range m.byWorkItem[workItemID] {
-		result = append(result, m.sessions[id])
+	if ids := m.byWorkItem[workItemID]; len(ids) > 0 {
+		for _, id := range ids {
+			result = append(result, m.sessions[id])
+		}
+		return result, nil
+	}
+	for _, session := range m.sessions {
+		if session.WorkItemID == workItemID {
+			result = append(result, session)
+		}
 	}
 
 	return result, nil

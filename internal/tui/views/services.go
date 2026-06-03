@@ -18,6 +18,7 @@ type Services struct {
 	Session               *service.SessionService
 	Plan                  *service.PlanService
 	Task                  *service.AgentSessionService
+	Continuation          *service.AgentSessionContinuationService
 	Question              *service.QuestionService
 	Instance              *service.InstanceService
 	Workspace             *service.WorkspaceService
@@ -36,7 +37,6 @@ type Services struct {
 	Planning       *orchestrator.PlanningService
 	Implementation *orchestrator.ImplementationService
 	ReviewPipeline *orchestrator.ReviewPipeline
-	Resumption     *orchestrator.Resumption
 	// AnswerRouter routes human answers and skips based on question phase.
 	AnswerRouter orchestrator.AnswerRouter
 	// ReviewFollowup owns Foreman lifecycle for follow-up sessions.

@@ -24,11 +24,7 @@ This plan intentionally permits larger changes. The current bugs are not isolate
 
 - `domain.LeafAgentSessions` already defines the best abstraction for current state: a session is current if it has no graph child, with legacy fallback for unlinked historical rows.
 - `tasks/agent-session-graph-plan.md` established edge semantics: implementation -> review -> reimplementation -> review, failed/interrupted -> retry/resume, completed -> follow-up.
-- `internal/orchestrator/resume.go:483` `WaitAndComplete` only terminal-transitions an agent session. It does not advance review/sub-plan/work-item state.
-- `internal/orchestrator/implementation.go:762` `ContinueAfterImplSession` is the closest existing continuation, but it is only composed by focused retry in `internal/tui/views/cmds.go:1370`.
-- `internal/tui/views/cmds.go:883` bulk resume starts replacement sessions but does not own post-completion pipeline continuation.
-- `internal/tui/views/cmds.go:1334`, `:1351`, and `:1370` block Bubble Tea commands on long-running harness/review work, violating `internal/tui/AGENTS.md`.
-- Review retry loses graph semantics: `RetrySessionCmd` retries a failed review by calling `ContinueAfterImplSession(parentImplID)`, so the replacement review is parented to the implementation instead of the failed review leaf.
+- Legacy kind-blind resume/follow-up paths and direct continuation wrappers have been removed; graph entry points now own continuation.
 
 ## Target Domain Model
 
@@ -51,7 +47,7 @@ This plan intentionally permits larger changes. The current bugs are not isolate
 
 ## New Architecture
 
-### 1. Add graph intent types
+### 1. Add graph intent types — DONE
 
 Create `internal/orchestrator/agent_graph.go` or `implementation_graph.go`.
 
@@ -84,7 +80,11 @@ type AgentGraphRunResult struct {
 
 The intent should be created by TUI/service callers but validated by the orchestrator using current DB state.
 
-### 2. Centralize graph leaf selection
+Status:
+
+- Done: `AgentGraphTrigger`, `ContinuationContext`, `AgentGraphIntent`, and `AgentGraphRunResult` exist in `internal/orchestrator/implementation.go`.
+
+### 2. Centralize graph leaf selection — DONE
 
 Add a helper near domain or service, e.g.:
 
@@ -114,11 +114,19 @@ Replace duplicate logic in:
 - `internal/tui/views/app.go:3436` focused retry checks.
 - `internal/orchestrator/implementation.go` retry reset eligibility where it currently partially reconstructs leaf behavior.
 
+Status:
+
+- Done: domain graph helpers exist as `LeafAgentSessions`, `FindLeafAgentSessionByID`, `IsLeafAgentSessionID`, `RetryableAgentSessionLeaves`, and `ResumableAgentSessionLeaves`.
+- Done: domain tests cover current leaf selection and retry/resume eligibility.
+- Done: `internal/tui/views/overview.go` action-card building now uses the domain retryable/resumable leaf helpers instead of reconstructing failed/interrupted leaf eligibility.
+- Done: `internal/tui/views/app.go` focused retry checks now validate selected sessions through `FindLeafAgentSessionByID` and only allow implementation/review failed leaves.
+- Done: focused and bulk TUI graph paths delegate eligibility to domain/orchestrator graph helpers.
+
 ### 3. Introduce an AgentRunSupervisor
 
 Create `internal/orchestrator/agent_run_supervisor.go`.
 
-Responsibilities currently duplicated across `runImplementation`, `Resumption.WaitAndComplete`, and review code:
+Responsibilities:
 
 - own the single consumer of each harness event channel
 - forward text/progress/question events from that single consumer
@@ -155,7 +163,12 @@ type AgentRunRequest struct {
 func (s *AgentRunSupervisor) Start(ctx context.Context, req AgentRunRequest) (domain.AgentSession, error)
 ```
 
-Start should return after successful harness start. The supervisor should run completion asynchronously, then call the continuation callback. TUI never calls `WaitAndComplete` directly. The supervisor may be implemented as one instance per harness/kind or with a harness selector, but the ServiceManager/constructor cutover must preserve today's separate implementation, review, resume, foreman, and manual harness ownership. Foreman is not graph-supervised.
+Start should return after successful harness start. The supervisor should run completion asynchronously, then call the continuation callback. TUI never waits on harness completion directly. The supervisor may be implemented as one instance per harness/kind or with a harness selector, but the ServiceManager/constructor cutover must preserve today's separate implementation, review, foreman, and manual harness ownership. Foreman is not graph-supervised.
+
+Status:
+
+- Done: `internal/orchestrator/agent_run_supervisor.go` exists and owns harness start, event forwarding, registry lifecycle, wait, resume-info persistence, durable complete/fail/interrupt transitions, and completion callbacks.
+- Done: implementation graph runs use `AgentRunSupervisor` for harness lifecycle.
 
 ### 4. Make ImplementationService own implementation graph progression
 
@@ -195,9 +208,16 @@ It should:
 8. Start harness through `AgentRunSupervisor`.
 9. On completed implementation session, call unified continuation.
 
-### 5. Replace `ContinueAfterImplSession` with graph-aware continuation
 
-Current `ContinueAfterImplSession(ctx, completedSessionID)` is too narrow. Replace or wrap it with:
+Status:
+
+- Done: `ImplementationService.StartImplementationGraphRun` exists and validates source leaf/kind/status/work-item/sub-plan state for implementation resume, retry, failed follow-up, and completed follow-up.
+- Done: implementation graph children are parented to the superseded implementation leaf and call `ContinueImplementationGraph` after clean harness completion.
+- Done: implementation graph child execution uses `AgentRunSupervisor`, and graph continuation rows are created atomically with the implementation session completion transition.
+
+### 5. Replace legacy continuation wrappers with graph-aware continuation — DONE
+
+Legacy direct-continuation wrappers have been removed; callers use:
 
 ```go
 type ContinuationContext struct {
@@ -220,9 +240,74 @@ Behavior:
 - Re-derive work-item state from all sub-plans. Aggregate work-item transitions must also return errors to the continuation caller.
 - Finalize completed work item if all sub-plans completed. Finalization failures are continuation failures, not warnings hidden behind a completed agent session.
 
-`ContinueImplementationGraph` must be durably fail-closed: if review, sub-plan transition, aggregate work-item transition, or finalization fails after the agent session completed, record a continuation failure tied to the completed session before returning. Acceptable mechanisms are a dedicated `agent_session.continuation_failed` event plus durable error metadata, or a first-class continuation status table. A completed implementation session with no durable continuation result is not an allowed terminal state.
+`ContinueImplementationGraph` must be durably fail-closed: if review, sub-plan transition, aggregate work-item transition, or finalization fails after the agent session completed, record a continuation failure tied to the completed session before returning. A completed implementation session with no durable continuation result is not an allowed terminal state.
 
-Eventually delete or make private `ContinueAfterImplSession`.
+Status:
+
+- Done: `ContinueImplementationGraph(ctx, ContinuationContext)` is implemented.
+- Done: compatibility wrappers `ContinueAfterImplSession` and `ContinueAfterImplSessionWithReviewParent` were deleted after TUI/orchestrator callsites moved to graph entry points.
+- Done: continuation failures during review/sub-plan/work-item/finalization are recorded durably and still emit the existing continuation-failed event.
+
+### 5a. Make continuation state first-class — DONE
+
+Do not rely only on `agent_session.continuation_failed` events or log entries. Add durable continuation state so the system can distinguish:
+
+- continuation not started
+- continuation running
+- continuation completed
+- continuation failed with retryable error
+- continuation intentionally skipped with reason
+- continuation superseded by a graph child
+
+Recommended schema:
+
+```go
+type AgentSessionContinuationStatus string
+
+const (
+    AgentSessionContinuationPending   AgentSessionContinuationStatus = "pending"
+    AgentSessionContinuationRunning   AgentSessionContinuationStatus = "running"
+    AgentSessionContinuationCompleted AgentSessionContinuationStatus = "completed"
+    AgentSessionContinuationFailed    AgentSessionContinuationStatus = "failed"
+    AgentSessionContinuationSkipped   AgentSessionContinuationStatus = "skipped"
+    AgentSessionContinuationSuperseded AgentSessionContinuationStatus = "superseded"
+)
+
+type AgentSessionContinuation struct {
+    ID             string
+    AgentSessionID string
+    WorkItemID     string
+    SubPlanID      string
+    Kind           string
+    Status         AgentSessionContinuationStatus
+    Attempt        int
+    LastError      string
+    StartedAt      *time.Time
+    CompletedAt    *time.Time
+    CreatedAt      time.Time
+    UpdatedAt      time.Time
+}
+```
+
+Persistence requirements:
+
+- Unique active continuation per `agent_session_id` and continuation `kind`.
+- Create `pending` continuation before or in the same transaction as marking an implementation session completed.
+- Transition to `running` before review/sub-plan/work-item/finalization work starts.
+- Transition to `completed` only after durable sub-plan/work-item/finalization writes finish.
+- Transition to `failed` with `LastError` when continuation cannot complete.
+- Startup recovery must find `pending`/stale `running` continuations and resume or expose retry.
+- UI should render “agent completed; continuation failed/pending” distinctly from agent-session failure.
+
+Events remain useful for notification (`agent_session.continuation_failed`), but the continuation table is the source of truth.
+
+
+Status:
+
+- Done: domain model, migration, repository, and service primitives exist.
+- Done: implementation graph continuation uses pending/running/completed/failed states.
+- Done: implementation graph completion creates the pending continuation in the same transaction as marking the implementation session completed.
+- Done: startup recovery resumes pending/running implementation continuations from `ServiceManager` rebuild/startup via `ImplementationService.RecoverContinuationsForWorkspace`; failed continuation state is exposed in completed implementation session metadata for TUI visibility.
 
 ### 6. Make review retry graph-aware
 
@@ -259,9 +344,14 @@ implementation -> failed review
 implementation -> replacement review
 ```
 
+Status:
+
+- Done: `ImplementationService.RetryReviewLeaf` validates failed/interrupted review leaves, walks ancestors to the nearest completed implementation session, and invokes graph continuation with `FirstReviewParentID = source review leaf`.
+- Done: focused tests cover ancestor walking through a review retry chain and rejecting historical non-leaf review retries.
+
 ### 7. Split resume by kind
 
-Remove kind-blind resume behavior from `Resumption.ResumeSessionWithPrompt`.
+Remove kind-blind resume behavior formerly implemented by `internal/orchestrator/resume.go`.
 
 Desired routing:
 
@@ -274,7 +364,7 @@ Desired routing:
 | foreman | interrupted/failed | foreman-specific restart/recovery only |
 | manual | any | no automated resume/retry |
 
-Keep `Resumption` only if it becomes a thin façade that routes to kind-specific orchestrators. Prefer deleting it after cutover if it has no cohesive responsibility.
+Status: Done — `internal/orchestrator/resume.go` and its legacy tests were deleted after production paths moved to kind-specific graph/planning/manual orchestrators.
 
 ### 8. Fix completed follow-up semantics
 
@@ -293,14 +383,14 @@ Do not keep both under the same UI label. Pick explicit labels, e.g.:
 - “Revise plan” -> planning follow-up.
 - “Request code changes” -> implementation graph follow-up.
 
-### 9. Make TUI actions async and event-driven
+### 9. Make TUI actions async and event-driven — DONE
 
 Change long-running commands:
 
 - `ResumeAllSessionsForWorkItemCmd`
-- `FollowUpSessionCmd`
-- `FollowUpFailedSessionCmd`
-- `RetrySessionCmd`
+- `FollowUpSessionCmd` — DONE for implementation graph dispatch
+- `FollowUpFailedSessionCmd` — DONE for implementation/review graph dispatch
+- `RetrySessionCmd` — DONE for implementation/review graph dispatch
 - `RestartPlanningCmd` if it can run agent work synchronously
 
 Pattern:
@@ -329,7 +419,13 @@ The durable state changes must arrive through event bus:
 
 Use command return messages only for “dispatch accepted” or immediate validation errors.
 
-### 10. Centralize bulk resume/retry orchestration
+Status:
+
+- Done: focused `FollowUpSessionCmd`, `FollowUpFailedSessionCmd`, and `RetrySessionCmd` now return dispatch acknowledgements immediately and run implementation/review graph continuations asynchronously.
+- Done: async errors from these focused commands are logged and sent back through `program.Send` as `ErrMsg`.
+- Done: `ResumeAllSessionsForWorkItemCmd` uses the work-item graph entry point asynchronously.
+
+### 10. Centralize bulk resume/retry orchestration — DONE
 
 Add a work-item-level graph entry point:
 
@@ -347,45 +443,85 @@ It should:
 6. Start/restart Foreman once per work item, not once per UI branch.
 7. Return accepted counts and skipped reasons.
 
+Status:
+
+- Done: `ImplementationService.ResumeRetryLeavesForWorkItem` exists, computes resumable/retryable graph leaves once, dispatches implementation and review leaves through graph entry points, routes interrupted planning leaves to planning resume when planning orchestration is wired, restarts Foreman once for graph-managed work, and returns skipped reasons for manual/unsupported leaves.
+- Done: `ResumeAllSessionsForWorkItemCmd` dispatches this graph entry point off the Bubble Tea command path when implementation orchestration is wired.
+
+### 13. Continuation persistence — DONE
+
+Add a migration and repository/service layer for `agent_session_continuations`.
+
+Files:
+
+- `migrations/023_agent_session_continuations.sql`
+- `internal/domain/session_continuation.go`
+- `internal/repository/interfaces.go`
+- `internal/repository/sqlite/session_continuation.go`
+- `internal/service/session_continuation.go`
+
+The service should provide idempotent primitives:
+
+```go
+CreatePending(ctx, agentSessionID, kind)
+Start(ctx, continuationID)
+Complete(ctx, continuationID)
+Fail(ctx, continuationID, err)
+ListRecoverable(ctx, workspaceID)
+```
+
+The graph orchestrator should use these primitives instead of inferring continuation state from `agent_sessions`, `review_cycles`, `sub_plans`, and `work_items`.
+
 The TUI should not know active sub-plan maps, leaf supersession, or kind-specific orchestration rules.
 
-### 11. Service-layer cleanup
+Status:
 
-#### `AgentSessionService.Resume`
+- Done: all listed files exist.
+- Done: service primitives exist with idempotent `CreatePending`, transition validation, `LastError` preservation, and recoverable queries.
+- Done: graph continuation uses the service primitives instead of event-only inference.
 
-Current behavior creates a running child from interrupted source and only rejects active children. Keep the primitive, but rename it to make clear it is not full orchestration:
+### 11. Service-layer cleanup — DONE
 
-```go
-CreateResumeChild(...)
-```
+#### `AgentSessionService.CreateResumeChild` — DONE
 
-It should:
+The interrupted-session primitive is named for what it does: create a running
+child from an interrupted source leaf. It is not full orchestration.
 
-- reload source inside the transaction
-- validate source status/kind if parameters include expected values
-- validate the source is still a graph leaf under the same transaction. Do not accept “no active child” as a substitute; a source with a terminal child is historical and must not spawn another sibling retry.
-- set `ParentAgentSessionID`
-- create running child
-- emit `agent_session.resumed`
+Status:
 
-#### `AgentSessionService.FollowUpFailed`
+- Done: `AgentSessionService.CreateResumeChild` accepts a source ID, reloads the source inside the transaction, validates the source is still a graph leaf, preserves kind, sets `ParentAgentSessionID`, creates a running child, and emits old/new IDs.
 
-Currently accepts a caller-supplied stale `domain.AgentSession`. Change to accept source ID and reload inside transaction:
+### `migrations/023_agent_session_continuations.sql`
 
-```go
-CreateRetryChild(ctx, sourceID string, attrs RetryChildAttrs) (domain.AgentSession, error)
-```
+- Add `agent_session_continuations` table with foreign key to `agent_sessions`.
+- Store status, kind, attempt, last_error, timestamps.
+- Add uniqueness/indexes for active continuation lookup and startup recovery.
+- Update repository structs and `db` tags together.
 
-Validate:
+### `internal/domain/session_continuation.go`
 
-- source exists
-- source is still a graph leaf under the same transaction. Do not accept “no active child” as a substitute; stale UI actions against historical nodes must fail.
-- source status matches allowed trigger
-- kind is preserved unless caller explicitly requests a different kind and that transition is allowed
+- Define continuation statuses and transition rules.
+- Keep continuation state separate from `AgentSessionStatus`; do not overload agent-session completion.
 
-#### `FollowUpRestart`
+### `internal/service/session_continuation.go`
 
-This mutates a completed row back to running. That breaks graph append-only semantics for implementation/review sessions. Deprecate/remove it for graph-managed kinds. Preserve manual-session compatibility by either keeping `FollowUpRestart` as a manual-only primitive or replacing `ManualSessionService.FollowUpCompleted` with an explicit manual-only restart path before removing the general method. Completed implementation/review follow-up should create a child node.
+- Own continuation lifecycle transitions.
+- Preserve error chains in `LastError` text and log all transition failures.
+- Provide recoverable continuation queries for startup/rebuild flows.
+
+
+#### `AgentSessionService.CreateRetryChild` — DONE
+
+The failed-session primitive is named for what it does: create a running child
+from a failed source leaf. It is not full orchestration.
+
+Status:
+
+- Done: `AgentSessionService.CreateRetryChild` accepts a source ID, reloads the source inside the transaction, validates graph-leaf status, preserves kind, creates an append-only child, and emits old/new IDs.
+
+#### `RestartCompletedManualSession`
+
+The old generic follow-up restart primitive was renamed to the manual-only `RestartCompletedManualSession`. Graph-managed implementation/review follow-up creates append-only child nodes.
 
 ### 12. Event model additions
 
@@ -399,6 +535,12 @@ Ensure all graph progression writes durable events:
 
 TUI event decoding must preserve graph link metadata. Update `internal/tui/views/event_consumer.go`, `msgs.go`, and handlers/tests so `agent_session.resumed` and `agent_session.follow_up` messages carry both old/source session ID and new session ID. Do not decode only the new session and discard the edge; UI pending state and graph leaf refreshes must be able to clear or reload the superseded source deterministically.
 Avoid UI-only completion messages for lifecycle state.
+
+Status:
+
+- Done: append-only child event payloads now include canonical `source_session_id` plus legacy `old_session_id`, top-level `agent_session_id`, and the full new session.
+- Done: TUI event decoders preserve `source_session_id`/new session IDs for resumed and follow-up messages, with tests covering canonical graph edge metadata.
+- Done: failed/completed feedback child creation now has a dedicated `CreateFollowUpChild` primitive that emits `agent_session.follow_up` with source/new IDs; legacy retry without feedback still emits `agent_session.resumed`.
 
 ## File-by-File Change Plan
 
@@ -414,7 +556,7 @@ Avoid UI-only completion messages for lifecycle state.
 
 ### `internal/service/session.go`
 
-- Replace or wrap `Resume`, `FollowUpFailed`, `FollowUpRestart` with append-only child creation primitives.
+- Replace or wrap legacy resume/follow-up row mutation primitives with append-only child creation primitives.
 - Reload source sessions inside transactions instead of trusting caller-supplied structs.
 - Preserve kind by default.
 - Add transactional graph-leaf validation; do not allow historical non-leaf sources to create sibling retries.
@@ -424,14 +566,14 @@ Avoid UI-only completion messages for lifecycle state.
 
 - Consolidate harness lifecycle logic from:
   - `ImplementationService.runImplementation`
-  - `Resumption.WaitAndComplete`
+  - legacy resumption wait loops
   - `ReviewPipeline.startReviewAgent` where practical
 - Own terminal agent-session transitions and `ResumeInfo` persistence.
 
 ### `internal/orchestrator/implementation.go`
 
 - Add graph entry points for implementation resume/retry/follow-up.
-- Replace `ContinueAfterImplSession` with graph-aware continuation or make it delegate.
+- Replace direct continuation wrappers with graph-aware continuation.
 - Pass `FirstReviewParentID` into review loop when retrying failed review leaves.
 - Remove stale compensating branches once graph continuation is idempotent.
 
@@ -442,16 +584,14 @@ Avoid UI-only completion messages for lifecycle state.
   - retry/resume review parent = failed/interrupted review leaf
 - Prefer one terminal handling path via supervisor, or clearly isolate review-specific event completion while preserving same graph callbacks.
 
-### `internal/orchestrator/resume.go`
+### `internal/orchestrator/resume.go` — REMOVED
 
-- Shrink to routing façade or delete.
-- Remove kind-blind implementation prompt construction for review sessions.
-- Remove public `WaitAndComplete` use from TUI paths.
+- Done: deleted the kind-blind resumption façade, prompt builders, follow-up helpers, and `WaitAndComplete`.
 
 ### `internal/tui/views/cmds.go`
 
 - Replace direct orchestration composition with async intent dispatch.
-- Remove `WaitAndComplete` and `ContinueAfterImplSession` calls from TUI commands.
+- Remove direct lifecycle-wait and continuation-wrapper calls from TUI commands.
 - Make command return indicate dispatch accepted, not lifecycle complete.
 - Delegate candidate selection to orchestrator.
 
@@ -500,6 +640,35 @@ Add/adjust tests in layers:
 - completed follow-up action emits correct message type
 - bulk resume candidates are not recomputed in TUI
 
+## Implementation Progress
+
+- Graph leaf helpers and tests are present in `internal/domain/session.go` and `internal/domain/session_test.go`.
+- Append-only resume/retry child creation primitives are now named `CreateResumeChild` and `CreateRetryChild`; both accept source IDs, reload source rows, and validate graph leaves transactionally.
+- Durable continuation persistence is present:
+  - migration `023_agent_session_continuations.sql`
+  - domain model `internal/domain/session_continuation.go`
+  - repository interface/resource wiring
+  - SQLite repository `internal/repository/sqlite/session_continuation.go`
+  - service primitives `internal/service/session_continuation.go`
+- `ImplementationService.ContinueImplementationGraph` now creates pending continuation state, marks it running before review/sub-plan/work-item/finalization work, completes it after durable writes, and marks it failed with `LastError` when continuation work returns an error.
+- `ImplementationService.RetryReviewLeaf` now provides the review-specific graph entry point and preserves failed-review → replacement-review parentage through `ContinueImplementationGraph`.
+- `ImplementationService.StartImplementationGraphRun` now provides the implementation graph entry point for implementation leaves and rejects historical non-leaf implementation retry sources.
+- Focused TUI follow-up/failed-follow-up/retry commands now dispatch implementation/review graph work asynchronously.
+- Focused TUI graph command async error paths now use the Bubble Tea program sender so dispatch failures surface as `ErrMsg` instead of log-only failures.
+- Bulk TUI resume now dispatches `ImplementationService.ResumeRetryLeavesForWorkItem` asynchronously when implementation orchestration is wired, so implementation/review leaves share the graph eligibility and continuation path.
+- Overview action-card candidate selection now uses `RetryableAgentSessionLeaves` and `ResumableAgentSessionLeaves`, keeping action cards aligned with graph eligibility.
+- Focused session retry now rejects superseded failed sessions and non-graph-managed failed kinds before dispatching `RetrySessionCmd`.
+- Graph lifecycle event payloads now preserve canonical source/new session IDs through service emission and TUI decoding for append-only child edges.
+- Follow-up child creation now uses `agent_session.follow_up` for explicit feedback-created failed/completed children, while plain retry/resume primitives keep `agent_session.resumed`.
+- Startup recovery now scans recoverable implementation continuations for the workspace, resumes pending/running review continuations, and leaves failed continuation rows intact instead of replaying known-failed work.
+- `AgentRunSupervisor` now centralizes implementation harness lifecycle and supports atomic completed-session + pending-continuation creation for graph continuations.
+- Bulk graph resume now routes interrupted planning leaves through `PlanningService.ResumeInterruptedPlanning` when wired and starts Foreman once before implementation/review recovery.
+- Completed implementation session metadata now includes active continuation status so pending/running/failed continuation state is visible separately from agent-session completion.
+- Legacy `Resumption` service wiring, `resume.go`, `resumption_test.go`, `resume_test.go`, direct continuation wrappers, and obsolete follow-up completion messages were removed.
+- Terminal agent-session helpers were moved out of `implementation.go` into `agent_session_terminal.go`.
+- Manual session row reuse now goes through the explicitly manual `RestartCompletedManualSession` primitive.
+- Bulk resume dispatch now propagates asynchronous graph dispatch failures through `ErrMsg`, and planning resume preserves the interrupted source session while creating a graph child.
+
 ## Migration Strategy
 
 1. Land graph helpers and tests without behavior change.
@@ -508,8 +677,8 @@ Add/adjust tests in layers:
 4. Convert review retry/resume before bulk cutover. Bulk orchestration must not route review leaves through the old kind-blind resume path; until this step is complete, bulk must skip review leaves with durable skipped reasons.
 5. Convert bulk resume/retry to graph entry point after both implementation and review leaf routes exist.
 6. Convert completed/failed follow-up semantics.
-7. Remove old TUI calls to `WaitAndComplete` and direct `ContinueAfterImplSession`.
-8. Delete or make private obsolete `Resumption` methods.
+7. Remove old TUI direct lifecycle waits and continuation-wrapper calls.
+8. Delete obsolete resumption methods.
 9. Remove compensating stale-state checks that are no longer needed, but keep idempotency guards for crash recovery.
 
 ## Acceptance Criteria

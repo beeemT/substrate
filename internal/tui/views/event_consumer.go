@@ -235,31 +235,59 @@ func decodeAgentSessionUpdated(payload string) tea.Msg {
 // for direct upsert, plus top-level work_item_id so the TUI can route the message.
 func decodeAgentSessionResumed(payload string) tea.Msg {
 	var p struct {
-		Session      domain.AgentSession `json:"session"`
-		WorkItemID   string              `json:"work_item_id"`
-		OldSessionID string              `json:"old_session_id"`
+		Session         domain.AgentSession `json:"session"`
+		WorkItemID      string              `json:"work_item_id"`
+		SessionID       string              `json:"agent_session_id"`
+		OldSessionID    string              `json:"old_session_id"`
+		SourceSessionID string              `json:"source_session_id"`
 	}
 	if err := json.Unmarshal([]byte(payload), &p); err != nil {
 		slog.Warn("failed to decode EventAgentSessionResumed payload", "error", err)
 		return nil
 	}
-	return SessionResumedMsg{WorkItemID: p.WorkItemID, AgentSession: p.Session, Message: ""}
+	sourceSessionID := p.SourceSessionID
+	if sourceSessionID == "" {
+		sourceSessionID = p.OldSessionID
+	}
+	newSessionID := p.SessionID
+	if newSessionID == "" {
+		newSessionID = p.Session.ID
+	}
+	return SessionResumedMsg{
+		WorkItemID:      p.WorkItemID,
+		AgentSession:    p.Session,
+		Message:         "",
+		SourceSessionID: sourceSessionID,
+		NewSessionID:    newSessionID,
+	}
 }
 
 // decodeAgentSessionFollowUp handles EventAgentSessionFollowUp with full agent session payload.
 func decodeAgentSessionFollowUp(payload string) tea.Msg {
 	var p struct {
-		Session    domain.AgentSession `json:"session"`
-		SessionID  string              `json:"agent_session_id"`
-		WorkItemID string              `json:"work_item_id"`
+		Session         domain.AgentSession `json:"session"`
+		SessionID       string              `json:"agent_session_id"`
+		WorkItemID      string              `json:"work_item_id"`
+		OldSessionID    string              `json:"old_session_id"`
+		SourceSessionID string              `json:"source_session_id"`
 	}
 	if err := json.Unmarshal([]byte(payload), &p); err != nil {
 		slog.Warn("failed to decode EventAgentSessionFollowUp payload", "error", err)
 		return nil
 	}
+	sourceSessionID := p.SourceSessionID
+	if sourceSessionID == "" {
+		sourceSessionID = p.OldSessionID
+	}
+	newSessionID := p.SessionID
+	if newSessionID == "" {
+		newSessionID = p.Session.ID
+	}
 	return TaskUpdatedMsg{
-		WorkItemID:   p.WorkItemID,
-		AgentSession: p.Session,
+		WorkItemID:      p.WorkItemID,
+		AgentSession:    p.Session,
+		SourceSessionID: sourceSessionID,
+		NewSessionID:    newSessionID,
 	}
 }
 

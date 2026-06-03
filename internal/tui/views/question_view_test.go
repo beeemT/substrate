@@ -19,7 +19,7 @@ func TestQuestionViewFitsRequestedSize(t *testing.T) {
 	m.SetTitle("SUB-1 · Investigate overflow")
 	m.SetQuestion(domain.Question{
 		ID:      "q-1",
-		Stage: domain.AgentSessionKindImplementation,
+		Stage:   domain.AgentSessionKindImplementation,
 		Content: "A very long agent question that should wrap within the bordered callout instead of overflowing the available pane width.",
 		Context: "repository-name-with-extra-context and a second clause that should still fit when rendered.",
 	}, "A proposed answer that is also deliberately long so the answer card has to wrap cleanly.", true)
@@ -51,7 +51,7 @@ func TestPlanningQuestionViewUsesPlannerCopyAndFitsNarrowSize(t *testing.T) {
 	m.SetTitle("SUB-2 · Plan routing")
 	m.SetQuestion(domain.Question{
 		ID:      "q-plan",
-		Stage: domain.AgentSessionKindPlanning,
+		Stage:   domain.AgentSessionKindPlanning,
 		Content: "Which migration approach should the planner use?",
 		Structured: &domain.StructuredQuestionSet{Questions: []domain.StructuredQuestion{{
 			ID:               "approach",
@@ -94,7 +94,7 @@ func TestQuestionEnterSubmitsTypedAnswer(t *testing.T) {
 	m.SetTitle("SUB-3 · Answer question")
 	m.SetQuestion(domain.Question{
 		ID:      "q-submit",
-		Stage: domain.AgentSessionKindImplementation,
+		Stage:   domain.AgentSessionKindImplementation,
 		Content: "What should the agent do next?",
 	}, "The foreman proposal is only reference text.", false)
 	m.input.SetValue("  Use the safer migration path.  ")
@@ -158,7 +158,7 @@ func TestQuestionViewScrollsLongContentAndFits(t *testing.T) {
 	m.SetTitle("SUB-4 · Long question")
 	m.SetQuestion(domain.Question{
 		ID:      "q-scroll",
-		Stage: domain.AgentSessionKindImplementation,
+		Stage:   domain.AgentSessionKindImplementation,
 		Content: strings.Join(lines, "\n"),
 	}, "", false)
 

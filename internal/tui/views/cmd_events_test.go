@@ -18,7 +18,16 @@ import (
 	"github.com/beeemT/substrate/internal/orchestrator"
 	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/service"
+	tea "github.com/charmbracelet/bubbletea"
 )
+
+type sentAsyncMsg struct {
+	msgs []tea.Msg
+}
+
+func (s *sentAsyncMsg) send(msg tea.Msg) {
+	s.msgs = append(s.msgs, msg)
+}
 
 type cmdWorkItemRepo struct{ items map[string]domain.Session }
 
@@ -294,7 +303,6 @@ type resumeAllCmdFixture struct {
 	foremanHarness *resumeAllHarness
 	workItemSvc    *service.SessionService
 	planningSvc    *orchestrator.PlanningService
-	resumption     *orchestrator.Resumption
 	sessionSvc     *service.AgentSessionService
 	planSvc        *service.PlanService
 	registry       orchestrator.SessionRegistry
@@ -322,217 +330,34 @@ func newResumeAllCmdFixture(t *testing.T, sessions []domain.AgentSession) resume
 	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo, Sessions: workItemRepo}}, publisher)
 	registry := orchestrator.NewSessionRegistry()
 	harness := &resumeAllHarness{failSubID: make(map[string]bool)}
-	resumption := orchestrator.NewResumption(harness, sessionSvc, planSvc, workItemSvc, publisher, registry, nil)
 	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: resumeAllWorkspaceRepo{}}}, publisher)
 	planningSvc, err := orchestrator.NewPlanningService(orchestrator.DefaultPlanningConfig(), nil, nil, harness, planSvc, workItemSvc, sessionSvc, publisher, workspaceSvc, registry, nil, &config.Config{})
 	if err != nil {
 		t.Fatalf("NewPlanningService: %v", err)
 	}
 
-	return resumeAllCmdFixture{sessionRepo: sessionRepo, workItemRepo: workItemRepo, harness: harness, workItemSvc: workItemSvc, planningSvc: planningSvc, resumption: resumption, sessionSvc: sessionSvc, planSvc: planSvc, registry: registry}
+	return resumeAllCmdFixture{sessionRepo: sessionRepo, workItemRepo: workItemRepo, harness: harness, workItemSvc: workItemSvc, planningSvc: planningSvc, sessionSvc: sessionSvc, planSvc: planSvc, registry: registry}
 }
 
 func resumeAllSession(id, subPlanID string, status domain.AgentSessionStatus) domain.AgentSession {
 	return domain.AgentSession{ID: id, WorkItemID: "wi-1", WorkspaceID: "ws-1", Kind: domain.AgentSessionKindImplementation, SubPlanID: subPlanID, RepositoryName: subPlanID + "-repo", WorktreePath: "/tmp/" + subPlanID, Status: status}
 }
 
-func TestResumeAllSessionsForWorkItemCmd_ResumesAll(t *testing.T) {
-	fix := newResumeAllCmdFixture(t, []domain.AgentSession{
-		resumeAllSession("sess-1", "sp-1", domain.AgentSessionInterrupted),
-		resumeAllSession("sess-2", "sp-2", domain.AgentSessionInterrupted),
-	})
+func TestSendAsyncGraphErrorSendsErrMsg(t *testing.T) {
+	t.Parallel()
+	sent := &sentAsyncMsg{}
 
-	msg := ResumeAllSessionsForWorkItemCmd(context.Background(), fix.workItemSvc, fix.planningSvc, fix.resumption, fix.sessionSvc, fix.planSvc, nil, "wi-1", "inst-1")()
-	resumed, ok := msg.(SessionResumedMsg)
+	sendAsyncGraphError(sent.send, errors.New("boom"), "sess-1")
+
+	if len(sent.msgs) != 1 {
+		t.Fatalf("sent messages = %d, want 1", len(sent.msgs))
+	}
+	errMsg, ok := sent.msgs[0].(ErrMsg)
 	if !ok {
-		t.Fatalf("msg = %T, want SessionResumedMsg", msg)
+		t.Fatalf("message = %T, want ErrMsg", sent.msgs[0])
 	}
-	if resumed.Message != "Resumed 2 tasks" {
-		t.Fatalf("message = %q, want %q", resumed.Message, "Resumed 2 tasks")
-	}
-	if len(fix.harness.starts) != 2 {
-		t.Fatalf("starts = %d, want 2", len(fix.harness.starts))
-	}
-}
-
-func TestResumeAllSessionsForWorkItemCmd_SkipsSuperseded(t *testing.T) {
-	fix := newResumeAllCmdFixture(t, []domain.AgentSession{
-		resumeAllSession("sess-old", "sp-1", domain.AgentSessionInterrupted),
-		resumeAllSession("sess-new", "sp-1", domain.AgentSessionRunning),
-	})
-
-	msg := ResumeAllSessionsForWorkItemCmd(context.Background(), fix.workItemSvc, fix.planningSvc, fix.resumption, fix.sessionSvc, fix.planSvc, nil, "wi-1", "inst-1")()
-	resumed, ok := msg.(SessionResumedMsg)
-	if !ok {
-		t.Fatalf("msg = %T, want SessionResumedMsg", msg)
-	}
-	if resumed.Message != "No resumable tasks" {
-		t.Fatalf("message = %q, want %q", resumed.Message, "No resumable tasks")
-	}
-	if len(fix.harness.starts) != 0 {
-		t.Fatalf("starts = %d, want 0", len(fix.harness.starts))
-	}
-}
-
-func TestResumeAllSessionsForWorkItemCmd_SecondDispatchDoesNotDuplicateResume(t *testing.T) {
-	fix := newResumeAllCmdFixture(t, []domain.AgentSession{
-		resumeAllSession("sess-old", "sp-1", domain.AgentSessionInterrupted),
-	})
-
-	first := ResumeAllSessionsForWorkItemCmd(context.Background(), fix.workItemSvc, fix.planningSvc, fix.resumption, fix.sessionSvc, fix.planSvc, nil, "wi-1", "inst-1")()
-	if _, ok := first.(SessionResumedMsg); !ok {
-		t.Fatalf("first msg = %T, want SessionResumedMsg", first)
-	}
-	second := ResumeAllSessionsForWorkItemCmd(context.Background(), fix.workItemSvc, fix.planningSvc, fix.resumption, fix.sessionSvc, fix.planSvc, nil, "wi-1", "inst-1")()
-	resumed, ok := second.(SessionResumedMsg)
-	if !ok {
-		t.Fatalf("second msg = %T, want SessionResumedMsg", second)
-	}
-	if resumed.Message != "No resumable tasks" {
-		t.Fatalf("second message = %q, want %q", resumed.Message, "No resumable tasks")
-	}
-	if len(fix.harness.starts) != 1 {
-		t.Fatalf("starts = %d, want 1", len(fix.harness.starts))
-	}
-}
-
-func TestResumeAllSessionsForWorkItemCmd_ResumesInterruptedLeafWithCompletedParent(t *testing.T) {
-	impl := resumeAllSession("impl-completed", "sp-1", domain.AgentSessionCompleted)
-	review := resumeAllSession("review-interrupted", "sp-1", domain.AgentSessionInterrupted)
-	review.Kind = domain.AgentSessionKindReview
-	review.ParentAgentSessionID = impl.ID
-	fix := newResumeAllCmdFixture(t, []domain.AgentSession{impl, review})
-
-	msg := ResumeAllSessionsForWorkItemCmd(context.Background(), fix.workItemSvc, fix.planningSvc, fix.resumption, fix.sessionSvc, fix.planSvc, nil, "wi-1", "inst-1")()
-	resumed, ok := msg.(SessionResumedMsg)
-	if !ok {
-		t.Fatalf("msg = %T, want SessionResumedMsg", msg)
-	}
-	if resumed.Message != "Resumed 1 task" {
-		t.Fatalf("message = %q, want %q", resumed.Message, "Resumed 1 task")
-	}
-	if len(fix.harness.starts) != 1 {
-		t.Fatalf("starts = %d, want 1", len(fix.harness.starts))
-	}
-}
-
-func TestResumeAllSessionsForWorkItemCmd_PlanningTriggersRestart(t *testing.T) {
-	planning := domain.AgentSession{ID: "sess-plan", WorkItemID: "wi-1", WorkspaceID: "ws-1", Kind: domain.AgentSessionKindPlanning, Status: domain.AgentSessionInterrupted}
-	implementation := resumeAllSession("sess-impl", "sp-1", domain.AgentSessionInterrupted)
-	fix := newResumeAllCmdFixture(t, []domain.AgentSession{planning, implementation})
-	item := fix.workItemRepo.items["wi-1"]
-	item.State = domain.SessionPlanning
-	fix.workItemRepo.items["wi-1"] = item
-
-	msg := ResumeAllSessionsForWorkItemCmd(context.Background(), fix.workItemSvc, fix.planningSvc, fix.resumption, fix.sessionSvc, fix.planSvc, nil, "wi-1", "inst-1")()
-	if _, ok := msg.(ErrMsg); !ok {
-		t.Fatalf("msg = %T, want ErrMsg from planning restart attempt", msg)
-	}
-	if len(fix.harness.starts) != 0 {
-		t.Fatalf("implementation resume starts = %d, want 0", len(fix.harness.starts))
-	}
-}
-
-func TestResumeAllSessionsForWorkItemCmd_ReportsCorrectCount(t *testing.T) {
-	fix := newResumeAllCmdFixture(t, []domain.AgentSession{
-		resumeAllSession("sess-1", "sp-1", domain.AgentSessionInterrupted),
-		resumeAllSession("sess-2", "sp-2", domain.AgentSessionInterrupted),
-		resumeAllSession("sess-3", "sp-3", domain.AgentSessionInterrupted),
-	})
-
-	msg := ResumeAllSessionsForWorkItemCmd(context.Background(), fix.workItemSvc, fix.planningSvc, fix.resumption, fix.sessionSvc, fix.planSvc, nil, "wi-1", "inst-1")()
-	resumed, ok := msg.(SessionResumedMsg)
-	if !ok {
-		t.Fatalf("msg = %T, want SessionResumedMsg", msg)
-	}
-	if resumed.Message != "Resumed 3 tasks" {
-		t.Fatalf("message = %q, want %q", resumed.Message, "Resumed 3 tasks")
-	}
-}
-
-func TestResumeAllSessionsForWorkItemCmd_NoResumableTasks(t *testing.T) {
-	fix := newResumeAllCmdFixture(t, []domain.AgentSession{
-		resumeAllSession("sess-done", "sp-1", domain.AgentSessionCompleted),
-		resumeAllSession("sess-running", "sp-2", domain.AgentSessionRunning),
-	})
-
-	msg := ResumeAllSessionsForWorkItemCmd(context.Background(), fix.workItemSvc, fix.planningSvc, fix.resumption, fix.sessionSvc, fix.planSvc, nil, "wi-1", "inst-1")()
-	resumed, ok := msg.(SessionResumedMsg)
-	if !ok {
-		t.Fatalf("msg = %T, want SessionResumedMsg", msg)
-	}
-	if resumed.Message != "No resumable tasks" {
-		t.Fatalf("message = %q, want %q", resumed.Message, "No resumable tasks")
-	}
-}
-
-func TestResumeAllSessionsForWorkItemCmd_PartialFailure(t *testing.T) {
-	fix := newResumeAllCmdFixture(t, []domain.AgentSession{
-		resumeAllSession("sess-1", "sp-1", domain.AgentSessionInterrupted),
-		resumeAllSession("sess-2", "sp-2", domain.AgentSessionInterrupted),
-		resumeAllSession("sess-3", "sp-3", domain.AgentSessionInterrupted),
-	})
-	fix.harness.failSubID["sp-2"] = true
-	fix.harness.failSubID["sp-3"] = true
-
-	msg := ResumeAllSessionsForWorkItemCmd(context.Background(), fix.workItemSvc, fix.planningSvc, fix.resumption, fix.sessionSvc, fix.planSvc, nil, "wi-1", "inst-1")()
-	resumed, ok := msg.(SessionResumedMsg)
-	if !ok {
-		t.Fatalf("msg = %T, want SessionResumedMsg", msg)
-	}
-	if resumed.Message != "Resumed 1 task" {
-		t.Fatalf("message = %q, want %q", resumed.Message, "Resumed 1 task")
-	}
-	if len(fix.harness.starts) != 3 {
-		t.Fatalf("starts = %d, want 3", len(fix.harness.starts))
-	}
-}
-
-// TestResumeAllSessionsForWorkItemCmd_SkipsManualSessions verifies that the
-// bulk-retry/resume path ignores manual sessions: an interrupted manual
-// session must NOT be resumed, and a running manual session must NOT prevent
-// an interrupted impl session in the same sub-plan from being resumed.
-func TestResumeAllSessionsForWorkItemCmd_SkipsManualSessions(t *testing.T) {
-	manualInterrupted := domain.AgentSession{
-		ID:             "manual-interrupted",
-		WorkItemID:     "wi-1",
-		WorkspaceID:    "ws-1",
-		Kind:           domain.AgentSessionKindManual,
-		SubPlanID:      "sp-2",
-		RepositoryName: "sp-2-repo",
-		WorktreePath:   "/tmp/sp-2",
-		Status:         domain.AgentSessionInterrupted,
-	}
-	manualRunning := domain.AgentSession{
-		ID:             "manual-running",
-		WorkItemID:     "wi-1",
-		WorkspaceID:    "ws-1",
-		Kind:           domain.AgentSessionKindManual,
-		SubPlanID:      "sp-1",
-		RepositoryName: "sp-1-repo",
-		WorktreePath:   "/tmp/sp-1",
-		Status:         domain.AgentSessionRunning,
-	}
-	implInterrupted := resumeAllSession("impl-interrupted", "sp-1", domain.AgentSessionInterrupted)
-
-	fix := newResumeAllCmdFixture(t, []domain.AgentSession{manualInterrupted, manualRunning, implInterrupted})
-
-	msg := ResumeAllSessionsForWorkItemCmd(context.Background(), fix.workItemSvc, fix.planningSvc, fix.resumption, fix.sessionSvc, fix.planSvc, nil, "wi-1", "inst-1")()
-	resumed, ok := msg.(SessionResumedMsg)
-	if !ok {
-		t.Fatalf("msg = %T, want SessionResumedMsg", msg)
-	}
-	// Only the impl session should be resumed; manual sessions are out of scope.
-	if resumed.Message != "Resumed 1 task" {
-		t.Fatalf("message = %q, want %q", resumed.Message, "Resumed 1 task")
-	}
-	if len(fix.harness.starts) != 1 {
-		t.Fatalf("starts = %d, want 1 (manual sessions must not be resumed)", len(fix.harness.starts))
-	}
-	for _, opts := range fix.harness.starts {
-		if opts.SubPlanID != "sp-1" {
-			t.Errorf("resumed sub-plan = %q, want sp-1 (impl) only", opts.SubPlanID)
-		}
+	if errMsg.Err == nil || !strings.Contains(errMsg.Err.Error(), "boom") {
+		t.Fatalf("error = %v, want boom", errMsg.Err)
 	}
 }
 

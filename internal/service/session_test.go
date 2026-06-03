@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -320,19 +321,20 @@ func TestSessionService_FindInterruptedByWorkspace(t *testing.T) {
 	}
 }
 
-func TestSessionService_FollowUpRestartClearsCompletedAtAndSetsOwner(t *testing.T) {
+func TestSessionService_RestartCompletedManualSessionClearsCompletedAtAndSetsOwner(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
 	svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, newTestBus())
 
 	now := time.Now()
 	session := implSession("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionCompleted)
+	session.Kind = domain.AgentSessionKindManual
 	session.CompletedAt = &now
 	repo.sessions["session-1"] = session
 
 	owner := "inst-follow-up"
-	if err := svc.FollowUpRestart(ctx, "session-1", &owner); err != nil {
-		t.Fatalf("FollowUpRestart failed: %v", err)
+	if err := svc.RestartCompletedManualSession(ctx, "session-1", &owner); err != nil {
+		t.Fatalf("RestartCompletedManualSession failed: %v", err)
 	}
 
 	got, _ := svc.Get(ctx, "session-1")
@@ -340,23 +342,38 @@ func TestSessionService_FollowUpRestartClearsCompletedAtAndSetsOwner(t *testing.
 		t.Errorf("Status = %s, want running", got.Status)
 	}
 	if got.CompletedAt != nil {
-		t.Error("CompletedAt should be nil after FollowUpRestart")
+		t.Error("CompletedAt should be nil after RestartCompletedManualSession")
 	}
 	if got.OwnerInstanceID == nil || *got.OwnerInstanceID != owner {
 		t.Fatalf("OwnerInstanceID = %v, want %q", got.OwnerInstanceID, owner)
 	}
 }
 
-func TestSessionService_FollowUpRestartRejectsNonCompleted(t *testing.T) {
+func TestSessionService_RestartCompletedManualSessionRejectsGraphManagedSession(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
 	svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, newTestBus())
 
-	repo.sessions["session-1"] = implSession("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionRunning)
+	repo.sessions["session-1"] = implSession("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionCompleted)
 
-	err := svc.FollowUpRestart(ctx, "session-1", nil)
+	err := svc.RestartCompletedManualSession(ctx, "session-1", nil)
 	if err == nil {
-		t.Fatal("expected error for FollowUpRestart on running session")
+		t.Fatal("expected error for graph-managed RestartCompletedManualSession")
+	}
+}
+
+func TestSessionService_RestartCompletedManualSessionRejectsNonCompleted(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMockSessionRepository()
+	svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, newTestBus())
+
+	session := implSession("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionRunning)
+	session.Kind = domain.AgentSessionKindManual
+	repo.sessions["session-1"] = session
+
+	err := svc.RestartCompletedManualSession(ctx, "session-1", nil)
+	if err == nil {
+		t.Fatal("expected error for RestartCompletedManualSession on running session")
 	}
 }
 
@@ -373,7 +390,7 @@ func TestSessionService_Resume_SetsParentAgentSessionID(t *testing.T) {
 	repo.sessions[interrupted.ID] = interrupted
 
 	owner := "inst-1"
-	created, err := svc.Resume(ctx, interrupted, "omp", &owner)
+	created, err := svc.CreateResumeChild(ctx, interrupted.ID, "omp", &owner)
 	if err != nil {
 		t.Fatalf("Resume failed: %v", err)
 	}
@@ -393,23 +410,79 @@ func TestSessionService_Resume_SetsParentAgentSessionID(t *testing.T) {
 	}
 }
 
-func TestSessionService_Resume_RejectsActiveResumedChild(t *testing.T) {
+func TestSessionService_ResumePayloadIncludesCanonicalGraphEdge(t *testing.T) {
+	interrupted := implSession("session-old", "wi-1", "ws-1", "sp-1", domain.AgentSessionInterrupted)
+	child := implSession("session-new", "wi-1", "ws-1", "sp-1", domain.AgentSessionRunning)
+	child.ParentAgentSessionID = interrupted.ID
+
+	payload := marshalAgentSessionPayloadWithOld(child, interrupted.ID)
+	var decoded struct {
+		WorkItemID      string              `json:"work_item_id"`
+		SessionID       string              `json:"agent_session_id"`
+		SourceSessionID string              `json:"source_session_id"`
+		OldSessionID    string              `json:"old_session_id"`
+		Session         domain.AgentSession `json:"session"`
+	}
+	if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if decoded.WorkItemID != child.WorkItemID {
+		t.Fatalf("work_item_id = %q, want %q", decoded.WorkItemID, child.WorkItemID)
+	}
+	if decoded.SessionID != child.ID {
+		t.Fatalf("agent_session_id = %q, want %q", decoded.SessionID, child.ID)
+	}
+	if decoded.SourceSessionID != interrupted.ID {
+		t.Fatalf("source_session_id = %q, want %q", decoded.SourceSessionID, interrupted.ID)
+	}
+	if decoded.OldSessionID != interrupted.ID {
+		t.Fatalf("old_session_id = %q, want %q", decoded.OldSessionID, interrupted.ID)
+	}
+	if decoded.Session.ParentAgentSessionID != interrupted.ID {
+		t.Fatalf("session.parent_agent_session_id = %q, want %q", decoded.Session.ParentAgentSessionID, interrupted.ID)
+	}
+}
+
+func TestSessionService_Resume_RejectsNonLeafSource(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()
 	svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, newTestBus())
 
 	interrupted := implSession("session-old", "wi-1", "ws-1", "sp-1", domain.AgentSessionInterrupted)
-	activeChild := implSession("session-child", "wi-1", "ws-1", "sp-1", domain.AgentSessionRunning)
-	activeChild.ParentAgentSessionID = interrupted.ID
+	terminalChild := implSession("session-child", "wi-1", "ws-1", "sp-1", domain.AgentSessionFailed)
+	terminalChild.ParentAgentSessionID = interrupted.ID
 	repo.sessions[interrupted.ID] = interrupted
-	repo.sessions[activeChild.ID] = activeChild
+	repo.sessions[terminalChild.ID] = terminalChild
 
-	_, err := svc.Resume(ctx, interrupted, "omp", nil)
-	if !errors.Is(err, ErrAgentSessionAlreadyResumed) {
-		t.Fatalf("Resume error = %v, want ErrAgentSessionAlreadyResumed", err)
+	_, err := svc.CreateResumeChild(ctx, interrupted.ID, "omp", nil)
+	if !errors.Is(err, ErrAgentSessionNotLeaf) {
+		t.Fatalf("Resume error = %v, want ErrAgentSessionNotLeaf", err)
 	}
 	if len(repo.sessions) != 2 {
 		t.Fatalf("session count = %d, want 2 (no duplicate resume child)", len(repo.sessions))
+	}
+}
+
+func TestSessionService_Resume_ReloadsSourceAndPreservesCurrentKind(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMockSessionRepository()
+	svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, newTestBus())
+
+	stale := implSession("session-old", "stale-wi", "stale-ws", "stale-sp", domain.AgentSessionInterrupted)
+	stale.Kind = domain.AgentSessionKindReview
+	current := implSession(stale.ID, "wi-1", "ws-1", "sp-1", domain.AgentSessionInterrupted)
+	current.Kind = domain.AgentSessionKindImplementation
+	repo.sessions[current.ID] = current
+
+	created, err := svc.CreateResumeChild(ctx, stale.ID, "omp", nil)
+	if err != nil {
+		t.Fatalf("Resume failed: %v", err)
+	}
+	if created.WorkItemID != current.WorkItemID {
+		t.Fatalf("created.WorkItemID = %q, want reloaded %q", created.WorkItemID, current.WorkItemID)
+	}
+	if created.Kind != current.Kind {
+		t.Fatalf("created.Kind = %q, want reloaded %q", created.Kind, current.Kind)
 	}
 }
 
@@ -426,7 +499,7 @@ func TestSessionService_FollowUpFailed_SetsParentAgentSessionID(t *testing.T) {
 	repo.sessions[failed.ID] = failed
 
 	owner := "inst-1"
-	created, err := svc.FollowUpFailed(ctx, failed, "omp", &owner)
+	created, err := svc.CreateRetryChild(ctx, failed.ID, "omp", &owner)
 	if err != nil {
 		t.Fatalf("FollowUpFailed failed: %v", err)
 	}
@@ -443,6 +516,94 @@ func TestSessionService_FollowUpFailed_SetsParentAgentSessionID(t *testing.T) {
 	}
 	if stored.ID == failed.ID {
 		t.Error("FollowUpFailed must create a new row; got same ID")
+	}
+}
+
+func TestSessionService_FollowUpChildEmitsFollowUpEvent(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMockSessionRepository()
+	bus := newTestBus()
+	sub, err := bus.Subscribe("follow-up-test", string(domain.EventAgentSessionFollowUp))
+	if err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+	svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, bus)
+
+	failed := implSession("session-failed", "wi-1", "ws-1", "sp-1", domain.AgentSessionFailed)
+	repo.sessions[failed.ID] = failed
+
+	created, err := svc.CreateFollowUpChild(ctx, failed.ID, "omp", nil)
+	if err != nil {
+		t.Fatalf("CreateFollowUpChild failed: %v", err)
+	}
+
+	select {
+	case evt := <-sub.C:
+		if evt.EventType != string(domain.EventAgentSessionFollowUp) {
+			t.Fatalf("event type = %q, want %q", evt.EventType, domain.EventAgentSessionFollowUp)
+		}
+		var decoded struct {
+			SessionID       string `json:"agent_session_id"`
+			SourceSessionID string `json:"source_session_id"`
+			OldSessionID    string `json:"old_session_id"`
+		}
+		if err := json.Unmarshal([]byte(evt.Payload), &decoded); err != nil {
+			t.Fatalf("unmarshal payload: %v", err)
+		}
+		if decoded.SessionID != created.ID {
+			t.Fatalf("agent_session_id = %q, want %q", decoded.SessionID, created.ID)
+		}
+		if decoded.SourceSessionID != failed.ID {
+			t.Fatalf("source_session_id = %q, want %q", decoded.SourceSessionID, failed.ID)
+		}
+		if decoded.OldSessionID != failed.ID {
+			t.Fatalf("old_session_id = %q, want %q", decoded.OldSessionID, failed.ID)
+		}
+	default:
+		t.Fatal("expected follow-up event")
+	}
+}
+
+func TestSessionService_FollowUpFailed_ReloadsSourceAndPreservesCurrentKind(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMockSessionRepository()
+	svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, newTestBus())
+
+	stale := implSession("session-failed", "stale-wi", "stale-ws", "stale-sp", domain.AgentSessionFailed)
+	stale.Kind = domain.AgentSessionKindReview
+	current := implSession(stale.ID, "wi-1", "ws-1", "sp-1", domain.AgentSessionFailed)
+	current.Kind = domain.AgentSessionKindImplementation
+	repo.sessions[current.ID] = current
+
+	created, err := svc.CreateRetryChild(ctx, stale.ID, "omp", nil)
+	if err != nil {
+		t.Fatalf("FollowUpFailed failed: %v", err)
+	}
+	if created.WorkItemID != current.WorkItemID {
+		t.Fatalf("created.WorkItemID = %q, want reloaded %q", created.WorkItemID, current.WorkItemID)
+	}
+	if created.Kind != current.Kind {
+		t.Fatalf("created.Kind = %q, want reloaded %q", created.Kind, current.Kind)
+	}
+}
+
+func TestSessionService_FollowUpFailed_RejectsNonLeafSource(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMockSessionRepository()
+	svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, newTestBus())
+
+	failed := implSession("session-failed", "wi-1", "ws-1", "sp-1", domain.AgentSessionFailed)
+	child := implSession("session-child", "wi-1", "ws-1", "sp-1", domain.AgentSessionFailed)
+	child.ParentAgentSessionID = failed.ID
+	repo.sessions[failed.ID] = failed
+	repo.sessions[child.ID] = child
+
+	_, err := svc.CreateRetryChild(ctx, failed.ID, "omp", nil)
+	if !errors.Is(err, ErrAgentSessionNotLeaf) {
+		t.Fatalf("FollowUpFailed error = %v, want ErrAgentSessionNotLeaf", err)
+	}
+	if len(repo.sessions) != 2 {
+		t.Fatalf("session count = %d, want 2 (no duplicate retry child)", len(repo.sessions))
 	}
 }
 

@@ -112,8 +112,10 @@ type TaskStartedMsg struct {
 
 // TaskUpdatedMsg is sent when an agent task (agent session) state changes.
 type TaskUpdatedMsg struct {
-	WorkItemID   string
-	AgentSession domain.AgentSession
+	WorkItemID      string
+	AgentSession    domain.AgentSession
+	SourceSessionID string
+	NewSessionID    string
 }
 
 // ForemanStartedMsg is sent when a foreman starts for a work item.
@@ -280,10 +282,12 @@ type RestartPlanMsg struct {
 // or sent by the event consumer
 // when EventAgentSessionResumed is received.
 type SessionResumedMsg struct {
-	Message       string
-	WorkItemID    string
-	ForemanPlanID string
-	AgentSession  domain.AgentSession // Full agent session for direct upsert
+	Message         string
+	WorkItemID      string
+	ForemanPlanID   string
+	AgentSession    domain.AgentSession // Full agent session for direct upsert
+	SourceSessionID string
+	NewSessionID    string
 }
 
 // PlanningRestartedMsg is returned by RestartPlanningCmd after the planning
@@ -666,12 +670,6 @@ type FollowUpSessionMsg struct {
 type FollowUpFailedSessionMsg struct {
 	TaskID   string
 	Feedback string
-}
-
-// FollowUpSessionCompleteMsg signals that a follow-up agent session has finished.
-// Sent by both FollowUpSessionCmd and FollowUpFailedSessionCmd once the harness exits.
-type FollowUpSessionCompleteMsg struct {
-	WorkItemID string
 }
 
 // FollowUpPlanMsg requests a follow-up re-planning for a completed work item.

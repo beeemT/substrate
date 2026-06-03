@@ -21,7 +21,7 @@ func TestEventConsumer_toMsg_AgentSessionStarted(t *testing.T) {
 		ID:          "01KR0WZPRFCRY356KBNH45ANKT",
 		WorkItemID:  "01KR0NAP6ZW1AAZJGSN6DE4AEE",
 		WorkspaceID: "01KP3EBN5HTYJ7RN86VQQ5EZQP",
-		Kind: domain.AgentSessionKindPlanning,
+		Kind:        domain.AgentSessionKindPlanning,
 		HarnessName: "omp",
 		Status:      domain.AgentSessionRunning,
 		StartedAt:   &startedAt,
@@ -76,7 +76,7 @@ func TestEventConsumer_toMsg_AgentSessionUpdated(t *testing.T) {
 		ID:          "01KR0NBYZVA3NNQNT6AEKFMDBV",
 		WorkItemID:  "01KR0NAP6ZW1AAZJGSN6DE4AEE",
 		WorkspaceID: "01KP3EBN5HTYJ7RN86VQQ5EZQP",
-		Kind: domain.AgentSessionKindPlanning,
+		Kind:        domain.AgentSessionKindPlanning,
 		HarnessName: "omp",
 		Status:      domain.AgentSessionFailed,
 		StartedAt:   &startedAt,
@@ -118,6 +118,60 @@ func TestEventConsumer_toMsg_AgentSessionUpdated(t *testing.T) {
 	}
 }
 
+func TestEventConsumer_toMsg_AgentSessionResumedPreservesGraphLink(t *testing.T) {
+	app := &App{}
+	sub := &event.Subscriber{}
+	ec := NewEventConsumer(app, sub)
+
+	now := time.Now()
+	task := domain.AgentSession{
+		ID:                   "new-resumed-session",
+		WorkItemID:           "wi-resumed",
+		WorkspaceID:          "ws-resumed",
+		Kind:                 domain.AgentSessionKindImplementation,
+		HarnessName:          "omp",
+		Status:               domain.AgentSessionRunning,
+		ParentAgentSessionID: "old-interrupted-session",
+		CreatedAt:            now,
+		UpdatedAt:            now,
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"session":           task,
+		"work_item_id":      task.WorkItemID,
+		"agent_session_id":  task.ID,
+		"source_session_id": "old-interrupted-session",
+		"old_session_id":    "legacy-old-interrupted-session",
+	})
+	evt := domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   string(domain.EventAgentSessionResumed),
+		WorkspaceID: task.WorkspaceID,
+		Payload:     string(payload),
+		CreatedAt:   now,
+	}
+
+	msg := ec.toMsg(evt)
+	if msg == nil {
+		t.Fatal("expected non-nil message")
+	}
+	typed, ok := msg.(SessionResumedMsg)
+	if !ok {
+		t.Fatalf("expected SessionResumedMsg, got %T", msg)
+	}
+	if typed.WorkItemID != task.WorkItemID {
+		t.Errorf("WorkItemID = %q, want %q", typed.WorkItemID, task.WorkItemID)
+	}
+	if typed.AgentSession.ID != task.ID {
+		t.Errorf("AgentSession.ID = %q, want %q", typed.AgentSession.ID, task.ID)
+	}
+	if typed.SourceSessionID != "old-interrupted-session" {
+		t.Errorf("SourceSessionID = %q, want %q", typed.SourceSessionID, "old-interrupted-session")
+	}
+	if typed.NewSessionID != task.ID {
+		t.Errorf("NewSessionID = %q, want %q", typed.NewSessionID, task.ID)
+	}
+}
+
 func TestEventConsumer_toMsg_AgentSessionFollowUp(t *testing.T) {
 	app := &App{}
 	sub := &event.Subscriber{}
@@ -129,7 +183,7 @@ func TestEventConsumer_toMsg_AgentSessionFollowUp(t *testing.T) {
 		ID:              "01KS2YJY",
 		WorkItemID:      "wi-follow-up",
 		WorkspaceID:     "ws-follow-up",
-		Kind: domain.AgentSessionKindImplementation,
+		Kind:            domain.AgentSessionKindImplementation,
 		HarnessName:     "omp",
 		Status:          domain.AgentSessionRunning,
 		StartedAt:       &startedAt,
@@ -139,9 +193,10 @@ func TestEventConsumer_toMsg_AgentSessionFollowUp(t *testing.T) {
 		UpdatedAt:       now,
 	}
 	payload, _ := json.Marshal(map[string]any{
-		"session":          task,
-		"work_item_id":     task.WorkItemID,
-		"agent_session_id": task.ID,
+		"session":           task,
+		"work_item_id":      task.WorkItemID,
+		"agent_session_id":  task.ID,
+		"source_session_id": "source-follow-up",
 	})
 	evt := domain.SystemEvent{
 		ID:          domain.NewID(),
@@ -173,6 +228,12 @@ func TestEventConsumer_toMsg_AgentSessionFollowUp(t *testing.T) {
 	}
 	if typed.AgentSession.OwnerInstanceID == nil || *typed.AgentSession.OwnerInstanceID != "inst-follow-up" {
 		t.Errorf("OwnerInstanceID = %v, want inst-follow-up", typed.AgentSession.OwnerInstanceID)
+	}
+	if typed.SourceSessionID != "source-follow-up" {
+		t.Errorf("SourceSessionID = %q, want %q", typed.SourceSessionID, "source-follow-up")
+	}
+	if typed.NewSessionID != task.ID {
+		t.Errorf("NewSessionID = %q, want %q", typed.NewSessionID, task.ID)
 	}
 }
 

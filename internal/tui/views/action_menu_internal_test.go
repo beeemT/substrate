@@ -268,6 +268,35 @@ func TestActionRegistryIncludesWorktreePickerActions(t *testing.T) {
 	}
 }
 
+func TestCompletedSubmitFeedbackActionEmitsPlanFollowUp(t *testing.T) {
+	app := newSidebarDrilldownTestApp()
+	app.content.SetMode(ContentModeOverview)
+	app.content.overview.overlay = overviewOverlayCompleted
+	app.content.overview.completed.SetWorkItemID(app.currentWorkItemID)
+	_ = app.content.overview.completed.OpenFeedback()
+	app.content.overview.completed.feedbackInput.SetValue("please revise the completed plan")
+
+	action := findAction(completedActions(app), "submit_feedback")
+	if action == nil {
+		t.Fatalf("completed actions missing submit_feedback: %#v", actionIDs(completedActions(app)))
+	}
+
+	msg := action.Handler(app)()
+	if _, ok := msg.(FollowUpSessionMsg); ok {
+		t.Fatal("completed feedback emitted FollowUpSessionMsg")
+	}
+	followUp, ok := msg.(FollowUpPlanMsg)
+	if !ok {
+		t.Fatalf("handler msg = %#v, want FollowUpPlanMsg", msg)
+	}
+	if followUp.WorkItemID != app.currentWorkItemID {
+		t.Fatalf("WorkItemID = %q, want %q", followUp.WorkItemID, app.currentWorkItemID)
+	}
+	if followUp.Feedback != "please revise the completed plan" {
+		t.Fatalf("Feedback = %q", followUp.Feedback)
+	}
+}
+
 func findAction(actions []Action, id string) *Action {
 	for i := range actions {
 		if actions[i].ID == id {

@@ -549,7 +549,6 @@ func TestAddRepoOverlay_ViewFitsSize_AfterFilterToggle(t *testing.T) {
 	assertViewFitsSize(t, m.View(), 120, 40)
 }
 
-
 // navigateToList moves focus from the default search control into the repo list.
 func navigateToList(t *testing.T, m views.AddRepoOverlay) views.AddRepoOverlay {
 	t.Helper()

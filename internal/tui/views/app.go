@@ -216,6 +216,12 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 	program *tea.Program
 }
 
+func (a *App) sendAsyncMsg(msg tea.Msg) {
+	if a != nil && a.program != nil {
+		a.program.Send(msg)
+	}
+}
+
 // NewApp creates a new App from the given ServiceProvider and RuntimeContext.
 func NewApp(provider ServiceProvider, runtimeCtx RuntimeContext) *App {
 	st := styles.NewStyles(styles.DefaultTheme)
@@ -2088,7 +2094,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case FollowUpSessionMsg:
-		if a.provider.Resumption() != nil && a.provider.Task() != nil && msg.TaskID != "" && msg.Feedback != "" {
+		if a.provider.Task() != nil && a.provider.Implementation() != nil && msg.TaskID != "" && msg.Feedback != "" {
 			// Find workItemID for this task
 			workItemID := ""
 			for _, s := range a.sessions {
@@ -2099,7 +2105,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if workItemID != "" {
 				ctx := a.pipelineCtxForTask(msg.TaskID)
-				cmds = append(cmds, FollowUpSessionCmd(ctx, a.provider.Resumption(), a.provider.Task(), msg.TaskID, msg.Feedback, a.runtimeCtx.InstanceID))
+				cmds = append(cmds, FollowUpSessionCmd(ctx, a.provider.Task(), a.provider.Implementation(), a.sendAsyncMsg, msg.TaskID, msg.Feedback, a.runtimeCtx.InstanceID))
 				// Restart foreman with follow-up context
 				cmds = append(cmds, FollowUpOrchestratedCmd(a.provider.ReviewFollowup(), workItemID, msg.Feedback))
 			}
@@ -2108,7 +2114,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case FollowUpFailedSessionMsg:
-		if a.provider.Resumption() != nil && a.provider.Task() != nil && msg.TaskID != "" && msg.Feedback != "" {
+		if a.provider.Task() != nil && a.provider.Implementation() != nil && msg.TaskID != "" && msg.Feedback != "" {
 			// Find workItemID for this task
 			workItemID := ""
 			for _, s := range a.sessions {
@@ -2119,19 +2125,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if workItemID != "" {
 				ctx := a.pipelineCtxForTask(msg.TaskID)
-				cmds = append(cmds, FollowUpFailedSessionCmd(ctx, a.provider.Resumption(), a.provider.Task(), msg.TaskID, msg.Feedback, a.runtimeCtx.InstanceID))
+				cmds = append(cmds, FollowUpFailedSessionCmd(ctx, a.provider.Task(), a.provider.Implementation(), a.sendAsyncMsg, msg.TaskID, msg.Feedback, a.runtimeCtx.InstanceID))
 				// Restart foreman with failed follow-up context
 				cmds = append(cmds, FollowUpFailedOrchestratedCmd(a.provider.ReviewFollowup(), workItemID, msg.Feedback))
 			}
 			a.toasts.AddToast("Follow-up session started for failed task", components.ToastSuccess)
 		}
-		return a, tea.Batch(cmds...)
-
-	case FollowUpSessionCompleteMsg:
-		a.cancelPipeline(msg.WorkItemID)
-		a.toasts.AddToast("Follow-up session complete", components.ToastSuccess)
-		// Reload tasks for the specific work item
-		cmds = append(cmds, LoadTasksForSessionCmd(a.provider.Task(), msg.WorkItemID))
 		return a, tea.Batch(cmds...)
 
 	case FollowUpPlanMsg:
@@ -2254,22 +2253,18 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.resumeInFlight[msg.WorkItemID] = true
 		cmds = append(cmds, a.updateContentFromState())
-		if a.provider.Resumption() != nil {
-			cmds = append(cmds, ResumeAllSessionsForWorkItemCmd(
-				context.Background(),
-				a.provider.Session(),
-				a.provider.Planning(),
-				a.provider.Resumption(),
-				a.provider.Task(),
-				a.provider.Plan(),
-				a.provider.Implementation(),
-				msg.WorkItemID,
-				a.runtimeCtx.InstanceID,
-			))
-		} else {
-			a.toasts.AddToast("Resume not available (no resumption service)", components.ToastError)
+		if a.provider.Implementation() == nil {
+			a.toasts.AddToast("Resume not available (no implementation service)", components.ToastError)
 			delete(a.resumeInFlight, msg.WorkItemID)
+			return a, tea.Batch(cmds...)
 		}
+		cmds = append(cmds, ResumeAllSessionsForWorkItemCmd(
+			context.Background(),
+			a.provider.Implementation(),
+			a.sendAsyncMsg,
+			msg.WorkItemID,
+			a.runtimeCtx.InstanceID,
+		))
 		return a, tea.Batch(cmds...)
 
 	case AbandonSessionMsg:
@@ -3047,7 +3042,7 @@ func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		if sessionID := a.retryableFocusedSessionID(); sessionID != "" {
 			ctx := a.pipelineCtxForSession(sessionID)
-			return a, RetrySessionCmd(ctx, a.provider.Resumption(), a.provider.Task(), a.provider.Implementation(), sessionID, a.runtimeCtx.InstanceID)
+			return a, RetrySessionCmd(ctx, a.provider.Task(), a.provider.Implementation(), a.sendAsyncMsg, sessionID, a.runtimeCtx.InstanceID)
 		}
 	case keyEsc, "left":
 		if a.mainFocus == mainFocusContent {
@@ -3320,6 +3315,15 @@ func (a *App) showTaskContent(wi *domain.Session, agentSession *domain.AgentSess
 		metaParts = append(metaParts, agentSession.HarnessName)
 	}
 	metaParts = append(metaParts, taskSessionDisplayName(agentSession))
+	if agentSession.Status == domain.AgentSessionCompleted && agentSession.Kind == domain.AgentSessionKindImplementation {
+		if continuationSvc := a.provider.Continuation(); continuationSvc != nil {
+			continuationCtx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+			if continuation, err := continuationSvc.GetActive(continuationCtx, agentSession.ID, "implementation_review"); err == nil {
+				metaParts = append(metaParts, "continuation "+string(continuation.Status))
+			}
+			cancel()
+		}
+	}
 	a.content.sessionLog.SetNotice(a.sourceDetailsNoticeForWorkItem(wi))
 	if agentSession.Kind == domain.AgentSessionKindPlanning {
 		a.content.SetMode(ContentModeAgentSession)
@@ -3465,30 +3469,40 @@ func (a App) retryableFocusedSessionID() string {
 		return ""
 	}
 
-	// When focused on a specific session in content, retry only that session if it's failed.
+	// When focused on a specific session in content, retry only current failed
+	// graph-managed leaves. Historical non-leaf failures are read-only.
 	if a.mainFocus == mainFocusContent && a.content.Mode() == ContentModeAgentSession {
-		if sessionID := a.content.sessionLog.SessionID(); sessionID != "" {
-			if session := a.workItemTaskSession(a.currentWorkItemID, sessionID); session != nil && session.Status == domain.AgentSessionFailed {
-				return sessionID
-			}
-		}
-		return ""
+		return a.retryableGraphLeafSessionID(a.content.sessionLog.SessionID())
 	}
 
-	// When focused on a session in the task sidebar, retry only that session if it's failed.
-	// Foreman sessions do not support retry.
+	// When focused on a session in the task sidebar, retry only current failed
+	// graph-managed leaves. Foreman/manual/planning rows use kind-specific flows.
 	if a.mainFocus == mainFocusSidebar && a.sidebarMode == sidebarPaneTasks {
 		selectedID := a.selectedTaskSessionID()
 		if selectedID != "" && selectedID != taskSidebarSourceDetailsID && selectedID != taskSidebarArtifactsID {
-			if session := a.workItemTaskSession(a.currentWorkItemID, selectedID); session != nil && session.Kind != domain.AgentSessionKindForeman && session.Status == domain.AgentSessionFailed {
-				return session.ID
-			}
+			return a.retryableGraphLeafSessionID(selectedID)
 		}
 		return ""
 	}
 
 	// In overview/sessions mode, no direct session retry - use overview retry instead.
 	return ""
+}
+
+func (a App) retryableGraphLeafSessionID(sessionID string) string {
+	if sessionID == "" {
+		return ""
+	}
+	leaf, ok := domain.FindLeafAgentSessionByID(a.sessionsForWorkItem(a.currentWorkItemID), sessionID)
+	if !ok || leaf.Status != domain.AgentSessionFailed {
+		return ""
+	}
+	switch leaf.Kind {
+	case domain.AgentSessionKindImplementation, domain.AgentSessionKindReview:
+		return leaf.ID
+	default:
+		return ""
+	}
 }
 
 // pipelineCtxForSession returns a cancellable pipeline context for the given session's work item.

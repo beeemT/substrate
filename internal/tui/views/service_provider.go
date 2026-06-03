@@ -27,6 +27,7 @@ type ServiceProvider interface {
 	Session() *service.SessionService
 	Plan() *service.PlanService
 	Task() *service.AgentSessionService
+	Continuation() *service.AgentSessionContinuationService
 	Question() *service.QuestionService
 	Instance() *service.InstanceService
 	Workspace() *service.WorkspaceService
@@ -47,7 +48,6 @@ type ServiceProvider interface {
 	Planning() *orchestrator.PlanningService
 	Implementation() *orchestrator.ImplementationService
 	ReviewPipeline() *orchestrator.ReviewPipeline
-	Resumption() *orchestrator.Resumption
 	// AnswerRouter routes human answers based on question phase.
 	AnswerRouter() orchestrator.AnswerRouter
 	// ReviewFollowup owns Foreman lifecycle for follow-up sessions.
