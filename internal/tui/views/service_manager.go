@@ -317,19 +317,10 @@ func (sm *ServiceManager) buildServicesWithOptions(ctx context.Context, cfg *con
 		implSvc = orchestrator.NewImplementationService(cfg, harnesses.Implementation, gitClient, bus, planSvc, workItemSvc, sessionSvc, continuationSvc, workspaceSvc, registry, reviewPipeline, harnesses.Foreman, questionSvc, reviewSvc, hookRegistry)
 		implSvc.SetPlanningService(planningSvc)
 	}
-	if implSvc != nil && current.WorkspaceID != "" && serviceManagerHasContinuationRepository(sm.transacter) {
-		recoveryCtx := context.WithoutCancel(ctx)
-		go func(workspaceID string) {
-			result, recoverErr := implSvc.RecoverContinuationsForWorkspace(recoveryCtx, workspaceID)
-			if recoverErr != nil {
-				slog.Error("recover implementation continuations failed", "workspace_id", workspaceID, "error", recoverErr)
-				return
-			}
-			if result.Recovered > 0 || len(result.Skipped) > 0 {
-				slog.Debug("implementation continuation recovery completed", "workspace_id", workspaceID, "recovered", result.Recovered, "skipped", len(result.Skipped))
-			}
-		}(current.WorkspaceID)
-	}
+
+	// Do not recover implementation continuations on startup. Recovery can
+	// start review agents and mutate work-item state, so it is intentionally
+	// dispatched only from explicit operator resume actions.
 
 	// Build QuestionRouter for stage-aware question routing.
 	// Foreman is looked up dynamically per question via registry.
@@ -415,13 +406,6 @@ func (sm *ServiceManager) buildServicesWithOptions(ctx context.Context, cfg *con
 		WorkspaceDir:    current.WorkspaceDir,
 		WorkspaceName:   current.WorkspaceName,
 	}, nil
-}
-
-func serviceManagerHasContinuationRepository(transacter atomic.Transacter[repository.Resources]) bool {
-	if noop, ok := transacter.(repository.NoopTransacter); ok {
-		return noop.Res.AgentSessionContinuations != nil
-	}
-	return true
 }
 
 // wireAdapterToBus bridges an adapter to the event bus with retry logic.

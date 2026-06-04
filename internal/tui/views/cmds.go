@@ -893,6 +893,17 @@ func ResumeAllSessionsForWorkItemCmd(
 		}
 		dispatchCtx := context.WithoutCancel(ctx)
 		go func() {
+			recovery, err := implSvc.RecoverContinuationsForWorkItem(dispatchCtx, workItemID)
+			if err != nil {
+				slog.Error("recover continuation work failed", "error", err, "work_item_id", workItemID)
+				if send != nil {
+					send(ErrMsg{Err: err})
+				}
+				return
+			}
+			if recovery.Recovered > 0 || len(recovery.Skipped) > 0 {
+				slog.Debug("manual continuation recovery completed", "work_item_id", workItemID, "recovered", recovery.Recovered, "skipped", len(recovery.Skipped))
+			}
 			result, err := implSvc.ResumeRetryLeavesForWorkItem(dispatchCtx, workItemID, orchestrator.ResumeRetryModeResumeInterrupted, instanceID)
 			if err != nil {
 				slog.Error("resume graph leaves failed", "error", err, "work_item_id", workItemID)

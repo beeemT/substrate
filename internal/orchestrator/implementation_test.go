@@ -2027,6 +2027,68 @@ func TestRecoverContinuationsForWorkspace_ResumesPendingContinuation(t *testing.
 	}
 }
 
+func TestRecoverContinuationsForWorkItem_OnlyRecoversRequestedWorkItem(t *testing.T) {
+	ctx := context.Background()
+	planRepo := newMockPlanRepo()
+	subPlanRepo := newMockSubPlanRepo()
+	sessionRepo := newMockSessionRepo()
+	continuationRepo := newImplementationContinuationRepo()
+	workItemRepo := &implementationWorkItemRepo{items: map[string]domain.Session{
+		"wi-1": {ID: "wi-1", WorkspaceID: "ws-1", State: domain.SessionImplementing, ExternalID: "ISS-1", Title: "One"},
+		"wi-2": {ID: "wi-2", WorkspaceID: "ws-1", State: domain.SessionImplementing, ExternalID: "ISS-2", Title: "Two"},
+	}}
+	workspaceRepo := &implementationWorkspaceRepo{workspaces: map[string]domain.Workspace{
+		"ws-1": {ID: "ws-1", RootPath: t.TempDir(), Status: domain.WorkspaceReady},
+	}}
+	planRepo.plans["plan-1"] = domain.Plan{ID: "plan-1", WorkItemID: "wi-1"}
+	subPlanRepo.subPlans["sp-1"] = domain.TaskPlan{ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a", Status: domain.SubPlanInProgress}
+	subPlanRepo.subPlans["sp-blocker"] = domain.TaskPlan{ID: "sp-blocker", PlanID: "plan-1", RepositoryName: "repo-blocker", Status: domain.SubPlanPending}
+	sessionRepo.sessions["impl-1"] = domain.AgentSession{
+		ID:             "impl-1",
+		WorkItemID:     "wi-1",
+		WorkspaceID:    "ws-1",
+		Kind:           domain.AgentSessionKindImplementation,
+		SubPlanID:      "sp-1",
+		RepositoryName: "repo-a",
+		WorktreePath:   t.TempDir(),
+		HarnessName:    "mock",
+		Status:         domain.AgentSessionCompleted,
+		CreatedAt:      time.Now(),
+	}
+	now := time.Now()
+	for _, continuation := range []domain.AgentSessionContinuation{
+		{ID: "cont-1", AgentSessionID: "impl-1", WorkItemID: "wi-1", SubPlanID: "sp-1", Kind: implementationReviewContinuationKind, Status: domain.AgentSessionContinuationPending, Attempt: 1, CreatedAt: now, UpdatedAt: now},
+		{ID: "cont-2", AgentSessionID: "missing-impl-2", WorkItemID: "wi-2", SubPlanID: "sp-2", Kind: implementationReviewContinuationKind, Status: domain.AgentSessionContinuationPending, Attempt: 1, CreatedAt: now, UpdatedAt: now},
+	} {
+		if err := continuationRepo.Create(ctx, continuation); err != nil {
+			t.Fatalf("seed continuation: %v", err)
+		}
+	}
+	bus := event.NewBus(event.BusConfig{})
+	svc := &ImplementationService{
+		planSvc:         service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo, Sessions: workItemRepo}}, bus),
+		workItemSvc:     service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, bus),
+		sessionSvc:      service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo}}, bus),
+		continuationSvc: service.NewAgentSessionContinuationService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo, AgentSessionContinuations: continuationRepo}}),
+		workspaceSvc:    service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, bus),
+		eventBus:        bus,
+	}
+
+	result, err := svc.RecoverContinuationsForWorkItem(ctx, "wi-1")
+	if err != nil {
+		t.Fatalf("RecoverContinuationsForWorkItem failed: %v", err)
+	}
+	if result.Recovered != 1 || len(result.Skipped) != 0 {
+		t.Fatalf("recovery result = %+v, want one recovered", result)
+	}
+	if got := continuationRepo.items["cont-1"].Status; got != domain.AgentSessionContinuationCompleted {
+		t.Fatalf("cont-1 status = %s, want completed", got)
+	}
+	if got := continuationRepo.items["cont-2"].Status; got != domain.AgentSessionContinuationPending {
+		t.Fatalf("cont-2 status = %s, want pending", got)
+	}
+}
+
 func TestRecoverContinuationsForWorkspace_SkipsFailedContinuation(t *testing.T) {
 	ctx := context.Background()
 	sessionRepo := newMockSessionRepo()

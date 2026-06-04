@@ -1638,6 +1638,68 @@ func TestOverviewShowsFinalizeActionForCompletedButImplementingWorkItem(t *testi
 	}
 }
 
+func TestOverviewShowsManualContinuationRecoveryAction(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	app := newTestApp(Services{WorkspaceID: "ws-local", WorkspaceName: "local", Settings: newTestSettingsService()})
+	workItem := domain.Session{
+		ID:          "wi-continuation",
+		WorkspaceID: "ws-local",
+		Title:       "Continuation stuck work",
+		State:       domain.SessionImplementing,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	plan := &domain.Plan{ID: "plan-1", WorkItemID: "wi-continuation", Status: domain.PlanApproved}
+	subPlans := []domain.TaskPlan{{ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a", Status: domain.SubPlanInProgress}}
+	app.plans["wi-continuation"] = plan
+	app.subPlans["plan-1"] = subPlans
+	app.sessions = []domain.AgentSession{{
+		ID:             "impl-1",
+		WorkItemID:     "wi-continuation",
+		WorkspaceID:    "ws-local",
+		SubPlanID:      "sp-1",
+		RepositoryName: "repo-a",
+		Kind:           domain.AgentSessionKindImplementation,
+		Status:         domain.AgentSessionCompleted,
+		UpdatedAt:      now,
+	}}
+
+	actions := app.buildOverviewActions(&workItem, plan, subPlans)
+	if len(actions) != 1 {
+		t.Fatalf("actions len = %d, want 1: %#v", len(actions), actions)
+	}
+	if actions[0].Kind != overviewActionInterrupted {
+		t.Fatalf("action kind = %q, want %q", actions[0].Kind, overviewActionInterrupted)
+	}
+	if actions[0].Title != "Continuation needs recovery" {
+		t.Fatalf("action title = %q, want continuation recovery", actions[0].Title)
+	}
+
+	m := NewSessionOverviewModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetTerminalSize(100, 30)
+	m.SetSize(90, 24)
+	m.SetData(SessionOverviewData{
+		WorkItemID: "wi-continuation",
+		State:      domain.SessionImplementing,
+		Actions:    actions,
+	})
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	if cmd == nil {
+		t.Fatal("pressing r on continuation recovery action must return a command")
+	}
+	msg := cmd()
+	resumeMsg, ok := msg.(ResumeSessionMsg)
+	if !ok {
+		t.Fatalf("expected ResumeSessionMsg, got %T", msg)
+	}
+	if resumeMsg.WorkItemID != "wi-continuation" {
+		t.Fatalf("ResumeSessionMsg.WorkItemID = %q, want wi-continuation", resumeMsg.WorkItemID)
+	}
+}
+
 // TestOverviewBuildActions_SkipsManualSession_WaitingForAnswer verifies that
 // a manual session in waiting_for_answer status does NOT surface a question
 // action card on the work-item overview. Manual sessions are user-driven side

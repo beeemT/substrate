@@ -1200,11 +1200,28 @@ func nearestCompletedImplementationAncestor(source domain.AgentSession, sessions
 	return domain.AgentSession{}, fmt.Errorf("review session %s has no implementation ancestor", source.ID)
 }
 
+// RecoverContinuationsForWorkItem resumes interrupted implementation
+// continuation work for one work item after an explicit operator action.
+func (s *ImplementationService) RecoverContinuationsForWorkItem(ctx context.Context, workItemID string) (ContinuationRecoveryResult, error) {
+	if workItemID == "" {
+		return ContinuationRecoveryResult{}, fmt.Errorf("work item id is required")
+	}
+	workItem, err := s.workItemSvc.Get(ctx, workItemID)
+	if err != nil {
+		return ContinuationRecoveryResult{}, fmt.Errorf("get work item: %w", err)
+	}
+	return s.recoverContinuations(ctx, workItem.WorkspaceID, workItemID)
+}
+
 // RecoverContinuationsForWorkspace resumes interrupted implementation
 // continuation work that was durably left pending or running by a prior process.
 // Failed continuations are returned as skipped so UI/retry surfaces can expose
 // the recorded error instead of silently replaying a known-bad continuation.
 func (s *ImplementationService) RecoverContinuationsForWorkspace(ctx context.Context, workspaceID string) (ContinuationRecoveryResult, error) {
+	return s.recoverContinuations(ctx, workspaceID, "")
+}
+
+func (s *ImplementationService) recoverContinuations(ctx context.Context, workspaceID, workItemID string) (ContinuationRecoveryResult, error) {
 	if workspaceID == "" {
 		return ContinuationRecoveryResult{}, fmt.Errorf("workspace id is required")
 	}
@@ -1215,6 +1232,9 @@ func (s *ImplementationService) RecoverContinuationsForWorkspace(ctx context.Con
 
 	result := ContinuationRecoveryResult{}
 	for _, continuation := range continuations {
+		if workItemID != "" && continuation.WorkItemID != workItemID {
+			continue
+		}
 		if continuation.Kind != implementationReviewContinuationKind {
 			result.Skipped = append(result.Skipped, ContinuationRecoverySkipped{
 				ContinuationID: continuation.ID,

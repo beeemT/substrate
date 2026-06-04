@@ -1544,6 +1544,9 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 	if reviewAction := a.buildReviewActionCard(wi, subPlans); reviewAction != nil {
 		actions = append(actions, *reviewAction)
 	}
+	if continuationAction := a.buildContinuationRecoveryActionCard(wi, subPlans); continuationAction != nil {
+		actions = append(actions, *continuationAction)
+	}
 	if failedAction := a.buildFailedActionCard(wi, subPlans); failedAction != nil {
 		actions = append(actions, *failedAction)
 	}
@@ -1702,6 +1705,72 @@ func buildInterruptedTasksActionCard(sessions []domain.AgentSession, canAct func
 		Session:             &session,
 		InterruptedSessions: append([]domain.AgentSession(nil), sessions...),
 		CanAct:              allowed,
+	}
+}
+
+func (a *App) buildContinuationRecoveryActionCard(wi *domain.Session, subPlans []domain.TaskPlan) *OverviewActionCard {
+	if wi.State != domain.SessionImplementing || len(subPlans) == 0 {
+		return nil
+	}
+
+	incompleteSubPlans := make(map[string]string)
+	for _, subPlan := range subPlans {
+		if subPlan.Status == domain.SubPlanPending || subPlan.Status == domain.SubPlanInProgress {
+			incompleteSubPlans[subPlan.ID] = subPlan.RepositoryName
+		}
+	}
+	if len(incompleteSubPlans) == 0 {
+		return nil
+	}
+
+	var latestCompletedImplementation *domain.AgentSession
+	for _, agentSession := range a.sessionsForWorkItem(wi.ID) {
+		if isOverviewActiveAgentSession(agentSession.Status) {
+			return nil
+		}
+		if agentSession.Kind != domain.AgentSessionKindImplementation || agentSession.Status != domain.AgentSessionCompleted {
+			continue
+		}
+		if _, ok := incompleteSubPlans[agentSession.SubPlanID]; !ok {
+			continue
+		}
+		session := agentSession
+		if latestCompletedImplementation == nil || session.UpdatedAt.After(latestCompletedImplementation.UpdatedAt) {
+			latestCompletedImplementation = &session
+		}
+	}
+	if latestCompletedImplementation == nil {
+		return nil
+	}
+
+	affectedSet := make(map[string]bool, len(incompleteSubPlans))
+	affected := make([]string, 0, len(incompleteSubPlans))
+	for subPlanID, repo := range incompleteSubPlans {
+		for _, agentSession := range a.sessionsForWorkItem(wi.ID) {
+			if agentSession.SubPlanID != subPlanID || agentSession.Kind != domain.AgentSessionKindImplementation || agentSession.Status != domain.AgentSessionCompleted {
+				continue
+			}
+			display := firstNonEmptyString(repo, agentSession.RepositoryName, taskSessionDisplayName(&agentSession))
+			if !affectedSet[display] {
+				affectedSet[display] = true
+				affected = append(affected, display)
+			}
+			break
+		}
+	}
+
+	return &OverviewActionCard{
+		Kind:     overviewActionInterrupted,
+		Title:    "Continuation needs recovery",
+		Blocked:  "Implementation finished, but review/finalization did not complete",
+		Why:      "Resume will continue the saved post-implementation work without waiting for startup to run agents automatically.",
+		Affected: affected,
+		Context: []string{
+			"Last implementation: " + formatAbsoluteTime(latestCompletedImplementation.UpdatedAt),
+			"Recovery starts only after you press Resume.",
+		},
+		Session: latestCompletedImplementation,
+		CanAct:  true,
 	}
 }
 
