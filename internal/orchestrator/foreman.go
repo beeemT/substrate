@@ -214,9 +214,8 @@ func (f *Foreman) Start(ctx context.Context, planID string, followUpContext stri
 	}
 
 	// Start the question processing loop.
-	// Defer unlock until after goroutine start to prevent the data race where
-	// run() reads f.session before acquiring the lock while Stop() writes it.
-	go f.run(ctx)
+	f.wg.Add(1)
+	go f.run(ctx, f.stopCh)
 	// Watch for harness exit and transition the persisted row to failed if the process
 	// dies unexpectedly. This prevents the row from being stuck in 'running' state.
 	go f.watchHarnessExit(ctx)
@@ -238,14 +237,15 @@ func (f *Foreman) watchHarnessExit(ctx context.Context) {
 	// Wait for the harness session to exit.
 	// Guard against nil session (already stopped).
 	f.mu.Lock()
-	if f.session == nil {
+	session := f.session
+	if session == nil {
 		f.mu.Unlock()
 		return
 	}
 	sessionID := f.sessionID
 	f.mu.Unlock()
 
-	<-f.session.Done()
+	<-session.Done()
 
 	// The harness exited. If sessionID is still non-empty, Stop() has not yet run
 	// (or is running concurrently). Stop() transitions the row itself; if it clears
@@ -295,20 +295,12 @@ func (f *Foreman) Ask(ctx context.Context, q domain.Question) <-chan string {
 }
 
 // run processes questions from the queue.
-func (f *Foreman) run(ctx context.Context) {
-	f.wg.Add(1)
+func (f *Foreman) run(ctx context.Context, stopCh <-chan struct{}) {
 	defer f.wg.Done()
 
-	// Acquire lock briefly to synchronize with Start/Stop.
-	// Start() holds the lock until after spawning this goroutine, and Stop()
-	// writes f.session under the lock. This ensures we observe f.session only
-	// after it is safely set, preventing the data race on f.session reads.
-	f.mu.Lock()
-	if f.session == nil {
-		f.mu.Unlock()
-		return
-	}
-	f.mu.Unlock()
+	// The session and stop channel were captured by Start before this goroutine
+	// was launched. Avoid reading mutable Foreman fields here; Stop may clear or
+	// replace them during restart.
 
 	for {
 		// Non-blocking priority check: drain questionFront before blocking.
@@ -324,7 +316,7 @@ func (f *Foreman) run(ctx context.Context) {
 			case pq, ok = <-f.questionCh:
 			case <-ctx.Done():
 				return
-			case <-f.stopCh:
+			case <-stopCh:
 				return
 			}
 		}
@@ -709,11 +701,10 @@ func (f *Foreman) Stop(ctx context.Context) error {
 	f.lastPlanID = lastPlanID
 	f.session = nil
 	f.sessionID = "" // Prevent watchHarnessExit from also transitioning
-	f.mu.Unlock()
 
 	close(stopCh)
 	f.wg.Wait()
-
+	f.mu.Unlock()
 	if err := session.Abort(ctx); err != nil {
 		slog.Warn("abort foreman session on stop", "error", err, "session_id", lastSessionID)
 	}
