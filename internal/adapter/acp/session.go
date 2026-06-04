@@ -437,12 +437,10 @@ func (s *Session) cleanup() {
 			}
 			s.logFile = nil
 			compressedPath := fmt.Sprintf("%s.%d.gz", s.logPath, time.Now().Unix())
-			go func() {
-				if err := bridge.CompressFile(s.logPath, compressedPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-					slog.Warn("acp: compress log failed", "error", err)
-				}
-				bridge.CleanupOldSegments(s.logDir, s.id)
-			}()
+			if err := bridge.CompressFile(s.logPath, compressedPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+				slog.Warn("acp: compress log failed", "error", err)
+			}
+			bridge.CleanupOldSegments(s.logDir, s.id)
 		}
 		s.logMu.Unlock()
 	})
