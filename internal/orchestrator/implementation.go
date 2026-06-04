@@ -608,10 +608,15 @@ func (s *ImplementationService) executeSubPlan(
 	}
 	result.WorktreePath = worktreePath
 
-	// Crash recovery: if the most recent session for this sub-plan is a review session,
-	// the review agent crashed — skip re-implementation and retry the review directly.
+	// Crash recovery: if the most recent session for this sub-plan is a
+	// non-completed review session, the review agent crashed or was interrupted
+	// before producing a terminal decision — skip re-implementation and retry the
+	// review directly. A completed review session with critiques is different:
+	// the human "continue reviewing" action must resume with an implementation
+	// child that addresses those critiques, especially when the automatic review
+	// loop exhausted its cycle budget.
 	if s.reviewPipeline != nil {
-		if last := s.lastSessionForSubPlan(ctx, subPlan.ID); last != nil && last.Kind == domain.AgentSessionKindReview {
+		if last := s.lastSessionForSubPlan(ctx, subPlan.ID); last != nil && last.Kind == domain.AgentSessionKindReview && last.Status != domain.AgentSessionCompleted {
 			prevImpl := s.latestCompletedImplSession(ctx, subPlan.ID)
 			if prevImpl != nil {
 				slog.Info("skipping implementation, retrying review for sub-plan",

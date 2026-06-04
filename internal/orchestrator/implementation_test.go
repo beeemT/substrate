@@ -2569,6 +2569,82 @@ func TestExecuteSubPlan_Tier3_OutstandingCritique_DoesNotShortCircuit(t *testing
 	}
 }
 
+// TestExecuteSubPlan_CompletedReviewWithCritiques_RunsImplementation verifies
+// the action-card continuation path after the review loop has exhausted its
+// budget. The last session is a completed review that produced critiques; this
+// is not review-crash recovery. Continuing must create an implementation child
+// to address the critiques instead of starting another review session.
+func TestExecuteSubPlan_CompletedReviewWithCritiques_RunsImplementation(t *testing.T) {
+	fix := newTier3Fixture(t)
+	defer fix.rpFix.cleanup()
+
+	implSession := fix.rpFix.seedPlanAndSubPlan(t)
+	subPlan := domain.TaskPlan{
+		ID:             implSession.SubPlanID,
+		PlanID:         "plan-1",
+		RepositoryName: "repo-a",
+		Content:        "Implement the change",
+	}
+	implSession.WorktreePath = t.TempDir()
+	implSession.CreatedAt = time.Now().Add(-2 * time.Hour)
+	if err := fix.rpFix.sessionRepo.Create(context.Background(), implSession); err != nil {
+		t.Fatalf("seed impl session: %v", err)
+	}
+
+	reviewSession := domain.AgentSession{
+		ID:                   "review-completed",
+		WorkItemID:           implSession.WorkItemID,
+		WorkspaceID:          implSession.WorkspaceID,
+		Kind:                 domain.AgentSessionKindReview,
+		SubPlanID:            implSession.SubPlanID,
+		RepositoryName:       implSession.RepositoryName,
+		WorktreePath:         implSession.WorktreePath,
+		Status:               domain.AgentSessionCompleted,
+		ParentAgentSessionID: implSession.ID,
+		CreatedAt:            time.Now().Add(-1 * time.Hour),
+		UpdatedAt:            time.Now().Add(-1 * time.Hour),
+	}
+	if err := fix.rpFix.sessionRepo.Create(context.Background(), reviewSession); err != nil {
+		t.Fatalf("seed completed review session: %v", err)
+	}
+
+	if err := fix.rpFix.reviewRepo.CreateCycle(context.Background(), domain.ReviewCycle{
+		ID:              "cycle-review-critiques",
+		AgentSessionID:  implSession.ID,
+		CycleNumber:     1,
+		ReviewerHarness: "mock",
+		Status:          domain.ReviewCycleCritiquesFound,
+		CreatedAt:       time.Now().Add(-1 * time.Hour),
+		UpdatedAt:       time.Now().Add(-1 * time.Hour),
+	}); err != nil {
+		t.Fatalf("seed critique cycle: %v", err)
+	}
+
+	plan := &domain.Plan{ID: "plan-1", WorkItemID: "wi-1", Status: domain.PlanApproved}
+	workspace := &domain.Workspace{ID: "ws-1", RootPath: fix.rpFix.sessionsDir, Status: domain.WorkspaceReady}
+	workItem := &domain.Session{ID: "wi-1", WorkspaceID: "ws-1", State: domain.SessionReviewing}
+	state := NewExecutionState("plan-1", []domain.TaskPlan{subPlan})
+	state.StartSubPlan(subPlan.ID, time.Now().UnixNano())
+
+	result, _ := fix.svc.executeSubPlan(
+		context.Background(),
+		subPlan,
+		workspace,
+		plan,
+		workItem,
+		"sub-MAN-1-implement-the-change",
+		map[string]string{"repo-a": implSession.WorktreePath},
+		state,
+	)
+
+	if calls := fix.implCalls.Load(); calls == 0 {
+		t.Fatal("expected completed review with critiques to continue with implementation; impl harness was never called")
+	}
+	if result.Status != domain.AgentSessionFailed {
+		t.Errorf("Status = %q, want %q from fixture's intentional impl harness failure", result.Status, domain.AgentSessionFailed)
+	}
+}
+
 // TestExecuteSubPlan_Tier3_NoPriorImpl_RunsFreshImplementation verifies the
 // no-prior-impl base case: when latestCompletedImplSession returns nil, Tier
 // 3 must NOT trigger and a fresh implementation must run.
