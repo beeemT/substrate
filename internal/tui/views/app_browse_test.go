@@ -1773,10 +1773,11 @@ func TestNewSessionOverlaySelectingSentrySourceKeepsIssuesOnlyLayoutStable(t *te
 		browseScopes: []domain.SelectionScope{domain.ScopeIssues},
 		browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
 			domain.ScopeIssues: {
-				Views:          []string{"assigned_to_me", "all"},
-				States:         []string{"unresolved", "resolved"},
-				SupportsSearch: true,
-				SupportsRepo:   true,
+				Views:             []string{"assigned_to_me", "all"},
+				States:            []string{"unresolved", "resolved"},
+				SupportsSearch:    true,
+				SupportsRepo:      true,
+				SupportsTimeRange: true,
 			},
 		},
 	}
@@ -1835,7 +1836,7 @@ func TestNewSessionOverlaySelectingSentrySourceKeepsIssuesOnlyLayoutStable(t *te
 	if got := len(strings.Split(afterView, "\n")); got != beforeLines {
 		t.Fatalf("line count after source change = %d, want %d for stable overlay height\nview:\n%s", got, beforeLines, afterView)
 	}
-	for _, want := range []string{"Sentry", "Repo:", "Repository / Project…"} {
+	for _, want := range []string{"Sentry", "Repo:", "Repository / Project…", "Time:", "Time range (e.g. 24h, 7d)…"} {
 		if !strings.Contains(afterView, want) {
 			t.Fatalf("view = %q, want %q after selecting Sentry", afterView, want)
 		}
@@ -2070,6 +2071,42 @@ func TestNewSessionOverlayAdvancedFilterChangeTriggersReload(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("expected reload command after advanced filter input changes")
+	}
+}
+
+func TestNewSessionOverlayPassesSentryTimeRangeFilter(t *testing.T) {
+	t.Parallel()
+
+	sentryAdapter := &browseTestAdapter{
+		name:         "sentry",
+		browseScopes: []domain.SelectionScope{domain.ScopeIssues},
+		browseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
+			domain.ScopeIssues: {Views: []string{"assigned_to_me", "all"}, SupportsRepo: true, SupportsTimeRange: true},
+		},
+	}
+	overlay := NewNewSessionOverlay([]adapter.WorkItemAdapter{sentryAdapter}, "ws-1", styles.NewStyles(styles.DefaultTheme))
+	_ = overlay.Open()
+	overlay.providerIndex = providerOptionIndex("sentry")
+	overlay.normalizeSelectionOptions()
+	overlay.SetSize(100, 30)
+	overlay, _ = overlay.Update(loadedMsg())
+	overlay.setBrowseControlFocus(browseControlTimeRange)
+
+	postKey := overlay
+	for _, r := range []rune("24h") {
+		postKey, _ = postKey.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	updated, cmd := postKey.Update(browseDebounceMsg{seq: postKey.browseDebounceSeq})
+	if cmd == nil {
+		t.Fatal("expected reload command after time range input changes")
+	}
+	updated = applyOverlayCmds(t, updated, cmd)
+
+	if sentryAdapter.lastListOpts.Provider != "sentry" {
+		t.Fatalf("provider = %q, want sentry", sentryAdapter.lastListOpts.Provider)
+	}
+	if sentryAdapter.lastListOpts.TimeRange != "24h" {
+		t.Fatalf("time range = %q, want 24h", sentryAdapter.lastListOpts.TimeRange)
 	}
 }
 

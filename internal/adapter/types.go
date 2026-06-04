@@ -8,17 +8,18 @@ import (
 
 // BrowseFilterCapabilities describes which shared browse filters a provider/scope can honor.
 type BrowseFilterCapabilities struct {
-	Views          []string
-	States         []string
-	SupportsLabels bool
-	SupportsSearch bool
-	SupportsCursor bool
-	SupportsOffset bool
-	SupportsOwner  bool
-	SupportsRepo   bool
-	SupportsGroup  bool
-	SupportsTeam   bool
-	SupportsStatus bool // GitLab Work Item status filter support
+	Views             []string
+	States            []string
+	SupportsLabels    bool
+	SupportsSearch    bool
+	SupportsCursor    bool
+	SupportsOffset    bool
+	SupportsOwner     bool
+	SupportsRepo      bool
+	SupportsGroup     bool
+	SupportsTeam      bool
+	SupportsStatus    bool // GitLab Work Item status filter support
+	SupportsTimeRange bool // Relative time window support (for providers such as Sentry)
 }
 
 // AdapterCapabilities describes what an adapter can do.
@@ -51,6 +52,7 @@ type ListOpts struct {
 	HasMoreHint bool
 	Sort        string
 	Direction   string
+	TimeRange   string // Optional relative time window (for example: 24h, 7d)
 }
 
 // ListResult contains paginated results from ListSelectable.

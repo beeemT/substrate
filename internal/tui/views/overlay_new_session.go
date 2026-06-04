@@ -103,6 +103,7 @@ const (
 	browseControlGroup
 	browseControlTeam
 	browseControlStatus
+	browseControlTimeRange
 )
 
 type browseLoadMode int
@@ -155,6 +156,7 @@ type (
 		Group      string
 		TeamID     string
 		Status     string
+		TimeRange  string
 	}
 	browseResultCache struct {
 		valid         bool
@@ -280,6 +282,7 @@ type NewSessionOverlay struct { //nolint:recvcheck // Bubble Tea: Update returns
 	groupInput                     components.GrowingTextInput
 	teamInput                      components.GrowingTextInput
 	statusInput                    components.GrowingTextInput
+	timeRangeInput                 components.GrowingTextInput
 	issueList                      list.Model
 	allItems                       []adapter.ListItem
 	browsePages                    map[string]browsePageState
@@ -350,6 +353,10 @@ func NewNewSessionOverlay(adapters []adapter.WorkItemAdapter, workspaceID string
 	status.SetPlaceholder("Status (e.g. in_progress, completed)…")
 	status.SetCharLimit(200)
 
+	timeRange := components.NewGrowingTextInput()
+	timeRange.SetPlaceholder("Time range (e.g. 24h, 7d)…")
+	timeRange.SetCharLimit(32)
+
 	mt := components.NewGrowingTextInput()
 	mt.SetPlaceholder("Work item title…")
 	mt.SetCharLimit(200)
@@ -413,6 +420,7 @@ func NewNewSessionOverlay(adapters []adapter.WorkItemAdapter, workspaceID string
 		groupInput:                     group,
 		teamInput:                      team,
 		statusInput:                    status,
+		timeRangeInput:                 timeRange,
 		issueList:                      il,
 		browsePages:                    make(map[string]browsePageState),
 		selectedIDs:                    make(map[string]bool),
@@ -469,6 +477,7 @@ func (m NewSessionOverlay) browseQueryKey() browseQueryKey {
 		Group:      strings.TrimSpace(criteria.Group),
 		TeamID:     strings.TrimSpace(criteria.TeamID),
 		Status:     strings.TrimSpace(criteria.Status),
+		TimeRange:  strings.TrimSpace(criteria.TimeRange),
 	}
 }
 
@@ -950,6 +959,9 @@ func (m NewSessionOverlay) browseControls() []browseControl {
 	if filters.SupportsStatus {
 		controls = append(controls, browseControlStatus)
 	}
+	if filters.SupportsTimeRange {
+		controls = append(controls, browseControlTimeRange)
+	}
 	return controls
 }
 
@@ -977,6 +989,7 @@ func (m *NewSessionOverlay) blurBrowseInputs() {
 	m.groupInput.Blur()
 	m.teamInput.Blur()
 	m.statusInput.Blur()
+	m.timeRangeInput.Blur()
 }
 
 func (m *NewSessionOverlay) setBrowseControlFocus(control browseControl) {
@@ -1010,6 +1023,8 @@ func (m *NewSessionOverlay) setBrowseControlFocus(control browseControl) {
 		m.teamInput.Focus()
 	case browseControlStatus:
 		m.statusInput.Focus()
+	case browseControlTimeRange:
+		m.timeRangeInput.Focus()
 	}
 }
 
@@ -1164,6 +1179,7 @@ func (m NewSessionOverlay) currentFilterCriteria() domain.NewSessionFilterCriter
 		Group:      strings.TrimSpace(m.groupInput.Value()),
 		TeamID:     strings.TrimSpace(m.teamInput.Value()),
 		Status:     strings.TrimSpace(m.statusInput.Value()),
+		TimeRange:  strings.TrimSpace(m.timeRangeInput.Value()),
 	}
 }
 
@@ -1279,6 +1295,7 @@ func (m *NewSessionOverlay) applySavedFilter(filter domain.NewSessionFilter) {
 	if status := strings.TrimSpace(filter.Criteria.Status); status != "" {
 		m.statusInput.SetValue(status)
 	}
+	m.timeRangeInput.SetValue(strings.TrimSpace(filter.Criteria.TimeRange))
 	m.viewIndex = 0
 	m.stateIndex = 0
 	m.normalizeSelectionOptions()
@@ -1439,6 +1456,10 @@ func (m *NewSessionOverlay) updateFocusedBrowseInput(msg tea.KeyMsg) []tea.Cmd {
 		before = m.statusInput.Value()
 		m.statusInput, cmd = m.statusInput.Update(msg)
 		after = m.statusInput.Value()
+	case browseControlTimeRange:
+		before = m.timeRangeInput.Value()
+		m.timeRangeInput, cmd = m.timeRangeInput.Update(msg)
+		after = m.timeRangeInput.Value()
 	default:
 		return nil
 	}
@@ -1474,6 +1495,9 @@ func (m NewSessionOverlay) advancedFilterRows() []string {
 	if filters.SupportsStatus {
 		rows = append(rows, m.controlLabel("Status: ", browseControlStatus)+m.statusInput.View())
 	}
+	if filters.SupportsTimeRange {
+		rows = append(rows, m.controlLabel("Time:   ", browseControlTimeRange)+m.timeRangeInput.View())
+	}
 	return rows
 }
 
@@ -1486,6 +1510,7 @@ func (m *NewSessionOverlay) resizeInputs(inputWidth int) {
 	m.groupInput.SetWidth(inputWidth)
 	m.teamInput.SetWidth(inputWidth)
 	m.statusInput.SetWidth(inputWidth)
+	m.timeRangeInput.SetWidth(inputWidth)
 	m.manualTitle.SetWidth(inputWidth)
 	m.manualDesc.SetWidth(inputWidth)
 }
@@ -1508,6 +1533,9 @@ func countAdvancedBrowseFilterRows(filters adapter.BrowseFilterCapabilities) int
 		rows++
 	}
 	if filters.SupportsStatus {
+		rows++
+	}
+	if filters.SupportsTimeRange {
 		rows++
 	}
 	return rows
@@ -1941,6 +1969,7 @@ func (m NewSessionOverlay) loadItemsCmd(mode browseLoadMode, requestID int) tea.
 	group := strings.TrimSpace(m.groupInput.Value())
 	team := strings.TrimSpace(m.teamInput.Value())
 	status := strings.TrimSpace(m.statusInput.Value())
+	timeRange := strings.TrimSpace(m.timeRangeInput.Value())
 	pages := cloneBrowsePages(m.browsePages)
 	if mode == browseLoadReset {
 		pages = make(map[string]browsePageState, len(adapters))
@@ -1970,6 +1999,7 @@ func (m NewSessionOverlay) loadItemsCmd(mode browseLoadMode, requestID int) tea.
 				Group:       group,
 				TeamID:      team,
 				Status:      status,
+				TimeRange:   timeRange,
 			}
 			if mode == browseLoadAppend {
 				if !page.HasMore {

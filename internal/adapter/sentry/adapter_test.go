@@ -136,7 +136,7 @@ func TestCapabilitiesExposeSourceOnlyIssueBrowse(t *testing.T) {
 		t.Fatalf("capabilities = %#v", caps)
 	}
 	issues := caps.BrowseFilters[domain.ScopeIssues]
-	if !issues.SupportsSearch || !issues.SupportsCursor || !issues.SupportsRepo {
+	if !issues.SupportsSearch || !issues.SupportsCursor || !issues.SupportsRepo || !issues.SupportsTimeRange {
 		t.Fatalf("issue capabilities = %#v", issues)
 	}
 	for _, want := range []string{"assigned_to_me", "all"} {
@@ -156,12 +156,13 @@ func TestBuildIssueListQueryAppliesFiltersAndAllowlist(t *testing.T) {
 
 	a := &SentryAdapter{projects: []string{"web", "api"}}
 	values, empty, err := a.buildIssueListQuery(adapter.ListOpts{
-		View:   "assigned_to_me",
-		State:  "resolved",
-		Search: "memory leak",
-		Repo:   "web",
-		Cursor: "0:100:0",
-		Limit:  25,
+		View:      "assigned_to_me",
+		State:     "resolved",
+		Search:    "memory leak",
+		Repo:      "web",
+		Cursor:    "0:100:0",
+		Limit:     25,
+		TimeRange: "24h",
 	})
 	if err != nil {
 		t.Fatalf("buildIssueListQuery: %v", err)
@@ -180,6 +181,9 @@ func TestBuildIssueListQueryAppliesFiltersAndAllowlist(t *testing.T) {
 	}
 	if got := values.Get("limit"); got != "25" {
 		t.Fatalf("limit = %q, want 25", got)
+	}
+	if got := values.Get("statsPeriod"); got != "24h" {
+		t.Fatalf("statsPeriod = %q, want 24h", got)
 	}
 
 	values, empty, err = a.buildIssueListQuery(adapter.ListOpts{})
@@ -239,13 +243,14 @@ func TestListSelectableMapsIssuesAndPagination(t *testing.T) {
 	}))
 
 	res, err := a.ListSelectable(context.Background(), adapter.ListOpts{
-		Scope:  domain.ScopeIssues,
-		View:   "assigned_to_me",
-		State:  "resolved",
-		Search: "checkout panic",
-		Repo:   "web",
-		Cursor: "0:0:0",
-		Limit:  10,
+		Scope:     domain.ScopeIssues,
+		View:      "assigned_to_me",
+		State:     "resolved",
+		Search:    "checkout panic",
+		Repo:      "web",
+		Cursor:    "0:0:0",
+		Limit:     10,
+		TimeRange: "7d",
 	})
 	if err != nil {
 		t.Fatalf("ListSelectable: %v", err)
@@ -264,6 +269,9 @@ func TestListSelectableMapsIssuesAndPagination(t *testing.T) {
 	}
 	if got := seenQuery.Get("limit"); got != "10" {
 		t.Fatalf("limit = %q", got)
+	}
+	if got := seenQuery.Get("statsPeriod"); got != "7d" {
+		t.Fatalf("statsPeriod = %q, want 7d", got)
 	}
 	if !res.HasMore || res.NextCursor != "0:100:0" {
 		t.Fatalf("pagination = %#v", res)

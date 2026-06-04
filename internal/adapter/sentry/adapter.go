@@ -314,11 +314,12 @@ func (a *SentryAdapter) Capabilities() adapter.AdapterCapabilities {
 		BrowseScopes: []domain.SelectionScope{domain.ScopeIssues},
 		BrowseFilters: map[domain.SelectionScope]adapter.BrowseFilterCapabilities{
 			domain.ScopeIssues: {
-				Views:          []string{"assigned_to_me", "all"},
-				States:         []string{"unresolved", "for_review", "regressed", "escalating", "resolved", "archived"},
-				SupportsSearch: true,
-				SupportsCursor: true,
-				SupportsRepo:   true,
+				Views:             []string{"assigned_to_me", "all"},
+				States:            []string{"unresolved", "for_review", "regressed", "escalating", "resolved", "archived"},
+				SupportsSearch:    true,
+				SupportsCursor:    true,
+				SupportsRepo:      true,
+				SupportsTimeRange: true,
 			},
 		},
 	}
@@ -546,6 +547,9 @@ func (a *SentryAdapter) buildIssueListQuery(opts adapter.ListOpts) (url.Values, 
 	}
 
 	values := url.Values{}
+	if timeRange := strings.TrimSpace(opts.TimeRange); timeRange != "" {
+		values.Set("statsPeriod", timeRange)
+	}
 	if len(terms) > 0 {
 		values.Set("query", strings.Join(terms, " "))
 	}
