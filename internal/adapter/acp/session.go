@@ -368,12 +368,18 @@ func (s *Session) emit(evt adapter.AgentEvent) {
 	if evt.Timestamp.IsZero() {
 		evt.Timestamp = now()
 	}
-	if s.mode == adapter.SessionModeForeman && evt.Type == "text_delta" {
-		s.foremanText += evt.Payload
+	if s.mode == adapter.SessionModeForeman {
+		if evt.Type == "text_delta" {
+			s.foremanText += evt.Payload
+			return
+		}
+		if evt.Type != "foreman_proposed" && evt.Type != "done" && evt.Type != "error" && evt.Type != "question" {
+			return
+		}
 	}
 	// Terminal events use blocking sends per project convention. The caller
 	// (e.g. Wait) is responsible for not calling emit after finish.
-	if evt.Type == "done" || evt.Type == "error" || evt.Type == "question" {
+	if evt.Type == "done" || evt.Type == "error" || evt.Type == "question" || evt.Type == "foreman_proposed" {
 		s.events <- evt
 		return
 	}

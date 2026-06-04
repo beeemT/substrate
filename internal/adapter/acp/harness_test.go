@@ -646,6 +646,41 @@ func collectUntilDone(t *testing.T, sess adapter.AgentSession) []adapter.AgentEv
 	}
 }
 
+func TestForemanEmitKeepsProposalOutOfBackpressure(t *testing.T) {
+	t.Parallel()
+
+	sess := &Session{
+		mode:   adapter.SessionModeForeman,
+		events: make(chan adapter.AgentEvent, 1),
+		done:   make(chan struct{}),
+	}
+
+	for range 512 {
+		sess.emit(adapter.AgentEvent{Type: "text_delta", Payload: "x"})
+		sess.emit(adapter.AgentEvent{Type: "tool_output", Payload: "ignored"})
+	}
+	if got := len(sess.Events()); got != 0 {
+		t.Fatalf("foreman event buffer len = %d, want 0 before proposal", got)
+	}
+	if got := len(sess.foremanText); got != 512 {
+		t.Fatalf("foremanText len = %d, want 512", got)
+	}
+
+	sess.emit(adapter.AgentEvent{Type: "foreman_proposed", Payload: sess.foremanText})
+
+	select {
+	case evt := <-sess.Events():
+		if evt.Type != "foreman_proposed" {
+			t.Fatalf("event type = %q, want foreman_proposed", evt.Type)
+		}
+		if len(evt.Payload) != 512 {
+			t.Fatalf("proposal payload len = %d, want 512", len(evt.Payload))
+		}
+	default:
+		t.Fatal("foreman proposal was not emitted")
+	}
+}
+
 func collectUntilEventType(t *testing.T, sess adapter.AgentSession, eventType string) adapter.AgentEvent {
 	t.Helper()
 	deadline := time.After(5 * time.Second)
