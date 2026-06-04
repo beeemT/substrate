@@ -24,17 +24,18 @@ var _ adapter.AgentSession = (*Session)(nil)
 const acpLogMaxBytes int64 = 10 * 1024 * 1024
 
 type Session struct {
-	id       string
-	mode     adapter.SessionMode
-	root     string
-	cmd      *exec.Cmd
-	client   *rpcClient
-	events   chan adapter.AgentEvent
-	done     chan struct{}
-	doneOnce sync.Once
-	doneErr  error
-	finished atomic.Bool // set true when finish is called
-	emitMu   sync.Mutex  // guards finished check and channel send to prevent send-on-closed
+	id          string
+	mode        adapter.SessionMode
+	root        string
+	cmd         *exec.Cmd
+	client      *rpcClient
+	events      chan adapter.AgentEvent
+	done        chan struct{}
+	doneOnce    sync.Once
+	doneErr     error
+	processDone chan struct{}
+	finished    atomic.Bool // set true when finish is called
+	emitMu      sync.Mutex  // guards finished check and channel send to prevent send-on-closed
 
 	logMu    sync.Mutex
 	logFile  *os.File
@@ -80,6 +81,7 @@ func newSession(id string, mode adapter.SessionMode, root string, cmd *exec.Cmd,
 		// never blocks on a nil channel receive when no Steer call preceded the prompt.
 		steerCancel: makeOpenSteerCancel(),
 		acpCfg:      acpCfg,
+		processDone: make(chan struct{}),
 	}
 	return s
 }
@@ -448,6 +450,7 @@ func (s *Session) cleanup() {
 
 func (s *Session) reapProcess() {
 	err := s.cmd.Wait()
+	close(s.processDone)
 	select {
 	case <-s.done:
 		return // Already finished (e.g., from Abort or session cancellation).

@@ -454,11 +454,10 @@ func TestAbortAfterSessionFinished(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("rpc client did not close after helper exit")
 	}
-	for deadline := time.Now().Add(time.Second); concrete.cmd.ProcessState == nil; {
-		if time.Now().After(deadline) {
-			t.Fatal("helper process was not reaped after exit")
-		}
-		time.Sleep(10 * time.Millisecond)
+	select {
+	case <-concrete.processDone:
+	case <-time.After(time.Second):
+		t.Fatal("helper process was not reaped after exit")
 	}
 	if !concrete.client.Closed() {
 		t.Fatal("rpc client is not closed before abort")
