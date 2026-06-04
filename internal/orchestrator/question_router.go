@@ -84,26 +84,29 @@ func (r *QuestionRouter) routeImplementation(ctx context.Context, kind domain.Ag
 		return fmt.Errorf("route implementation question: no foreman registered for work item %q", workItemID)
 	}
 
-	answerCh := foreman.Ask(ctx, q)
-	go func() {
-		select {
-		case answer, ok := <-answerCh:
-			if !ok || answer == "" {
-				slog.Warn("foreman answer channel closed without answer", "question_id", q.ID)
-				return
-			}
-			if err := r.registry.SendAnswer(ctx, sessionID, answer); err != nil {
-				slog.Error("failed to send foreman answer to agent session", "error", err, "question_id", q.ID, "agent_session_id", sessionID)
-				return
-			}
-			if err := r.publishAnswered(ctx, q.ID, sessionID); err != nil {
-				slog.Warn("failed to publish question answered event", "error", err)
-			}
-		case <-ctx.Done():
-			slog.Warn("context cancelled while waiting for foreman answer", "error", ctx.Err(), "question_id", q.ID)
-		}
-	}()
+	answerCtx := context.WithoutCancel(ctx)
+	answerCh := foreman.Ask(answerCtx, q)
+	go r.forwardForemanAnswer(answerCtx, sessionID, q.ID, answerCh)
 	return nil
+}
+
+func (r *QuestionRouter) forwardForemanAnswer(ctx context.Context, sessionID, questionID string, answerCh <-chan string) {
+	select {
+	case answer, ok := <-answerCh:
+		if !ok || answer == "" {
+			slog.Warn("foreman answer channel closed without answer", "question_id", questionID)
+			return
+		}
+		if err := r.registry.SendAnswer(ctx, sessionID, answer); err != nil {
+			slog.Error("failed to send foreman answer to agent session", "error", err, "question_id", questionID, "agent_session_id", sessionID)
+			return
+		}
+		if err := r.publishAnswered(ctx, questionID, sessionID); err != nil {
+			slog.Warn("failed to publish question answered event", "error", err)
+		}
+	case <-ctx.Done():
+		slog.Warn("context cancelled while waiting for foreman answer", "error", ctx.Err(), "question_id", questionID)
+	}
 }
 
 func (r *QuestionRouter) persistAndPublish(ctx context.Context, q domain.Question, label string) error {
