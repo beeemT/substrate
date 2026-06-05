@@ -1,6 +1,6 @@
 # 03 - Event System
 
-<!-- docs:last-integrated-commit 10e50295fb75f72c67233e191ae34fb8fc091f1e -->
+<!-- docs:last-integrated-commit 5cbffc696e10a65fb98b6957c93e3c5f68e837d8 -->
 
 Substrate's event model has two parts:
 
@@ -70,6 +70,10 @@ Events are organized by domain area. Constants follow a `category.action` naming
 - `agent_question.raised` — operator question surfaced
 - `agent_question.answered` — operator answered
 
+### Graph continuation
+
+- `agent_session.continuation_failed` — agent-session continuation could not complete. The continuation table is the source of truth; this event is for notification only and must not be used to infer continuation state in the UI.
+
 ### Review
 
 - `review.started`
@@ -94,6 +98,12 @@ Events are organized by domain area. Constants follow a `category.action` naming
 - `adapter.error` — adapter handler failed after retries
 - `foreman.started` — Foreman session started
 - `foreman.stopped` — Foreman session stopped
+
+### Append-only child event payloads
+
+`agent_session.resumed` and `agent_session.follow_up` are emitted when an append-only child session is created. Both events carry the source (superseded) session ID and the new child session ID together. The TUI decoders preserve both IDs so that pending dispatch state, superseded source updates, and graph leaf refreshes are deterministic. Decoding only the new session and discarding the edge breaks the graph in the UI.
+
+Resume (no operator feedback) emits `agent_session.resumed`. Follow-up (operator-supplied feedback) emits `agent_session.follow_up`. The two events are not interchangeable; they are how the UI distinguishes a continuation from a feedback-driven restart.
 
 ---
 

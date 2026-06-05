@@ -1,6 +1,6 @@
 # 01 - Domain Model
 
-<!-- docs:last-integrated-commit 10e50295fb75f72c67233e191ae34fb8fc091f1e -->
+<!-- docs:last-integrated-commit 5cbffc696e10a65fb98b6957c93e3c5f68e837d8 -->
 Current domain types, state machines, and relationship rules for Substrate.
 This document describes repository HEAD, not earlier naming.
 
@@ -302,7 +302,6 @@ Current interpretation:
 - `Resume` creates a new `Task`; the interrupted task remains interrupted for audit purposes.
 - `Completed -> Running`: follow-up restart for a completed task — creates a new `Task` row; the completed task remains for audit.
 - `Failed -> Running`: follow-up on a failed task — same pattern, creates a new `Task` row; the failed task remains for audit.
-
 ### Review, question, and critique sub-lifecycles
 
 `ReviewService` transition rules:
@@ -320,6 +319,37 @@ Current interpretation:
 
 - `open -> resolved`
 
+
+### AgentSessionContinuation
+
+An `AgentSessionContinuation` is the durable state for the orchestrator work that must happen after an agent session reaches a terminal harness state — review, sub-plan transition, aggregate work-item state, and finalization. It is not the same as the agent session itself: the agent session is the harness run; the continuation is what the orchestrator must do after the harness finishes. The continuation table is the source of truth for whether a completed implementation session has been advanced.
+
+**Status:**
+
+| Value | Meaning |
+|---|---|
+| `pending` | Created in the same transaction as the agent-session terminal transition; work has not yet started |
+| `running` | Orchestrator is performing the continuation work |
+| `completed` | Sub-plan, work-item, and (when applicable) finalization writes have committed |
+| `failed` | Continuation returned an error; the error chain is preserved in `LastError`. Not terminal — operator can retry |
+| `skipped` | Continuation was intentionally not run, with a reason recorded |
+| `superseded` | A new graph child was created before the continuation could run |
+
+`completed`, `skipped`, and `superseded` are terminal. `failed` is not — it surfaces the durable failure to the UI and to recovery.
+
+**Transition rules:**
+
+- `pending -> running | skipped | superseded`
+- `running -> completed | failed | skipped | superseded`
+- `failed -> running | superseded` (operator-triggered recovery or new graph child)
+
+The `pending` row is created in the same transaction that marks the agent session terminal. The transition to `running` happens before any review, sub-plan, or finalization work. The transition to `completed` happens only after the durable sub-plan, work-item, and finalization writes have committed. The state machine, race recovery, and routing are described in the agent-session graph continuation document.
+
+### Resume, retry, and follow-up routing
+
+Replaceable agent sessions are append-only children of their predecessor, identified by `ParentAgentSessionID`. Each user-triggered resume, retry, or follow-up may only target a graph leaf — a session with no children. Historical non-leaf failed or interrupted sessions cannot drive new child creation.
+
+Resume and retry candidates are selected by domain helpers (`LeafAgentSessions`, `RetryableAgentSessionLeaves`, `ResumableAgentSessionLeaves`); the TUI and orchestrator do not reconstruct eligibility. Kind-specific routing, the supervisor that owns harness lifecycle, and the bulk work-item entry point are described in the agent-session graph continuation document.
 ---
 
 ## Relationship Narrative

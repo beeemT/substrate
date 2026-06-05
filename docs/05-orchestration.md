@@ -1,6 +1,6 @@
 # 05 - Orchestration
 
-<!-- docs:last-integrated-commit 10e50295fb75f72c67233e191ae34fb8fc091f1e -->
+<!-- docs:last-integrated-commit 5cbffc696e10a65fb98b6957c93e3c5f68e837d8 -->
 
 Orchestration owns the runtime workflow: planning, plan review, execution waves, Foreman handling, review and reimplementation, completion, and recovery.
 
@@ -133,7 +133,7 @@ The `reviewing` state means human attention needed due to escalation, not that a
 
 **Startup reconciliation.** On startup and workspace reload: resolve current workspace from marker file, reconcile moved paths against persisted identity, reconcile orphaned tasks, inspect instance heartbeats and interrupt tasks owned by absent or stale instances, surface interrupted sessions to the UI.
 
-**Resume.** Keep old session as audit history, assign ownership to current instance, start new session in same worktree, pass original sub-plan plus session log tail as resume context, instruct harness to inspect partial changes, emit session resumed event. The new task's `ParentAgentSessionID` is set to the interrupted task's ID so the agent-session graph records the lifecycle edge.
+**Graph continuation.** Resume, retry, and follow-up are unified through the agent-session graph. Every replaceable session is an append-only child of its predecessor, identified by `ParentAgentSessionID`. The orchestrator validates that user-triggered actions target graph leaves only — historical non-leaf failed or interrupted sessions cannot drive new child creation. The continuation table is the durable source of truth for post-agent work; `agent_session.continuation_failed` is a notification event, not the source of truth. The graph model, kind routing, continuation state machine, service primitives, and agent run supervisor are described in the agent-session graph continuation document.
 
 **Abandon.** Mark session failed; leave recovery choices to operator (manual fix, reset, or worktree removal).
 
@@ -143,9 +143,7 @@ The `reviewing` state means human attention needed due to escalation, not that a
 
 **Session logs.** Per-agent-session durable output streams for: live observation and tailing across instances; review and output extraction; resume context (log tail into replacement run); audit history behind work-item-centric session browser; rotated storage for long-running sessions.
 
-**Follow-up on completed sessions.** Validate completed state, create new task row (completed task preserved as audit), build follow-up prompt from sub-plan, session log tail, and operator feedback, start harness session with native resume, register for steering. The new task's `ParentAgentSessionID` is set to the original completed task's ID.
-
-**Follow-up on failed sessions.** Same pattern but targets failed tasks. Creates new task row with `ParentAgentSessionID` set to the failed task's ID, optionally resumes harness, sends feedback as follow-up message, transitions work item back to implementing with sub-plan reset to pending.
+**Follow-up split.** Completed work items expose two distinct follow-up actions, with explicit labels: "Revise plan" re-enters planning; "Request code changes" creates an append-only implementation child from a completed implementation or review graph leaf and runs the standard review loop. The two routes have different effects and must not share an ambiguous label.
 
 ---
 

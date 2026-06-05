@@ -1,5 +1,5 @@
 # 02 - Layered Architecture
-
+<!-- docs:last-integrated-commit 5cbffc696e10a65fb98b6957c93e3c5f68e837d8 -->
 This document describes the layered structure of the application and the patterns that connect layers.
 
 ## 1. Layer Diagram
@@ -65,6 +65,7 @@ Each repository is responsible for one domain aggregate:
 - **Instance repository** — running substrate process heartbeat and stale detection.
 - **PR/MR repositories** — pull request and merge request state, CI checks, and per-reviewer triage state.
 - **Session review artifact repository** — links between sessions and external review artifacts.
+- **Agent session continuation repository** — durable continuation state for post-agent orchestration work; enables crash recovery and operator-triggered replay.
 
 All repositories accept a shared database handle. Transaction-bound handles are derived from that same handle so that changes within a transaction are isolated from concurrent readers.
 
@@ -115,11 +116,11 @@ The orchestration layer owns multi-step workflows that coordinate across service
 | Orchestrator | Responsibility |
 |---|---|
 | `Discoverer` | workspace preflight, git-work discovery, repo metadata extraction |
-| `PlanningService` | planning session startup, correction loop, plan persistence |
-| `ImplementationService` | worktree preparation, wave execution, harness startup, event forwarding |
-| `ReviewPipeline` | review session startup, critique parsing, review outcome transitions |
-| `Foreman` | persistent question-answering session, FAQ append, escalation handling |
-| `Resumption` | resume or abandon interrupted tasks |
+| `PlanningService` | planning session startup, correction loop, plan persistence, planning-session graph routing |
+| `ImplementationService` | worktree preparation, wave execution, harness startup, event forwarding, implementation graph entry points, graph continuation |
+| `ReviewPipeline` | review session startup, critique parsing, review outcome transitions, review graph entry points |
+| `AgentRunSupervisor` | owns harness lifecycle: single event-channel consumer, wait-for-completion, durable complete/fail/interrupt transitions, resume-info persistence, completion callbacks. Used by both implementation and review runs. |
+| `Foreman` | persistent question-answering session, FAQ append, escalation handling. Not graph-supervised. |
 | `SessionRegistry` | maps live agent session IDs to adapter handles for steering |
 
 **Wiring.** A service manager creates the shared event bus, constructs all services and orchestrators, and wires adapters to the bus. Adapters react to events; services do not depend on adapters. Orchestrators receive service pointers and the shared bus.
