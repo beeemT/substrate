@@ -347,6 +347,40 @@ func TestSteerAndCompactDoNotConsumePendingSessionContext(t *testing.T) {
 	}
 }
 
+func TestStartSessionLogsCanonicalRecordsNotRawProtocol(t *testing.T) {
+	cfg := helperACPConfig(t)
+	h := NewHarness(cfg, t.TempDir())
+	logDir := t.TempDir()
+	const sessionID = "s-canon"
+	sess, err := h.StartSession(context.Background(), adapter.SessionOpts{SessionID: sessionID, WorktreePath: t.TempDir(), SessionLogDir: logDir, UserPrompt: "do work"})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	defer sess.Abort(context.Background())
+	collectUntilDone(t, sess)
+
+	// Read the active log before Abort compresses it.
+	entries, err := sessionlog.ReadFile(filepath.Join(logDir, sessionID+".log"))
+	if err != nil {
+		t.Fatalf("read session log: %v", err)
+	}
+	if !slices.ContainsFunc(entries, func(e sessionlog.Entry) bool {
+		return e.Kind == sessionlog.KindAssistant && strings.Contains(e.Text, "hello")
+	}) {
+		t.Fatalf("missing canonical assistant entry in %+v", entries)
+	}
+	if !slices.ContainsFunc(entries, func(e sessionlog.Entry) bool { return e.Kind == sessionlog.KindToolStart }) {
+		t.Fatalf("missing canonical tool_start entry in %+v", entries)
+	}
+	// The raw JSON-RPC handshake (e.g. initialize) must never leak into the
+	// transcript log; only canonical event records are persisted there.
+	for _, e := range entries {
+		if strings.Contains(e.Text, "jsonrpc") || strings.Contains(e.Text, "initialize") {
+			t.Fatalf("raw protocol frame leaked into session log: %q", e.Text)
+		}
+	}
+}
+
 func TestStartSessionArchivesACPLogWithDiscoverableSegmentName(t *testing.T) {
 	cfg := helperACPConfig(t)
 	h := NewHarness(cfg, t.TempDir())
