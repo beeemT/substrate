@@ -78,7 +78,7 @@ func TestSessionLogNoticeFitsRequestedHeight(t *testing.T) {
 	t.Parallel()
 
 	m := NewSessionLogModel(styles.NewStyles(styles.DefaultTheme))
-	m.SetSize(48, 12)
+	m.SetSize(48, 14)
 	m.SetTitle("SUB-1 · Investigate overflow")
 	m.SetMeta("workspace · repo-1 · sess-1")
 	m.SetStaticContent([]sessionlog.Entry{{Kind: sessionlog.KindPlain, Text: "line 1"}, {Kind: sessionlog.KindPlain, Text: "line 2"}, {Kind: sessionlog.KindPlain, Text: "line 3"}})
@@ -90,6 +90,10 @@ func TestSessionLogNoticeFitsRequestedHeight(t *testing.T) {
 	})
 
 	rendered := m.View()
+	lines := strings.Split(rendered, "\n")
+	if got := len(lines); got != 14 {
+		t.Fatalf("line count = %d, want 14", got)
+	}
 	plain := stripBrowseANSI(rendered)
 	for _, want := range []string{"Interrupted task needs recovery", "Press [Enter] to open the overview.", "line 1"} {
 		if !strings.Contains(plain, want) {
@@ -112,14 +116,71 @@ func TestSessionLogNoticeFitsRequestedHeight(t *testing.T) {
 	if !foundOpenOverview {
 		t.Fatalf("keybind hints = %#v, want open-overview action in hints: %v", hints, hintLabels)
 	}
-	lines := strings.Split(rendered, "\n")
-	if got := len(lines); got != 12 {
-		t.Fatalf("line count = %d, want 12", got)
+	if got := len(lines); got != 14 {
+		t.Fatalf("line count = %d, want 14", got)
 	}
 	for i, line := range lines {
 		if got := ansi.StringWidth(line); got > 48 {
 			t.Fatalf("line %d width = %d, want <= 48\nline: %q", i+1, got, line)
 		}
+	}
+}
+
+func TestSessionLogPromptInputResizesViewportPreservingBottom(t *testing.T) {
+	t.Parallel()
+
+	entries := make([]sessionlog.Entry, 0, 40)
+	for i := 1; i <= 40; i++ {
+		entries = append(entries, sessionlog.Entry{Kind: sessionlog.KindPlain, Text: fmt.Sprintf("line %02d", i)})
+	}
+	m := NewSessionLogModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetSize(48, 12)
+	m.SetLogPath("sess-1", "/tmp/sess-1.log")
+	m, _ = m.Update(SessionLogLinesMsg{SessionID: "sess-1", Entries: entries, NextOffset: 1})
+
+	if !m.viewport.AtBottom() {
+		t.Fatal("test setup should start at transcript bottom")
+	}
+	initialHeight := m.viewport.Height
+	initialOffset := m.viewport.YOffset
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	if !m.steerActive {
+		t.Fatal("p should activate prompt input")
+	}
+	if m.viewport.Height >= initialHeight {
+		t.Fatalf("viewport height = %d, want less than %d after prompt opens", m.viewport.Height, initialHeight)
+	}
+	if m.viewport.YOffset <= initialOffset {
+		t.Fatalf("viewport offset = %d, want > %d so bottom content is pushed above prompt", m.viewport.YOffset, initialOffset)
+	}
+	if !m.viewport.AtBottom() {
+		t.Fatalf("viewport should stay at bottom after prompt opens; offset=%d height=%d total=%d", m.viewport.YOffset, m.viewport.Height, m.viewport.TotalLineCount())
+	}
+
+	openHeight := m.viewport.Height
+	openOffset := m.viewport.YOffset
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(strings.Repeat("expanded prompt ", 80))})
+	if m.viewport.Height >= openHeight {
+		t.Fatalf("viewport height = %d, want less than %d after prompt expands", m.viewport.Height, openHeight)
+	}
+	if m.viewport.YOffset <= openOffset {
+		t.Fatalf("viewport offset = %d, want > %d after prompt expands", m.viewport.YOffset, openOffset)
+	}
+	if !m.viewport.AtBottom() {
+		t.Fatalf("viewport should stay at bottom after prompt expands; offset=%d height=%d total=%d", m.viewport.YOffset, m.viewport.Height, m.viewport.TotalLineCount())
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.steerActive {
+		t.Fatal("prompt input should close after second Esc")
+	}
+	if m.viewport.Height != initialHeight {
+		t.Fatalf("viewport height = %d, want restored %d after close", m.viewport.Height, initialHeight)
+	}
+	if !m.viewport.AtBottom() {
+		t.Fatalf("viewport should stay at bottom after prompt closes; offset=%d height=%d total=%d", m.viewport.YOffset, m.viewport.Height, m.viewport.TotalLineCount())
 	}
 }
 
@@ -221,8 +282,8 @@ func TestSessionLogSpinnerStopsWhenAgentInactive(t *testing.T) {
 	if m.agentActive {
 		t.Fatal("agentActive must be false after SetAgentActive(false)")
 	}
-	if cmd != nil {
-		t.Fatal("SetAgentActive(false) must not return a cmd")
+	if cmd == nil {
+		t.Fatal("SetAgentActive(false) must return final tail cmd for live logs")
 	}
 }
 
@@ -250,8 +311,46 @@ func TestSessionLogSpinnerTickAdvancesFrame(t *testing.T) {
 	if updated.spinnerFrame != 1 {
 		t.Fatalf("spinnerFrame = %d, want 1 after first tick", updated.spinnerFrame)
 	}
+	if updated.toolAnimationFrame != sessionLogToolAnimationStep {
+		t.Fatalf("toolAnimationFrame = %d, want %d after first tick", updated.toolAnimationFrame, sessionLogToolAnimationStep)
+	}
 	if cmd == nil {
 		t.Fatal("spinner tick must return a follow-up tick cmd")
+	}
+}
+
+func TestSessionLogRunningToolSeparatorAnimatesOnTick(t *testing.T) {
+	t.Parallel()
+
+	st := styles.NewStyles(styles.DefaultTheme)
+	m := NewSessionLogModel(st)
+	m.SetSize(80, 14)
+	m.SetLogPath("sess-1", "/tmp/sess-1.log")
+	m.SetAgentActive(true)
+
+	model, _ := m.Update(SessionLogLinesMsg{
+		SessionID: "sess-1",
+		Entries: []sessionlog.Entry{
+			{Kind: sessionlog.KindToolStart, Tool: "read", Intent: "Reading", Text: `{"path":"x.go"}`},
+			{Kind: sessionlog.KindToolOutput, Tool: "read", Text: "partial output"},
+		},
+		NextOffset: 10,
+	})
+	before := renderedToolSeparatorLine(model.viewport.View(), true)
+	if before == "" {
+		t.Fatalf("expected initial animated separator, got:\n%s", ansi.Strip(model.viewport.View()))
+	}
+
+	updated, cmd := model.Update(sessionLogSpinnerTickMsg{})
+	after := renderedToolSeparatorLine(updated.viewport.View(), true)
+	if after == "" {
+		t.Fatalf("expected animated separator after tick, got:\n%s", ansi.Strip(updated.viewport.View()))
+	}
+	if updated.toolAnimationFrame <= model.toolAnimationFrame {
+		t.Fatalf("toolAnimationFrame = %d, want > %d", updated.toolAnimationFrame, model.toolAnimationFrame)
+	}
+	if cmd == nil {
+		t.Fatal("spinner tick must continue while agent is active")
 	}
 }
 

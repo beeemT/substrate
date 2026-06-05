@@ -949,6 +949,18 @@ func (a *App) setSelectedTaskSessionID(sessionID string) {
 	a.taskSessionSelectionByWorkItem[a.currentWorkItemID] = sessionID
 }
 
+func (a *App) focusManualAgentSession(agentSession domain.AgentSession) {
+	a.currentWorkItemID = agentSession.WorkItemID
+	a.sidebarMode = sidebarPaneTasks
+	a.mainFocus = mainFocusContent
+	a.currentHistorySessionID = ""
+	a.currentHistoryEntry = SidebarEntry{}
+	a.setSelectedTaskSessionID(agentSession.ID)
+	a.upsertSession(agentSession)
+	a.rebuildSidebar()
+	a.sidebar.SelectEntry(agentSession.WorkItemID, agentSession.ID)
+}
+
 func (a App) deletableSessionID() string {
 	if a.currentHistoryEntry.WorkItemID != "" {
 		return a.currentHistoryEntry.WorkItemID
@@ -1099,6 +1111,60 @@ func (a App) focusedTerminalAgentSession() *domain.AgentSession {
 	return nil
 }
 
+type manualAgentSessionTarget struct {
+	workItemID     string
+	repositoryName string
+	subPlanID      string
+}
+
+func (a App) manualAgentSessionTarget() (manualAgentSessionTarget, bool) {
+	if a.currentWorkItemID == "" {
+		return manualAgentSessionTarget{}, false
+	}
+	workItem := a.workItemByID(a.currentWorkItemID)
+	if workItem == nil {
+		return manualAgentSessionTarget{}, false
+	}
+	if session := a.focusedWorkItemRepoSession(); session != nil && session.RepositoryName != "" {
+		return manualAgentSessionTarget{
+			workItemID:     workItem.ID,
+			repositoryName: session.RepositoryName,
+			subPlanID:      session.SubPlanID,
+		}, true
+	}
+
+	plan := a.plans[workItem.ID]
+	if plan == nil {
+		return manualAgentSessionTarget{}, false
+	}
+	subPlans := a.subPlans[plan.ID]
+	if len(subPlans) != 1 || subPlans[0].RepositoryName == "" {
+		return manualAgentSessionTarget{}, false
+	}
+	return manualAgentSessionTarget{
+		workItemID:     workItem.ID,
+		repositoryName: subPlans[0].RepositoryName,
+		subPlanID:      subPlans[0].ID,
+	}, true
+}
+
+func (a App) focusedWorkItemRepoSession() *domain.AgentSession {
+	if a.mainFocus == mainFocusContent && a.content.Mode() == ContentModeAgentSession {
+		if sessionID := a.content.sessionLog.SessionID(); sessionID != "" {
+			return a.workItemTaskSession(a.currentWorkItemID, sessionID)
+		}
+		return nil
+	}
+	if a.mainFocus == mainFocusSidebar && a.sidebarMode == sidebarPaneTasks {
+		selectedID := a.selectedTaskSessionID()
+		if selectedID == "" || selectedID == taskSidebarSourceDetailsID || selectedID == taskSidebarArtifactsID {
+			return nil
+		}
+		return a.workItemTaskSession(a.currentWorkItemID, selectedID)
+	}
+	return nil
+}
+
 func (a App) defaultTaskSessionID(workItemID string) string {
 	_ = workItemID
 	return ""
@@ -1155,6 +1221,8 @@ func taskSidebarSessionTitle(agentSession *domain.AgentSession) string {
 		return "Session " + shortSessionID(agentSession.ID)
 	case domain.AgentSessionKindReview:
 		return "Review " + shortSessionID(agentSession.ID)
+	case domain.AgentSessionKindManual:
+		return "Manual " + shortSessionID(agentSession.ID)
 	default:
 		return "Implementation " + shortSessionID(agentSession.ID)
 	}
@@ -1166,6 +1234,8 @@ func taskSessionDisplayName(agentSession *domain.AgentSession) string {
 		return "Planning"
 	case domain.AgentSessionKindReview:
 		return firstNonEmptyString(agentSession.RepositoryName, "Review")
+	case domain.AgentSessionKindManual:
+		return firstNonEmptyString(agentSession.RepositoryName, "Manual")
 	default:
 		return firstNonEmptyString(agentSession.RepositoryName, "Task")
 	}
@@ -2091,8 +2161,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case SteerSessionMsg:
-		if a.provider.SessionRegistry() != nil && msg.SessionID != "" && msg.Message != "" {
-			cmds = append(cmds, SteerSessionCmd(a.provider.SessionRegistry(), msg.SessionID, msg.Message))
+		if msg.SessionID != "" && msg.Message != "" {
+			if session := a.workItemTaskSession(a.currentWorkItemID, msg.SessionID); session != nil && session.Kind == domain.AgentSessionKindManual {
+				cmds = append(cmds, SendManualSessionMessageCmd(a.provider.Manual(), msg.SessionID, msg.Message))
+			} else if a.provider.SessionRegistry() != nil {
+				cmds = append(cmds, SteerSessionCmd(a.provider.SessionRegistry(), msg.SessionID, msg.Message))
+			}
 		}
 		return a, tea.Batch(cmds...)
 
@@ -2101,20 +2175,28 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case FollowUpSessionMsg:
-		if a.provider.Task() != nil && a.provider.Implementation() != nil && msg.TaskID != "" && msg.Feedback != "" {
-			// Find workItemID for this task
-			workItemID := ""
-			for _, s := range a.sessions {
-				if s.ID == msg.TaskID {
-					workItemID = s.WorkItemID
-					break
-				}
+		if msg.TaskID == "" || msg.Feedback == "" {
+			return a, nil
+		}
+		var task *domain.AgentSession
+		for i := range a.sessions {
+			if a.sessions[i].ID == msg.TaskID {
+				task = &a.sessions[i]
+				break
 			}
-			if workItemID != "" {
-				ctx := a.pipelineCtxForTask(msg.TaskID)
-				cmds = append(cmds, FollowUpSessionCmd(ctx, a.provider.Task(), a.provider.Implementation(), a.sendAsyncMsg, msg.TaskID, msg.Feedback, a.runtimeCtx.InstanceID))
-				// Restart foreman with follow-up context
-				cmds = append(cmds, FollowUpOrchestratedCmd(a.provider.ReviewFollowup(), workItemID, msg.Feedback))
+		}
+		if task == nil {
+			return a, nil
+		}
+		if task.Kind == domain.AgentSessionKindManual {
+			cmds = append(cmds, FollowUpManualSessionCmd(context.Background(), a.provider.Task(), a.provider.Manual(), msg.TaskID, msg.Feedback))
+			return a, tea.Batch(cmds...)
+		}
+		if a.provider.Task() != nil && a.provider.Implementation() != nil {
+			ctx := a.pipelineCtxForTask(msg.TaskID)
+			cmds = append(cmds, FollowUpSessionCmd(ctx, a.provider.Task(), a.provider.Implementation(), a.sendAsyncMsg, msg.TaskID, msg.Feedback, a.runtimeCtx.InstanceID))
+			if task.WorkItemID != "" {
+				cmds = append(cmds, FollowUpOrchestratedCmd(a.provider.ReviewFollowup(), task.WorkItemID, msg.Feedback))
 			}
 			a.toasts.AddToast("Follow-up session started", components.ToastSuccess)
 		}
@@ -2390,12 +2472,21 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, tea.Batch(cmds...)
 
-	case OverrideAcceptMsg:
-		cmds = append(cmds, OverrideAcceptCmd(a.provider.Session(), msg.WorkItemID))
-		return a, tea.Batch(cmds...)
-
 	case FailReviewMsg:
 		cmds = append(cmds, FailReviewCmd(a.provider.Session(), msg.WorkItemID))
+		return a, tea.Batch(cmds...)
+
+	case StartManualAgentSessionMsg:
+		cmds = append(cmds, StartManualAgentSessionCmd(a.registerPipelineCancel(msg.WorkItemID), a.provider.Manual(), a.sendAsyncMsg, a.runtimeCtx.WorkspaceID, a.runtimeCtx.InstanceID, msg))
+		return a, tea.Batch(cmds...)
+
+	case ManualAgentSessionStartedMsg:
+		a.focusManualAgentSession(msg.AgentSession)
+		cmds = append(cmds, LoadTasksCmd(a.provider.Task(), msg.AgentSession.WorkspaceID))
+		cmds = append(cmds, a.updateContentFromState())
+		a.content.sessionLog.steerActive = true
+		a.content.sessionLog.steerInput.Focus()
+		a.content.sessionLog.syncViewportSize()
 		return a, tea.Batch(cmds...)
 
 	case LoadNewSessionFiltersMsg:
@@ -3374,6 +3465,11 @@ func (a *App) showTaskContent(wi *domain.Session, agentSession *domain.AgentSess
 		resumeOffset = a.content.sessionLog.offset
 	}
 	a.content.sessionLog.SetLogPath(agentSession.ID, logPath)
+	if agentSession.Kind == domain.AgentSessionKindManual {
+		a.content.sessionLog.SetMessageInputLabel("Prompt")
+	} else {
+		a.content.sessionLog.SetMessageInputLabel("")
+	}
 	a.content.sessionLog.SetPlanID(agentSession.PlanID)
 	workItemSessions := a.sessionsForWorkItem(wi.ID)
 	switch agentSession.Status {
@@ -3386,7 +3482,7 @@ func (a *App) showTaskContent(wi *domain.Session, agentSession *domain.AgentSess
 		}
 	case domain.AgentSessionCompleted:
 		a.content.sessionLog.ClearFailedSession()
-		if graphManagedCompletedCodeFollowUpCandidate(*agentSession, workItemSessions) {
+		if agentSession.Kind == domain.AgentSessionKindManual || graphManagedCompletedCodeFollowUpCandidate(*agentSession, workItemSessions) {
 			a.content.sessionLog.SetCompletedSession(agentSession.ID)
 		} else {
 			a.content.sessionLog.ClearCompletedSession()
@@ -3399,7 +3495,18 @@ func (a *App) showTaskContent(wi *domain.Session, agentSession *domain.AgentSess
 		agentSession.Status == domain.AgentSessionRunning ||
 		agentSession.Status == domain.AgentSessionWaitingForAnswer
 	spinnerCmd := a.content.sessionLog.SetAgentActive(agentActive)
-	if !a.tailingSessionIDs[agentSession.ID] {
+	if !agentActive {
+		if spinnerCmd != nil {
+			a.tailingSessionIDs[agentSession.ID] = true
+			return spinnerCmd
+		}
+		if !a.tailingSessionIDs[agentSession.ID] {
+			a.tailingSessionIDs[agentSession.ID] = true
+			return TailSessionLogFinalCmd(logPath, agentSession.ID, resumeOffset)
+		}
+		return nil
+	}
+	if !a.tailingSessionIDs[agentSession.ID] || spinnerCmd != nil {
 		a.tailingSessionIDs[agentSession.ID] = true
 		return tea.Batch(spinnerCmd, TailSessionLogCmd(logPath, agentSession.ID, resumeOffset))
 	}
@@ -3431,7 +3538,18 @@ func (a *App) showForemanContent(wi *domain.Session, foremanSession *domain.Agen
 	}
 	a.content.sessionLog.SetLogPath(foremanSession.ID, logPath)
 	spinnerCmd := a.content.sessionLog.SetAgentActive(running)
-	if !a.tailingSessionIDs[foremanSession.ID] {
+	if !running {
+		if spinnerCmd != nil {
+			a.tailingSessionIDs[foremanSession.ID] = true
+			return spinnerCmd
+		}
+		if !a.tailingSessionIDs[foremanSession.ID] {
+			a.tailingSessionIDs[foremanSession.ID] = true
+			return TailSessionLogFinalCmd(logPath, foremanSession.ID, resumeOffset)
+		}
+		return nil
+	}
+	if !a.tailingSessionIDs[foremanSession.ID] || spinnerCmd != nil {
 		a.tailingSessionIDs[foremanSession.ID] = true
 		return tea.Batch(spinnerCmd, TailSessionLogCmd(logPath, foremanSession.ID, resumeOffset))
 	}
@@ -4012,10 +4130,10 @@ func (a App) taskSidebarEntries(workItemID string) []SidebarEntry {
 		entries = append(entries, *foremanEntry)
 	}
 
-	// Repository blocks: one group per repo, implementation/review sessions in temporal order (oldest first).
+	// Repository blocks: one group per repo, implementation/review/manual sessions in temporal order (oldest first).
 	repoSessions := make(map[string][]domain.AgentSession)
 	for _, s := range sessions {
-		if s.Kind == domain.AgentSessionKindImplementation || s.Kind == domain.AgentSessionKindReview {
+		if s.Kind == domain.AgentSessionKindImplementation || s.Kind == domain.AgentSessionKindReview || s.Kind == domain.AgentSessionKindManual {
 			repo := firstNonEmptyString(s.RepositoryName, "Repository")
 			repoSessions[repo] = append(repoSessions[repo], s)
 		}

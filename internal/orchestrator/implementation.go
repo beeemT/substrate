@@ -63,6 +63,7 @@ type ContinuationContext struct {
 	SupersededLeafID          string
 	Trigger                   AgentGraphTrigger
 	FirstReviewParentID       string
+	ReviewFeedback            string
 }
 
 type AgentGraphIntent struct {
@@ -762,7 +763,7 @@ func (s *ImplementationService) reviewLoop(
 	workItem *domain.Session,
 	worktreePaths map[string]string,
 ) *SubPlanOutcome {
-	return s.reviewLoopWithFirstReviewParent(ctx, implSession, subPlan, workspace, plan, workItem, worktreePaths, "")
+	return s.reviewLoopWithFirstReviewParent(ctx, implSession, subPlan, workspace, plan, workItem, worktreePaths, "", "")
 }
 
 func (s *ImplementationService) reviewLoopWithFirstReviewParent(
@@ -774,6 +775,7 @@ func (s *ImplementationService) reviewLoopWithFirstReviewParent(
 	workItem *domain.Session,
 	worktreePaths map[string]string,
 	firstReviewParentSessionID string,
+	firstReviewFeedback string,
 ) *SubPlanOutcome {
 	outcome := &SubPlanOutcome{
 		SubPlanID:  subPlan.ID,
@@ -797,8 +799,8 @@ func (s *ImplementationService) reviewLoopWithFirstReviewParent(
 
 		var reviewResult *ReviewResult
 		var err error
-		if outcome.Cycles == 1 && firstReviewParentSessionID != "" {
-			reviewResult, err = s.reviewPipeline.ReviewSessionWithParent(ctx, currentSession, firstReviewParentSessionID)
+		if outcome.Cycles == 1 && (firstReviewParentSessionID != "" || firstReviewFeedback != "") {
+			reviewResult, err = s.reviewPipeline.reviewSessionWithParentAndFeedback(ctx, currentSession, firstReviewParentSessionID, firstReviewFeedback)
 		} else {
 			reviewResult, err = s.reviewPipeline.ReviewSession(ctx, currentSession)
 		}
@@ -1202,6 +1204,7 @@ func (s *ImplementationService) RetryReviewLeaf(ctx context.Context, intent Agen
 		SupersededLeafID:          source.ID,
 		FirstReviewParentID:       source.ID,
 		Trigger:                   trigger,
+		ReviewFeedback:            intent.Feedback,
 	}); err != nil {
 		return AgentGraphRunResult{}, fmt.Errorf("continue review retry: %w", err)
 	}
@@ -1395,7 +1398,7 @@ func (s *ImplementationService) continueImplementationGraph(ctx context.Context,
 
 	worktreePaths := map[string]string{subPlan.RepositoryName: session.WorktreePath}
 	if s.reviewPipeline != nil {
-		outcome := s.reviewLoopWithFirstReviewParent(ctx, session, subPlan, &workspace, &plan, &workItem, worktreePaths, firstReviewParentSessionID)
+		outcome := s.reviewLoopWithFirstReviewParent(ctx, session, subPlan, &workspace, &plan, &workItem, worktreePaths, firstReviewParentSessionID, cc.ReviewFeedback)
 		switch {
 		case outcome.Passed:
 			if err := s.persistSubPlanStatusStrict(ctx, &subPlan, domain.SubPlanCompleted); err != nil {
@@ -1698,7 +1701,7 @@ func (s *ImplementationService) runReviewOnExistingImpl(
 	result.Summary = summary
 	result.CompletedAt = ptrTime(time.Now())
 
-	outcome := s.reviewLoopWithFirstReviewParent(ctx, prevImpl, subPlan, workspace, plan, workItem, worktreePaths, reviewParentSessionID)
+	outcome := s.reviewLoopWithFirstReviewParent(ctx, prevImpl, subPlan, workspace, plan, workItem, worktreePaths, reviewParentSessionID, "")
 	result.Outcome = outcome
 	switch {
 	case outcome.Passed:

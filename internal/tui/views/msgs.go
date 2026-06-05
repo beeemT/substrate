@@ -222,6 +222,10 @@ type SessionLogLinesMsg struct {
 	SessionID  string
 	Entries    []sessionlog.Entry
 	NextOffset int64
+	// Reload replaces the current entries with Entries instead of appending.
+	// Set when the active log was compressed+removed on completion and the
+	// transcript was re-read in full from the archives.
+	Reload bool
 }
 
 // SessionInteractionLoadedMsg delivers the parsed interaction log for one session.
@@ -361,6 +365,19 @@ type NewSessionManualMsg struct {
 	Adapter adapter.WorkItemAdapter
 	Title   string
 	Desc    string
+}
+
+// StartManualAgentSessionMsg fires when the user starts a manual agent session for an existing work item.
+type StartManualAgentSessionMsg struct {
+	WorkItemID     string
+	RepositoryName string
+	InitialMessage string
+	SubPlanID      string
+}
+
+// ManualAgentSessionStartedMsg confirms a manual agent session was started.
+type ManualAgentSessionStartedMsg struct {
+	AgentSession domain.AgentSession
 }
 
 // LoadNewSessionFiltersMsg requests loading saved New Session Filters for the active workspace.

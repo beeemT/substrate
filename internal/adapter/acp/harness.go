@@ -163,7 +163,9 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (a
 	}
 	s := newSession(opts.SessionID, opts.Mode, absRoot, cmd, logFile, logPath, sessionLogDir, h.cfg)
 	s.sessionContext = opts.SystemPrompt
-	client := newRPCClient(stdin, stdout, stderr, s.writeProtocolLog)
+	trace, traceClose := newProtocolTrace(opts.SessionID)
+	s.traceClose = traceClose
+	client := newRPCClient(stdin, stdout, stderr, trace)
 	s.client = client
 	s.questions = newQuestionBroker(opts.SessionID, opts.Mode, s.emit)
 	s.terminals = newTerminalManager(absRoot)

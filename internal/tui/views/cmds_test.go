@@ -279,6 +279,50 @@ func TestTailSessionLogCmd_Basic(t *testing.T) {
 	}
 }
 
+func TestTailSessionLogCmd_InitialLoadDoesNotAdvancePastPartialLine(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "sess1.log")
+	content := "alpha\nbet"
+	if err := os.WriteFile(logPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	msg := views.TailSessionLogCmd(logPath, "sess1", 0)()
+	got, ok := msg.(views.SessionLogLinesMsg)
+	if !ok {
+		t.Fatalf("expected SessionLogLinesMsg, got %T", msg)
+	}
+	if len(got.Entries) != 1 || got.Entries[0].Text != "alpha" {
+		t.Fatalf("Entries: want only complete line, got %v", got.Entries)
+	}
+	if got.NextOffset != int64(len("alpha\n")) {
+		t.Fatalf("NextOffset: want %d, got %d", len("alpha\n"), got.NextOffset)
+	}
+}
+
+func TestTailSessionLogFinalCmd_IncludesPartialLine(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "sess1.log")
+	content := "alpha\nbeta"
+	if err := os.WriteFile(logPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	msg := views.TailSessionLogFinalCmd(logPath, "sess1", int64(len("alpha\n")))()
+	got, ok := msg.(views.SessionLogLinesMsg)
+	if !ok {
+		t.Fatalf("expected SessionLogLinesMsg, got %T", msg)
+	}
+	if len(got.Entries) != 1 || got.Entries[0].Text != "beta" {
+		t.Fatalf("Entries: want final partial line, got %v", got.Entries)
+	}
+	if got.NextOffset != int64(len(content)) {
+		t.Fatalf("NextOffset: want %d, got %d", len(content), got.NextOffset)
+	}
+}
+
 // TestTailSessionLogCmd_OffsetContinuation verifies that supplying a non-zero
 // since offset causes only the bytes after that offset to be returned.
 func TestTailSessionLogCmd_OffsetContinuation(t *testing.T) {
@@ -312,6 +356,44 @@ func TestTailSessionLogCmd_OffsetContinuation(t *testing.T) {
 	wantOff := offset + int64(len(secondLine))
 	if got.NextOffset != wantOff {
 		t.Errorf("NextOffset: want %d, got %d", wantOff, got.NextOffset)
+	}
+}
+
+func TestTailSessionLogCmd_DoesNotAdvancePastPartialLine(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "partial.log")
+	firstLine := "first\n"
+	partialLine := "sec"
+	if err := os.WriteFile(logPath, []byte(firstLine+partialLine), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	msg := views.TailSessionLogCmd(logPath, "s", int64(len(firstLine)))()
+	got, ok := msg.(views.SessionLogLinesMsg)
+	if !ok {
+		t.Fatalf("expected SessionLogLinesMsg, got %T", msg)
+	}
+	if len(got.Entries) != 0 {
+		t.Fatalf("Entries: want no entries for unterminated line, got %v", got.Entries)
+	}
+	if got.NextOffset != int64(len(firstLine)) {
+		t.Fatalf("NextOffset: want %d, got %d", len(firstLine), got.NextOffset)
+	}
+
+	if err := os.WriteFile(logPath, []byte(firstLine+"second\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	msg = views.TailSessionLogCmd(logPath, "s", got.NextOffset)()
+	got, ok = msg.(views.SessionLogLinesMsg)
+	if !ok {
+		t.Fatalf("expected SessionLogLinesMsg, got %T", msg)
+	}
+	if len(got.Entries) != 1 || got.Entries[0].Text != "second" {
+		t.Fatalf("Entries: want completed second line, got %v", got.Entries)
+	}
+	if got.NextOffset != int64(len(firstLine)+len("second\n")) {
+		t.Fatalf("NextOffset: want %d, got %d", len(firstLine)+len("second\n"), got.NextOffset)
 	}
 }
 

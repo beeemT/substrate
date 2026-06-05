@@ -78,6 +78,10 @@ func (p *ReviewPipeline) ReviewSession(ctx context.Context, agentSession domain.
 // graph leaf it supersedes. The reviewed implementation remains agentSession;
 // reviewParentSessionID controls only the agent-session graph edge.
 func (p *ReviewPipeline) ReviewSessionWithParent(ctx context.Context, agentSession domain.AgentSession, reviewParentSessionID string) (result *ReviewResult, err error) {
+	return p.reviewSessionWithParentAndFeedback(ctx, agentSession, reviewParentSessionID, "")
+}
+
+func (p *ReviewPipeline) reviewSessionWithParentAndFeedback(ctx context.Context, agentSession domain.AgentSession, reviewParentSessionID string, reviewFeedback string) (result *ReviewResult, err error) {
 	if reviewParentSessionID == "" {
 		reviewParentSessionID = agentSession.ID
 	}
@@ -183,7 +187,7 @@ func (p *ReviewPipeline) ReviewSessionWithParent(ctx context.Context, agentSessi
 	}
 
 	// Start review agent session and wait for its supervised terminal result.
-	_, reviewOutput, reviewSessionID, err := p.startReviewAgent(ctx, agentSession, subPlan, plan, reviewParentSessionID)
+	_, reviewOutput, reviewSessionID, err := p.startReviewAgent(ctx, agentSession, subPlan, plan, reviewParentSessionID, reviewFeedback)
 	if err != nil {
 		return nil, fmt.Errorf("start review agent: %w", err)
 	}
@@ -250,9 +254,10 @@ func (p *ReviewPipeline) startReviewAgent(
 	subPlan domain.TaskPlan,
 	plan domain.Plan,
 	reviewParentSessionID string,
+	reviewFeedback string,
 ) (adapter.AgentSession, string, string, error) {
 	// Build review prompt
-	prompt := p.buildReviewPrompt(subPlan, plan)
+	prompt := p.buildReviewPromptWithFeedback(subPlan, plan, reviewFeedback)
 
 	// Persist the review session before launching the harness.
 	reviewSessionID := domain.NewID()
@@ -340,6 +345,10 @@ func (p *ReviewPipeline) startReviewAgent(
 
 // buildReviewPrompt builds the prompt for the review agent.
 func (p *ReviewPipeline) buildReviewPrompt(subPlan domain.TaskPlan, plan domain.Plan) string {
+	return p.buildReviewPromptWithFeedback(subPlan, plan, "")
+}
+
+func (p *ReviewPipeline) buildReviewPromptWithFeedback(subPlan domain.TaskPlan, plan domain.Plan, reviewFeedback string) string {
 	var faqBuilder strings.Builder
 	for _, entry := range plan.FAQ {
 		fmt.Fprintf(&faqBuilder, "Q: %s\nA: %s\n\n", entry.Question, entry.Answer)
@@ -355,6 +364,10 @@ Review the changes in this repository against the plan. Compare the feature bran
 ## Sub-Plan
 
 ` + subPlan.Content + "\n\n## FAQ\n\n" + faqBuilder.String()
+
+	if reviewFeedback != "" {
+		prompt += "\n## Operator Feedback\n\n" + reviewFeedback + "\n"
+	}
 
 	prompt += `
 ## Output Format

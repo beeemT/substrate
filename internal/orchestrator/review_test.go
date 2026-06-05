@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -99,7 +100,7 @@ func TestStartReviewAgent_CompletesOnDone(t *testing.T) {
 	type result struct{ err error }
 	done := make(chan result, 1)
 	go func() {
-		_, _, _, err := pipeline.startReviewAgent(ctx, session, subPlan, plan, session.ID)
+		_, _, _, err := pipeline.startReviewAgent(ctx, session, subPlan, plan, session.ID, "")
 		done <- result{err: err}
 	}()
 
@@ -305,6 +306,36 @@ func TestReviewSessionWithParent_LinksReviewSessionToExplicitParent(t *testing.T
 	}
 	if reviewSession.ParentAgentSessionID != staleLeafSessionID {
 		t.Fatalf("review ParentAgentSessionID = %q, want %q", reviewSession.ParentAgentSessionID, staleLeafSessionID)
+	}
+}
+
+func TestReviewSessionWithParent_FeedbackReachesReviewPrompt(t *testing.T) {
+	fix := newReviewPipelineFixture(t, 3)
+	defer fix.cleanup()
+
+	agentSession := fix.seedPlanAndSubPlan(t)
+	const feedback = "Focus the replacement review on cancellation semantics."
+	var capturedPrompt string
+	fix.harness.onStartSession = func(opts adapter.SessionOpts) (adapter.AgentSession, error) {
+		capturedPrompt = opts.SystemPrompt
+		if err := writeTestSessionLog(fix.sessionsDir, opts.SessionID, "NO_CRITIQUES"); err != nil {
+			return nil, err
+		}
+		return newMockSession(opts.SessionID, adapter.AgentEvent{Type: "done"}), nil
+	}
+
+	result, err := fix.pipeline.reviewSessionWithParentAndFeedback(context.Background(), agentSession, "failed-review-leaf", feedback)
+	if err != nil {
+		t.Fatalf("reviewSessionWithParentAndFeedback: %v", err)
+	}
+	if !result.Passed {
+		t.Fatalf("expected Passed=true")
+	}
+	if !strings.Contains(capturedPrompt, "## Operator Feedback") {
+		t.Fatalf("review prompt missing operator feedback section: %q", capturedPrompt)
+	}
+	if !strings.Contains(capturedPrompt, feedback) {
+		t.Fatalf("review prompt missing feedback %q: %q", feedback, capturedPrompt)
 	}
 }
 

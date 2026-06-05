@@ -25,7 +25,7 @@ This change adds an **agent planning review loop** between a valid planning draf
 - `internal/orchestrator/implementation.go:769` and `:778` — the outer loop reads `review.auto_feedback_loop` (line 769) and uses `review.max_cycles` as the total-cycle guard (line 778, pre-review; line 819, post-review).
 - `internal/orchestrator/implementation.go:778` is a pre-iteration crash-recovery guard for resumed loops that are already over budget; preserve this shape in the planning outer loop.
 - `internal/orchestrator/review.go:72` — `ReviewPipeline.ReviewSession` is the one-shot core that creates a `ReviewCycle`, starts a review harness session, parses critiques, and returns `ReviewResult`. Note: today this also enforces a per-session `max_cycles` check (`internal/orchestrator/review.go:108-121`); this enforcement must be removed when generalizing the runner.
-- `internal/orchestrator/review.go:247` — `startReviewAgent` creates a separate `AgentSession` with `Kind: review`, registers it for steering, waits for `done`, then reads the harness output from the session log. **This is a direct `harness.StartSession` call and does NOT use `AgentRunSupervisor`; the new planning review must fix this rather than replicate the gap.**
+- `internal/orchestrator/review.go:247` — `startReviewAgent` creates a separate `AgentSession` with `Kind: review`, runs it through `AgentRunSupervisor` in review-event mode, waits for a terminal review event, then reads the harness output from the session log. The remaining direct-harness gap is the planning session harness call, not implementation review.
 - `internal/orchestrator/review.go:441` — `makeDecision` applies `review.pass_threshold`.
 - `internal/orchestrator/agent_run_supervisor.go` — `AgentRunSupervisor` is the graph-era harness lifecycle owner introduced by the agent-session-graph work. The new planning review should run through it.
 - `internal/orchestrator/implementation.go:1115-1206` — `RetryReviewLeaf` and `nearestCompletedImplementationAncestor` walk ancestors to find the reviewed session. There is no equivalent for planning review yet; Phase 4 must add it.
@@ -127,13 +127,13 @@ type ReviewRequest struct {
 }
 ```
 
-`ReviewPipeline.ReviewSession(ctx, req ReviewRequest)` becomes the new core and runs exactly one review cycle. It must not load `TaskPlan`/`Plan` itself, and it must not enforce `max_cycles` or `auto_feedback_loop`; those guards live in the implementation and planning outer loops. **Note:** The existing `ReviewSession` implementation at `internal/orchestrator/review.go:79-93` currently enforces `max_cycles` — this enforcement must be actively removed from the extracted one-shot runner. Keep a compatibility wrapper for implementation call sites if useful:
+`ReviewPipeline.ReviewSession(ctx, req ReviewRequest)` becomes the new core and runs exactly one review cycle. It must not load `TaskPlan`/`Plan` itself, and it must not enforce `max_cycles` or `auto_feedback_loop`; those guards live in the implementation and planning outer loops. **Note:** The existing `ReviewSession` implementation at `internal/orchestrator/review.go:72-104` currently enforces `max_cycles` (the per-session check at `internal/orchestrator/review.go:108-121`) — this enforcement must be actively removed from the extracted one-shot runner. Keep a compatibility wrapper for implementation call sites if useful:
 
 ```go
 func (p *ReviewPipeline) ReviewImplementationSession(ctx context.Context, agentSession domain.AgentSession) (*ReviewResult, error)
 ```
 
-**Harness lifecycle MUST go through `AgentRunSupervisor`.** The existing `startReviewAgent` (`internal/orchestrator/review.go:247`) calls `harness.StartSession` directly and uses an ad-hoc `done` channel. The agent-session-graph work introduced `AgentRunSupervisor` (`internal/orchestrator/agent_run_supervisor.go`) as the graph-era harness lifecycle owner, and the new planning review must not stack on the direct-harness pattern. Phase 2 migrates `startReviewAgent` to the supervisor as part of the runner extraction. The supervisor's `Start(ctx, AgentRunRequest)` returns after harness start; the runner registers the `OnCompleted` callback to run `makeDecision` and emit events. The supervisor's `OnFailed` callback transitions the review cycle to `failed` (replacing the current `defer` block in `ReviewSessionWithParent` at `internal/orchestrator/review.go:165-178`).
+**Harness lifecycle MUST go through `AgentRunSupervisor`.** `startReviewAgent` (`internal/orchestrator/review.go:247`) is already supervisor-backed: it uses the graph-era lifecycle owner for registry lifecycle, review terminal events, timeout handling, durable session transitions, and output callbacks. The remaining direct-harness gap is the planning session call in `runPlanningWithCorrectionLoop` (`internal/orchestrator/planning.go:680`), and the new planning review must not stack another ad-hoc `done` channel on top of that direct-harness pattern. Phase 3 migrates the planning harness call while preserving the existing supervisor-backed review runner.
 
 ### 2. Add planning-review settings as a sibling to implementation review settings
 
@@ -185,7 +185,7 @@ Reshape `AgentSessionService.Create` validation in `internal/service/session.go:
 
 Prefer setting `PlanID` whenever a persisted plan exists. For the recommended raw-candidate path, correlate through the reviewed planning session ID plus `work_item_id`; do not add schema just to satisfy validation.
 
-Tests for the validation reshape (added in Phase 2):
+Tests for the validation reshape (added in Phase 3):
 
 - Review session with `SubPlanID="sp-1"`, no `PlanID`, no `WorkItemID` -> rejected (current behavior preserved for implementation review).
 - Review session with `SubPlanID="sp-1"`, `WorkItemID="wi-1"` -> accepted (implementation review).
@@ -299,7 +299,7 @@ for {
 
 Important details:
 
-- **Pre-iteration guard** (mirroring `internal/orchestrator/implementation.go:778`): the planning outer loop checks `cycle > settings.MaxCycles` on entry as well as after each review result. This handles the crash-recovery case where a resumed loop is already over budget before starting another attempt. The per-session `max_cycles` check inside the one-shot review runner (`internal/orchestrator/review.go:108-121`) is removed in Phase 2.
+- **Pre-iteration guard** (mirroring `internal/orchestrator/implementation.go:778`): the planning outer loop checks `cycle > settings.MaxCycles` on entry as well as after each review result. This handles the crash-recovery case where a resumed loop is already over budget before starting another attempt. The per-session `max_cycles` check inside the one-shot review runner (`internal/orchestrator/review.go:108-121`) is removed in Phase 3.
 - **Graph edge for the new planning attempt**: `req.parentSessionID = candidate.Session.ID` (the prior planning attempt), NOT the prior review session's ID. The prior review is a child of the prior planning; the new attempt is a sibling child of the prior planning. `LeafAgentSessions` groups by `(Kind, SubPlanID, RepositoryName)` (`internal/domain/session.go:48`), so prior planning, prior review, and the new planning all get distinct leaf slots. This is the same shape as `implementation -> failed review -> replacement review` but with `planning` as the parent kind.
 - Each automatic revision creates a new planning `AgentSession`, matching `PlanWithFeedback` and implementation re-runs.
 - Preserve native resume when available, exactly like `PlanWithFeedback` and `runPlanningWithCorrectionLoop` already do.
@@ -327,7 +327,7 @@ The retry path is a graph entry point and dispatches async. The TUI's `ResumeRet
 
 If the prior planning session is also `interrupted`/`failed`, the retry path must surface that as a separate retry target (handled by the existing `ResumeInterruptedPlanning` in `internal/orchestrator/planning.go:210`). The two retry paths compose: first resume the planning attempt, then the next review leaf retry finds the resumed attempt as its parent.
 
-Acceptance for the retry path (Phase 5):
+Acceptance for the retry path (Phase 4):
 
 - `RetryPlanningReviewLeaf` succeeds when the leaf is a planning review with a completed planning parent.
 - `RetryPlanningReviewLeaf` returns a clear error when the leaf's parent is not a planning session.
@@ -425,7 +425,7 @@ Tasks:
 5. Preserve every existing failure transition and durable cleanup path (parse-correction loop exhaustion, plan persistence error, `EventPlanFailed` emission, `revertWorkItemToIngested`).
 6. Preserve the parse-correction loop behavior and existing tests for `parse retries`, `native resume`, `rejected-plan replacement`, `approved-plan replacement`, and `PlanGenerated` event.
 7. Ensure replaced-plan handling still supersedes exactly one active prior plan via `CreatePlanAtomic`.
-8. The migration of the planning harness to `AgentRunSupervisor` is deferred to Phase 3 to keep this phase focused on the candidate/persistence seam. Phase 3 migrates both `startReviewAgent` and the planning session harness call in the same supervisor sweep.
+8. The migration of the planning harness to `AgentRunSupervisor` is deferred to Phase 3 to keep this phase focused on the candidate/persistence seam. `startReviewAgent` is already supervisor-backed; Phase 3 migrates the planning session harness call during the same review-runner generalization work.
 
 Acceptance:
 
@@ -451,8 +451,8 @@ Tasks:
 1. Introduce `ReviewRequest` and `ReviewSubjectKind`; pass the existing `config.ReviewConfig` through the request when the one-shot runner needs pass-threshold or timeout settings.
 2. Move implementation-specific prompt loading (`GetSubPlan`, `GetPlan`, `buildReviewPrompt`) out of the core review-session runner.
 3. Keep `ReviewPipeline` responsible for persistence of `ReviewCycle`, review agent session lifecycle, event emission, per-request timeout, parsing, and pass-threshold decision logic.
-4. **Migrate `startReviewAgent` to `AgentRunSupervisor`**. The supervisor's `Start` returns after harness start; the runner registers the `OnCompleted` callback to run `makeDecision` and emit events. The supervisor's `OnFailed` callback transitions the review cycle to `failed`, replacing the current `defer` block in `ReviewSessionWithParent` (`internal/orchestrator/review.go:165-178`). The new `runReviewAgent` (or equivalent) returns the new review agent session ID and `domain.AgentSession` so the caller can record the cycle and emit events.
-5. **Migrate the planning harness call to `AgentRunSupervisor`** at the same time. The current direct call in `runPlanningWithCorrectionLoop` (`internal/orchestrator/planning.go:680`) is migrated together with `startReviewAgent` so both phases land on the same supervisor-based harness lifecycle.
+4. Keep `startReviewAgent` supervisor-backed while extracting the generalized runner. The existing `AgentRunModeReviewEvents` path returns after terminal review events, persists durable complete/fail/interrupt transitions, and reads output through the supervisor's callbacks; the extraction must preserve those responsibilities.
+5. **Migrate the planning harness call to `AgentRunSupervisor`**. The current direct call in `runPlanningWithCorrectionLoop` (`internal/orchestrator/planning.go:680`) is migrated so planning attempts land on the same supervisor-owned harness lifecycle as implementation and review runs.
 6. Allow review-kind `AgentSession` rows that are plan-scoped rather than sub-plan-scoped. Reshape `AgentSessionService.Create` validation per Design Decision #3 (the explicit test matrix of five cases).
 7. Add `review_scope`, `plan_id`, and `review_agent_session_id` to emitted review payloads while retaining existing `agent_session_id` meaning: the reviewed session. Existing `decodeReviewStarted` / `decodeReviewCompleted` / `decodeCritiquesFound` (`internal/tui/views/event_consumer.go:319-353`) must continue to work for older payloads without these fields.
 8. Remove `max_cycles` enforcement from the one-shot review runner (`internal/orchestrator/review.go:108-121`); implementation and planning loops own total-cycle limits. Add a regression test that proves a single `ReviewSession` call returns without enforcing the cap.
@@ -465,7 +465,7 @@ Acceptance:
 - Event payload tests prove old implementation fields remain present and new scope fields are present.
 - Tests prove `reimplementation.started` is not emitted for planning-scope critiques, while `review.critiques_found` still is.
 - Tests prove max-cycle escalation is handled by the outer loop, not by `ReviewSession`.
-- Tests prove `startReviewAgent` now uses the supervisor (a stub harness registered via the supervisor's `Start` is sufficient).
+- Tests prove the planning harness call uses the supervisor and regression-test that `startReviewAgent` remains supervisor-backed.
 
 ### Phase 4 — Planning review retry path
 

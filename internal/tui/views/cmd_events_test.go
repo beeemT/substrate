@@ -70,6 +70,40 @@ func (r *cmdWorkItemRepo) Delete(_ context.Context, id string) error {
 	return nil
 }
 
+type cancelAwareWorkItemRepo struct {
+	entered chan context.Context
+	release chan struct{}
+}
+
+func (r *cancelAwareWorkItemRepo) Get(ctx context.Context, _ string) (domain.Session, error) {
+	select {
+	case r.entered <- ctx:
+	default:
+	}
+	select {
+	case <-ctx.Done():
+		return domain.Session{}, ctx.Err()
+	case <-r.release:
+		return domain.Session{}, errors.New("released")
+	}
+}
+
+func (r *cancelAwareWorkItemRepo) List(context.Context, repository.SessionFilter) ([]domain.Session, error) {
+	return nil, errors.New("unexpected List")
+}
+
+func (r *cancelAwareWorkItemRepo) Create(context.Context, domain.Session) error {
+	return errors.New("unexpected Create")
+}
+
+func (r *cancelAwareWorkItemRepo) Update(context.Context, domain.Session) error {
+	return errors.New("unexpected Update")
+}
+
+func (r *cancelAwareWorkItemRepo) Delete(context.Context, string) error {
+	return errors.New("unexpected Delete")
+}
+
 type cmdPlanRepo struct{ plans map[string]domain.Plan }
 
 func (r *cmdPlanRepo) Get(_ context.Context, id string) (domain.Plan, error) {
@@ -358,6 +392,50 @@ func TestSendAsyncGraphErrorSendsErrMsg(t *testing.T) {
 	}
 	if errMsg.Err == nil || !strings.Contains(errMsg.Err.Error(), "boom") {
 		t.Fatalf("error = %v, want boom", errMsg.Err)
+	}
+}
+
+func TestRestartPlanningCmdUsesRegisteredCancellationContext(t *testing.T) {
+	repo := &cancelAwareWorkItemRepo{
+		entered: make(chan context.Context, 1),
+		release: make(chan struct{}),
+	}
+	defer close(repo.release)
+	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}}, NewNoopPublisher())
+	sent := make(chan tea.Msg, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	msg := RestartPlanningCmd(ctx, workItemSvc, nil, nil, func(msg tea.Msg) {
+		sent <- msg
+	}, "wi-1", "")()
+	if _, ok := msg.(PlanningRestartedMsg); !ok {
+		t.Fatalf("message = %T, want PlanningRestartedMsg", msg)
+	}
+
+	var dispatchCtx context.Context
+	select {
+	case dispatchCtx = <-repo.entered:
+	case <-time.After(time.Second):
+		t.Fatal("planning restart did not reach work item lookup")
+	}
+	if dispatchCtx.Done() == nil {
+		t.Fatal("planning restart used an uncancellable dispatch context")
+	}
+
+	cancel()
+	select {
+	case <-dispatchCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("dispatch context was not canceled by registered context cancellation")
+	}
+	select {
+	case got := <-sent:
+		if _, ok := got.(ErrMsg); !ok {
+			t.Fatalf("async message = %T, want ErrMsg", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("planning restart did not stop after context cancellation")
 	}
 }
 

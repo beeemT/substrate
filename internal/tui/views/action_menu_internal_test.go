@@ -10,6 +10,7 @@ import (
 
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/gitwork"
+	"github.com/beeemT/substrate/internal/orchestrator"
 	"github.com/beeemT/substrate/internal/terminal"
 	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
@@ -93,6 +94,33 @@ func TestActionRegistryIncludesOverviewOpenTerminalPicker(t *testing.T) {
 	msg := action.Handler(app)()
 	if _, ok := msg.(OpenWorktreePickerMsg); !ok {
 		t.Fatalf("handler msg = %#v, want OpenWorktreePickerMsg", msg)
+	}
+}
+
+func TestActionRegistryIncludesManualAgentSessionForSingleRepoWorkItem(t *testing.T) {
+	app := newSidebarDrilldownTestApp()
+	app.provider = &testProvider{svcs: Services{Manual: &orchestrator.ManualSessionService{}}}
+	app.content.SetMode(ContentModeOverview)
+	app.mainFocus = mainFocusContent
+
+	actions := app.BuildActionRegistry(ContextOverview)
+	action := findAction(actions, "start_manual_agent_session")
+	if action == nil {
+		t.Fatalf("overview actions missing start_manual_agent_session: %#v", actionIDs(actions))
+	}
+	if action.Shortcut != "m" {
+		t.Fatalf("shortcut = %q, want m", action.Shortcut)
+	}
+	msg := action.Handler(app)()
+	start, ok := msg.(StartManualAgentSessionMsg)
+	if !ok {
+		t.Fatalf("handler msg = %#v, want StartManualAgentSessionMsg", msg)
+	}
+	if start.WorkItemID != "wi-1" || start.RepositoryName != "repo-a" || start.SubPlanID != "sp-1" {
+		t.Fatalf("manual target = %#v, want wi-1/repo-a/sp-1", start)
+	}
+	if start.InitialMessage != "" {
+		t.Fatalf("initial message = %q, want empty so user prompt is not sent automatically", start.InitialMessage)
 	}
 }
 

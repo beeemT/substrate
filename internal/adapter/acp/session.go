@@ -63,6 +63,7 @@ type Session struct {
 	terminals     *terminalManager
 	foremanSocket *foremanSocket
 	closeOnce     sync.Once
+	traceClose    func()           // closes the raw protocol-trace file, if any
 	acpCfg        config.ACPConfig // stored for compact detection in handleNotification
 }
 
@@ -416,6 +417,9 @@ func (s *Session) finish(err error) {
 
 func (s *Session) cleanup() {
 	s.closeOnce.Do(func() {
+		if s.traceClose != nil {
+			s.traceClose()
+		}
 		if s.questions != nil {
 			s.questions.cancelAll()
 		}
@@ -514,18 +518,26 @@ func (s *Session) writeCanonicalInputLog(inputKind, text string) {
 	}
 }
 
-func (s *Session) writeProtocolLog(direction string, data []byte) {
+func (s *Session) writeLogEvent(evt adapter.AgentEvent) {
+	data, err := json.Marshal(struct {
+		Type  string             `json:"type"`
+		Event adapter.AgentEvent `json:"event"`
+	}{Type: "event", Event: evt})
+	if err != nil {
+		slog.Warn("acp: marshal log event failed", "error", err)
+		return
+	}
+	line := append(data, '\n')
 	s.logMu.Lock()
 	defer s.logMu.Unlock()
 	if s.logFile == nil {
 		return
 	}
-	line := timestampedLogLine(direction, data)
 	if s.logBytes+int64(len(line)) > acpLogMaxBytes {
 		s.rotateLogLocked()
 	}
 	if _, err := s.logFile.Write(line); err != nil {
-		slog.Warn("acp: write log failed", "error", err)
+		slog.Warn("acp: write log event failed", "error", err)
 	} else {
 		s.logBytes += int64(len(line))
 	}

@@ -11,12 +11,42 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/orchestrator"
 	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/service"
 	"github.com/beeemT/substrate/internal/sessionlog"
 )
+
+type manualPromptRegistry struct {
+	sentSessionID string
+	sentMessage   string
+	steered       bool
+}
+
+func (r *manualPromptRegistry) Register(string, adapter.AgentSession)            {}
+func (r *manualPromptRegistry) Deregister(string)                                {}
+func (r *manualPromptRegistry) SendAnswer(context.Context, string, string) error { return nil }
+func (r *manualPromptRegistry) IsRunning(string) bool                            { return true }
+func (r *manualPromptRegistry) Registered(string) (adapter.AgentSession, bool) {
+	return nil, false
+}
+func (r *manualPromptRegistry) AbortAndDeregister(context.Context, string)    {}
+func (r *manualPromptRegistry) RegisterForeman(string, *orchestrator.Foreman) {}
+func (r *manualPromptRegistry) GetForeman(string) *orchestrator.Foreman       { return nil }
+func (r *manualPromptRegistry) DeregisterForeman(string)                      {}
+func (r *manualPromptRegistry) Close(context.Context)                         {}
+func (r *manualPromptRegistry) SendMessage(_ context.Context, sessionID string, msg string) error {
+	r.sentSessionID = sessionID
+	r.sentMessage = msg
+	return nil
+}
+
+func (r *manualPromptRegistry) Steer(context.Context, string, string) error {
+	r.steered = true
+	return nil
+}
 
 type emptyEventRepo struct{}
 
@@ -1266,6 +1296,177 @@ func newSidebarDrilldownTestApp() *App {
 	return app
 }
 
+func TestManualAgentSessionStartedFocusesSessionAndOpensPrompt(t *testing.T) {
+	app := newSidebarDrilldownTestApp()
+	session := domain.AgentSession{
+		ID:             "manual-1",
+		WorkItemID:     "wi-1",
+		WorkspaceID:    "ws-local",
+		Kind:           domain.AgentSessionKindManual,
+		SubPlanID:      "sp-1",
+		RepositoryName: "repo-a",
+		HarnessName:    "omp",
+		Status:         domain.AgentSessionRunning,
+		UpdatedAt:      time.Now(),
+	}
+
+	model, _ := app.Update(ManualAgentSessionStartedMsg{AgentSession: session})
+	updated := model.(*App)
+
+	if updated.currentWorkItemID != "wi-1" {
+		t.Fatalf("currentWorkItemID = %q, want wi-1", updated.currentWorkItemID)
+	}
+	if updated.sidebarMode != sidebarPaneTasks {
+		t.Fatalf("sidebarMode = %v, want tasks", updated.sidebarMode)
+	}
+	if updated.mainFocus != mainFocusContent {
+		t.Fatalf("mainFocus = %v, want content", updated.mainFocus)
+	}
+	if selected := updated.selectedTaskSessionID(); selected != session.ID {
+		t.Fatalf("selected task session = %q, want %q", selected, session.ID)
+	}
+	if updated.content.Mode() != ContentModeSessionInteraction {
+		t.Fatalf("content mode = %v, want session interaction", updated.content.Mode())
+	}
+	if got := updated.content.sessionLog.SessionID(); got != session.ID {
+		t.Fatalf("session log id = %q, want %q", got, session.ID)
+	}
+	if !updated.content.sessionLog.steerActive {
+		t.Fatal("manual session prompt input is not active")
+	}
+	if got := updated.content.sessionLog.steerInput.Value(); got != "" {
+		t.Fatalf("prompt input value = %q, want empty", got)
+	}
+	if toast := stripBrowseANSI(updated.toasts.StackView()); strings.Contains(toast, "Manual agent session started") {
+		t.Fatalf("toast view = %q, want no manual-session success toast", toast)
+	}
+}
+
+func TestSteerSessionMsgSendsManualPromptAsMessage(t *testing.T) {
+	app := newSidebarDrilldownTestApp()
+	registry := &manualPromptRegistry{}
+	app.provider = &testProvider{svcs: Services{
+		Manual: orchestrator.NewManualSessionService(nil, nil, nil, nil, nil, nil, registry, nil, nil),
+	}}
+	manual := domain.AgentSession{
+		ID:             "manual-1",
+		WorkItemID:     "wi-1",
+		WorkspaceID:    "ws-local",
+		Kind:           domain.AgentSessionKindManual,
+		SubPlanID:      "sp-1",
+		RepositoryName: "repo-a",
+		Status:         domain.AgentSessionRunning,
+		UpdatedAt:      time.Now(),
+	}
+	app.upsertSession(manual)
+	app.currentWorkItemID = "wi-1"
+
+	model, cmd := app.Update(SteerSessionMsg{SessionID: manual.ID, Message: "do the thing"})
+	if cmd == nil {
+		t.Fatal("expected command to send manual prompt")
+	}
+	_ = model.(*App)
+	msg := cmd()
+	if _, ok := msg.(SteerSessionSentMsg); !ok {
+		t.Fatalf("command msg = %#v, want SteerSessionSentMsg", msg)
+	}
+	if registry.steered {
+		t.Fatal("manual prompt used steering instead of normal message")
+	}
+	if registry.sentSessionID != manual.ID || registry.sentMessage != "do the thing" {
+		t.Fatalf("sent manual prompt = (%q, %q), want (%q, %q)", registry.sentSessionID, registry.sentMessage, manual.ID, "do the thing")
+	}
+}
+
+func TestCompletedManualSessionPromptEmitsManualFollowUp(t *testing.T) {
+	app := newSidebarDrilldownTestApp()
+	completed := domain.AgentSession{
+		ID:             "manual-completed",
+		WorkItemID:     "wi-1",
+		WorkspaceID:    "ws-local",
+		Kind:           domain.AgentSessionKindManual,
+		SubPlanID:      "sp-1",
+		RepositoryName: "repo-a",
+		HarnessName:    "omp",
+		Status:         domain.AgentSessionCompleted,
+		UpdatedAt:      time.Now(),
+	}
+	app.upsertSession(completed)
+	app.currentWorkItemID = "wi-1"
+	app.setSelectedTaskSessionID(completed.ID)
+	app.sidebarMode = sidebarPaneTasks
+	if cmd := app.updateContentFromState(); cmd != nil {
+		_ = cmd()
+	}
+
+	model, cmd := app.content.sessionLog.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	if cmd != nil {
+		_ = cmd()
+	}
+	model.steerInput.SetValue("follow up")
+	model, cmd = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected submit command")
+	}
+
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("submit command did not return batch")
+	}
+	var found bool
+	for _, batched := range batch {
+		if msg, ok := batched().(FollowUpSessionMsg); ok {
+			found = true
+			if msg.TaskID != completed.ID || msg.Feedback != "follow up" {
+				t.Fatalf("follow-up msg = %#v, want completed manual session and feedback", msg)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("submit did not emit FollowUpSessionMsg for completed manual session")
+	}
+}
+
+func TestManualSessionMessageInputRendersAsPrompt(t *testing.T) {
+	app := newSidebarDrilldownTestApp()
+	manual := domain.AgentSession{
+		ID:             "manual-running",
+		WorkItemID:     "wi-1",
+		WorkspaceID:    "ws-local",
+		Kind:           domain.AgentSessionKindManual,
+		SubPlanID:      "sp-1",
+		RepositoryName: "repo-a",
+		HarnessName:    "omp",
+		Status:         domain.AgentSessionRunning,
+		UpdatedAt:      time.Now(),
+	}
+	app.upsertSession(manual)
+	app.currentWorkItemID = "wi-1"
+	app.setSelectedTaskSessionID(manual.ID)
+	app.sidebarMode = sidebarPaneTasks
+	if cmd := app.updateContentFromState(); cmd != nil {
+		_ = cmd()
+	}
+
+	model, _ := app.Update(SessionLogLinesMsg{
+		SessionID: manual.ID,
+		Entries: []sessionlog.Entry{{
+			Kind:      sessionlog.KindInput,
+			InputKind: "message",
+			Text:      "manual prompt text",
+		}},
+		NextOffset: 1,
+	})
+	updated := model.(*App)
+	view := stripBrowseANSI(updated.content.View())
+	if !strings.Contains(view, "Prompt") {
+		t.Fatalf("manual session log missing Prompt label: %q", view)
+	}
+	if strings.Contains(view, "Feedback") {
+		t.Fatalf("manual session log rendered message as Feedback: %q", view)
+	}
+}
+
 func newPlanningDrilldownTestApp() *App {
 	now := time.Now()
 	app := newTestApp(Services{
@@ -1519,8 +1720,8 @@ func TestPlanningTaskViewShowsPlanReviewNoticeWithoutAutoNavigating(t *testing.T
 	updated.sessions[0].UpdatedAt = time.Now().Add(time.Minute)
 
 	cmd = updated.updateContentFromState()
-	if cmd != nil {
-		t.Fatalf("updateContentFromState() cmd = %v, want nil while preserving selected planning task view", cmd)
+	if cmd == nil {
+		t.Fatal("expected completed planning session to issue a final log refresh")
 	}
 	if updated.content.Mode() != ContentModeAgentSession {
 		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeAgentSession)
@@ -1572,8 +1773,8 @@ func TestPlanningTaskViewEnterOpensOverviewForPlanReviewNotice(t *testing.T) {
 	updated.workItems[0].UpdatedAt = time.Now().Add(time.Minute)
 	updated.sessions[0].Status = domain.AgentSessionCompleted
 	updated.sessions[0].UpdatedAt = time.Now().Add(time.Minute)
-	if cmd := updated.updateContentFromState(); cmd != nil {
-		t.Fatalf("updateContentFromState() cmd = %v, want nil", cmd)
+	if cmd := updated.updateContentFromState(); cmd == nil {
+		t.Fatal("expected completed planning session to issue a final log refresh")
 	}
 
 	model, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -2033,6 +2234,46 @@ func TestSidebarTaskSelectionShowsTaskContent(t *testing.T) {
 	}
 }
 
+func TestInactiveManualSessionRestartsTailWhenPromptRunsAgain(t *testing.T) {
+	app := newSidebarDrilldownTestApp()
+	manual := domain.AgentSession{
+		ID:             "manual-restart",
+		WorkItemID:     "wi-1",
+		WorkspaceID:    "ws-local",
+		Kind:           domain.AgentSessionKindManual,
+		SubPlanID:      "sp-1",
+		RepositoryName: "repo-a",
+		HarnessName:    "omp",
+		Status:         domain.AgentSessionCompleted,
+		UpdatedAt:      time.Now(),
+	}
+	app.upsertSession(manual)
+	app.currentWorkItemID = "wi-1"
+	app.setSelectedTaskSessionID(manual.ID)
+	app.sidebarMode = sidebarPaneTasks
+	app.mainFocus = mainFocusContent
+	app.content.sessionLog.SetAgentActive(true)
+	app.tailingSessionIDs[manual.ID] = true
+
+	cmd := app.updateContentFromState()
+	if !app.tailingSessionIDs[manual.ID] {
+		t.Fatal("inactive selected manual session must keep loaded marker after final flush")
+	}
+	if cmd == nil {
+		t.Fatal("completed live session must issue final tail flush")
+	}
+
+	manual.Status = domain.AgentSessionRunning
+	app.upsertSession(manual)
+	cmd = app.updateContentFromState()
+	if cmd == nil {
+		t.Fatal("running manual session must restart tailing after completed prompt follow-up")
+	}
+	if !app.tailingSessionIDs[manual.ID] {
+		t.Fatal("running manual session must mark tailing active")
+	}
+}
+
 func TestSidebarTaskContentUsesSidebarSessionTitle(t *testing.T) {
 	app := newSidebarDrilldownTestApp()
 	app.sessions[0].ID = "implementation-session-123456789"
@@ -2075,8 +2316,8 @@ func TestSidebarTaskViewShowsInterruptedNoticeWithoutAutoNavigating(t *testing.T
 	updated.sessions[0].UpdatedAt = time.Now().Add(time.Minute)
 
 	cmd = updated.updateContentFromState()
-	if cmd != nil {
-		t.Fatalf("updateContentFromState() cmd = %v, want nil while preserving selected repo task view", cmd)
+	if cmd == nil {
+		t.Fatal("expected inactive task view to issue a final log refresh")
 	}
 	if updated.content.Mode() != ContentModeSessionInteraction {
 		t.Fatalf("content mode = %v, want %v", updated.content.Mode(), ContentModeSessionInteraction)

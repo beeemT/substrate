@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -286,4 +287,39 @@ func timestampedLogLine(direction string, data []byte) []byte {
 	out = append(out, data...)
 	out = append(out, '\n')
 	return out
+}
+
+// newProtocolTrace returns a sink for raw JSON-RPC frames and a closer. Raw
+// transport is only persisted when debug logging is enabled; the trace file
+// location (under the OS temp dir) is announced once via slog. When debug is
+// off, frames are dropped (nil sink, which newRPCClient treats as no logging)
+// so the session transcript log stays free of protocol noise.
+func newProtocolTrace(sessionID string) (func(string, []byte), func()) {
+	noop := func() {}
+	if !slog.Default().Enabled(context.Background(), slog.LevelDebug) {
+		return nil, noop
+	}
+	path := filepath.Join(os.TempDir(), "substrate-acp-"+sessionID+".jsonl")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		slog.Warn("acp: open protocol trace failed; dropping raw frames", "session_id", sessionID, "error", err)
+		return nil, noop
+	}
+	slog.Debug("acp: persisting raw protocol trace", "session_id", sessionID, "path", path)
+	var mu sync.Mutex
+	sink := func(direction string, data []byte) {
+		mu.Lock()
+		defer mu.Unlock()
+		if _, err := f.Write(timestampedLogLine(direction, data)); err != nil {
+			slog.Debug("acp: protocol trace write failed", "error", err)
+		}
+	}
+	closer := func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if err := f.Close(); err != nil {
+			slog.Debug("acp: protocol trace close failed", "error", err)
+		}
+	}
+	return sink, closer
 }

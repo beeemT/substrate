@@ -61,6 +61,10 @@ type transcriptBlock struct {
 // orphaned result entries that render as raw plain-text. Non-tool entries between
 // a tool_start and its tool_result are processed normally and do not break pairing.
 func groupEntries(entries []sessionlog.Entry) []transcriptBlock {
+	return groupEntriesWithMessageLabel(entries, "")
+}
+
+func groupEntriesWithMessageLabel(entries []sessionlog.Entry, messageLabel string) []transcriptBlock {
 	var blocks []transcriptBlock
 	// toolQueue maps tool name → ordered list of block indices awaiting their result.
 	toolQueue := make(map[string][]int)
@@ -107,7 +111,7 @@ func groupEntries(entries []sessionlog.Entry) []transcriptBlock {
 			}
 
 		case sessionlog.KindInput:
-			if strings.TrimSpace(e.Text) == "" {
+			if strings.TrimSpace(e.Text) == "" || isBridgeInitializationPayload(e.Text) {
 				continue
 			}
 			label := "Input"
@@ -115,7 +119,7 @@ func groupEntries(entries []sessionlog.Entry) []transcriptBlock {
 			case "prompt":
 				label = "Prompt"
 			case "message":
-				label = "Feedback"
+				label = firstNonEmptyString(messageLabel, "Feedback")
 			case "answer":
 				label = "Answer"
 			case "session_context":
@@ -191,6 +195,20 @@ func groupEntries(entries []sessionlog.Entry) []transcriptBlock {
 	return blocks
 }
 
+func isBridgeInitializationPayload(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if !strings.HasPrefix(trimmed, "{") {
+		return false
+	}
+	var payload struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
+		return false
+	}
+	return payload.Type == "init"
+}
+
 // toolOutputTarget returns the index of the running tool block that should
 // receive a tool_output entry. It does NOT dequeue because multiple output
 // events stream into the same block. When toolName is non-empty the oldest
@@ -257,7 +275,7 @@ func dequeueToolResult(blocks []transcriptBlock, toolQueue map[string][]int, too
 	return -1
 }
 
-func renderTranscriptBlock(st styles.Styles, block transcriptBlock, width int, verbose, collapseThinking bool) string {
+func renderTranscriptBlock(st styles.Styles, block transcriptBlock, width int, verbose, collapseThinking bool, animationFrame int) string {
 	switch block.kind {
 	case blockKindPlain:
 		if block.isError {
@@ -361,13 +379,13 @@ func renderTranscriptBlock(st styles.Styles, block transcriptBlock, width int, v
 		return components.RenderCallout(st, components.CalloutSpec{Body: body, Width: width, Variant: components.CalloutWarning})
 
 	case blockKindTool:
-		return renderToolBlock(st, block, width, verbose)
+		return renderToolBlock(st, block, width, verbose, animationFrame)
 	}
 
 	return ""
 }
 
-func renderToolBlock(st styles.Styles, block transcriptBlock, width int, verbose bool) string {
+func renderToolBlock(st styles.Styles, block transcriptBlock, width int, verbose bool, animationFrame int) string {
 	var variant components.CalloutVariant
 	switch {
 	case block.toolRunning:
@@ -418,6 +436,11 @@ func renderToolBlock(st styles.Styles, block transcriptBlock, width int, verbose
 				bodyLines = append(bodyLines, line)
 			}
 		}
+	}
+
+	shouldSeparateOutput := block.toolRunning || len(block.toolOutput) > 0 || (!block.toolRunning && block.toolResult != "")
+	if shouldSeparateOutput {
+		bodyLines = append(bodyLines, toolOutputSeparator(st, innerW, block.toolRunning, animationFrame))
 	}
 
 	// Output section
@@ -487,6 +510,77 @@ func renderToolBlock(st styles.Styles, block transcriptBlock, width int, verbose
 	body := strings.Join(bodyLines, "\n")
 
 	return components.RenderCallout(st, components.CalloutSpec{Body: body, Width: width, Variant: variant})
+}
+
+const toolOutputSeparatorSegmentWidth = 8
+
+func toolOutputSeparator(st styles.Styles, width int, running bool, frame int) string {
+	width = max(1, width)
+	if !running {
+		return st.Divider.Render(strings.Repeat("─", width))
+	}
+
+	segmentWidth := minInt(width, toolOutputSeparatorSegmentWidth)
+	pos := toolOutputSeparatorBouncePosition(frame, width-segmentWidth)
+
+	var b strings.Builder
+	b.Grow(width)
+	if pos > 0 {
+		b.WriteString(st.ToolShimmerTrack.Render(strings.Repeat("─", pos)))
+	}
+	b.WriteString(st.ToolShimmerSegment.Render(strings.Repeat("─", segmentWidth)))
+	if tail := width - pos - segmentWidth; tail > 0 {
+		b.WriteString(st.ToolShimmerTrack.Render(strings.Repeat("─", tail)))
+	}
+	return b.String()
+}
+
+func toolOutputSeparatorBouncePosition(frame, travel int) int {
+	if travel <= 0 {
+		return 0
+	}
+	period := travel * 2
+	phase := frame % period
+	if phase < 0 {
+		phase += period
+	}
+	if phase > travel {
+		phase = period - phase
+	}
+
+	const scale = 1024
+	t := phase * scale / travel
+	eased := t * t * (3*scale - 2*t) / (scale * scale)
+	return (travel*eased + scale/2) / scale
+}
+
+func renderTranscriptWithMessageLabelFrame(st styles.Styles, entries []sessionlog.Entry, width int, verbose, collapseThinking bool, messageLabel string, animationFrame int) (string, bool) {
+	if width <= 0 {
+		return "", false
+	}
+	blocks := groupEntriesWithMessageLabel(entries, messageLabel)
+	var parts []string
+	hasRunningTool := false
+	for i, block := range blocks {
+		// Insert a blank spacer before the first tool call in a consecutive group.
+		if block.kind == blockKindTool && i > 0 && blocks[i-1].kind != blockKindTool {
+			parts = append(parts, "")
+		}
+
+		if block.kind == blockKindTool && block.toolRunning {
+			hasRunningTool = true
+		}
+		rendered := renderTranscriptBlock(st, block, width, verbose, collapseThinking, animationFrame)
+		if rendered != "" {
+			parts = append(parts, rendered)
+		}
+
+		// Insert a blank spacer after the last tool call in a consecutive group.
+		if block.kind == blockKindTool && i < len(blocks)-1 && blocks[i+1].kind != blockKindTool {
+			parts = append(parts, "")
+		}
+	}
+	return strings.Join(parts, "\n"), hasRunningTool
 }
 
 func toolStringArg(args map[string]any, key string) string {
@@ -773,28 +867,13 @@ func toolArgsSummary(st styles.Styles, toolName, argsJSON string, innerW int) st
 // verbose expands tool args and output; collapseThinking collapses thinking
 // blocks to a single preview line (true by default in callers).
 func RenderTranscript(st styles.Styles, entries []sessionlog.Entry, width int, verbose, collapseThinking bool) string {
-	if width <= 0 {
-		return ""
-	}
-	blocks := groupEntries(entries)
-	var parts []string
-	for i, block := range blocks {
-		// Insert a blank spacer before the first tool call in a consecutive group.
-		if block.kind == blockKindTool && i > 0 && blocks[i-1].kind != blockKindTool {
-			parts = append(parts, "")
-		}
+	rendered, _ := renderTranscriptWithMessageLabelFrame(st, entries, width, verbose, collapseThinking, "", 0)
+	return rendered
+}
 
-		rendered := renderTranscriptBlock(st, block, width, verbose, collapseThinking)
-		if rendered != "" {
-			parts = append(parts, rendered)
-		}
-
-		// Insert a blank spacer after the last tool call in a consecutive group.
-		if block.kind == blockKindTool && i < len(blocks)-1 && blocks[i+1].kind != blockKindTool {
-			parts = append(parts, "")
-		}
-	}
-	return strings.Join(parts, "\n")
+func RenderTranscriptWithMessageLabel(st styles.Styles, entries []sessionlog.Entry, width int, verbose, collapseThinking bool, messageLabel string) string {
+	rendered, _ := renderTranscriptWithMessageLabelFrame(st, entries, width, verbose, collapseThinking, messageLabel, 0)
+	return rendered
 }
 
 // firstNonEmptyTranscript returns the first non-blank string.

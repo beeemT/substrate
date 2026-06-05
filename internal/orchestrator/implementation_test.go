@@ -2055,6 +2055,106 @@ func TestRetryReviewLeaf_RejectsHistoricalReview(t *testing.T) {
 	}
 }
 
+func TestRetryReviewLeaf_FeedbackReachesReplacementReviewPrompt(t *testing.T) {
+	ctx := context.Background()
+	planRepo := newMockPlanRepo()
+	subPlanRepo := newMockSubPlanRepo()
+	sessionRepo := newMockSessionRepo()
+	reviewRepo := newMockReviewRepo()
+	continuationRepo := newImplementationContinuationRepo()
+	workItemRepo := &implementationWorkItemRepo{items: map[string]domain.Session{
+		"wi-1": {ID: "wi-1", WorkspaceID: "ws-1", State: domain.SessionImplementing, ExternalID: "ISS-1", Title: "Test"},
+	}}
+	workspaceRepo := &implementationWorkspaceRepo{workspaces: map[string]domain.Workspace{
+		"ws-1": {ID: "ws-1", RootPath: t.TempDir(), Status: domain.WorkspaceReady},
+	}}
+	planRepo.plans["plan-1"] = domain.Plan{ID: "plan-1", WorkItemID: "wi-1"}
+	subPlanRepo.subPlans["sp-1"] = domain.TaskPlan{ID: "sp-1", PlanID: "plan-1", RepositoryName: "repo-a", Content: "Review repo-a", Status: domain.SubPlanInProgress}
+	subPlanRepo.subPlans["sp-2"] = domain.TaskPlan{ID: "sp-2", PlanID: "plan-1", RepositoryName: "repo-b", Content: "Review repo-b", Status: domain.SubPlanPending}
+	worktreePath := t.TempDir()
+	impl := domain.AgentSession{
+		ID:             "impl-1",
+		WorkItemID:     "wi-1",
+		WorkspaceID:    "ws-1",
+		Kind:           domain.AgentSessionKindImplementation,
+		SubPlanID:      "sp-1",
+		RepositoryName: "repo-a",
+		WorktreePath:   worktreePath,
+		HarnessName:    "mock",
+		Status:         domain.AgentSessionCompleted,
+	}
+	failedReview := domain.AgentSession{
+		ID:                   "review-1",
+		WorkItemID:           "wi-1",
+		WorkspaceID:          "ws-1",
+		Kind:                 domain.AgentSessionKindReview,
+		SubPlanID:            "sp-1",
+		RepositoryName:       "repo-a",
+		WorktreePath:         worktreePath,
+		HarnessName:          "mock",
+		Status:               domain.AgentSessionFailed,
+		ParentAgentSessionID: impl.ID,
+	}
+	sessionRepo.sessions[impl.ID] = impl
+	sessionRepo.sessions[failedReview.ID] = failedReview
+
+	tmpDir := t.TempDir()
+	sessionsDir := filepath.Join(tmpDir, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatalf("create sessions dir: %v", err)
+	}
+	t.Setenv("SUBSTRATE_HOME", tmpDir)
+	cfg := testReviewConfig(3)
+	bus := event.NewBus(event.BusConfig{})
+	t.Cleanup(func() { _ = bus.Close() })
+	planSvc := service.NewPlanService(repository.NoopTransacter{Res: repository.Resources{Plans: planRepo, SubPlans: subPlanRepo, Sessions: workItemRepo}}, bus)
+	workItemSvc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: workItemRepo}}, bus)
+	sessionSvc := service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo, AgentSessionContinuations: continuationRepo}}, bus)
+	reviewSvc := service.NewReviewService(repository.NoopTransacter{Res: repository.Resources{Reviews: reviewRepo}}, bus)
+	continuationSvc := service.NewAgentSessionContinuationService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo, AgentSessionContinuations: continuationRepo}})
+	workspaceSvc := service.NewWorkspaceService(repository.NoopTransacter{Res: repository.Resources{Workspaces: workspaceRepo}}, bus)
+
+	const feedback = "Re-run review with special attention to the cancellation path."
+	var capturedPrompt string
+	harness := &mockAgentHarness{
+		sessionsDir: sessionsDir,
+		onStartSession: func(opts adapter.SessionOpts) (adapter.AgentSession, error) {
+			capturedPrompt = opts.SystemPrompt
+			if err := writeTestSessionLog(sessionsDir, opts.SessionID, "NO_CRITIQUES"); err != nil {
+				return nil, err
+			}
+			return newMockSession(opts.SessionID, adapter.AgentEvent{Type: "done"}), nil
+		},
+	}
+	reviewPipeline := NewReviewPipeline(cfg, harness, reviewSvc, sessionSvc, planSvc, workItemSvc, bus, NewSessionRegistry())
+	svc := &ImplementationService{
+		cfg:             cfg,
+		planSvc:         planSvc,
+		workItemSvc:     workItemSvc,
+		sessionSvc:      sessionSvc,
+		reviewSvc:       reviewSvc,
+		continuationSvc: continuationSvc,
+		workspaceSvc:    workspaceSvc,
+		eventBus:        bus,
+		reviewPipeline:  reviewPipeline,
+	}
+
+	result, err := svc.RetryReviewLeaf(ctx, AgentGraphIntent{
+		SourceSessionID: failedReview.ID,
+		Trigger:         AgentGraphTriggerFollowUpFailed,
+		Feedback:        feedback,
+	})
+	if err != nil {
+		t.Fatalf("RetryReviewLeaf: %v", err)
+	}
+	if result.SourceSession.ID != failedReview.ID {
+		t.Fatalf("source session = %q, want %q", result.SourceSession.ID, failedReview.ID)
+	}
+	if !strings.Contains(capturedPrompt, feedback) {
+		t.Fatalf("replacement review prompt missing feedback %q: %q", feedback, capturedPrompt)
+	}
+}
+
 func TestContinueImplementationGraph_RecordsCompletedContinuation(t *testing.T) {
 	ctx := context.Background()
 	planRepo := newMockPlanRepo()

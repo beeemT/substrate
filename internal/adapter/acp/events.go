@@ -29,7 +29,18 @@ func (s *Session) handleNotification(method string, params json.RawMessage) {
 			s.compactMu.Unlock()
 		}
 	}
+	// Persist canonical transcript records (not raw protocol frames) for the
+	// update types the transcript renders. Control-plane updates are emitted as
+	// events for orchestration but are never written to the session log.
+	logWorthy := false
+	switch env.SessionUpdate {
+	case "agent_message_chunk", "user_message_chunk", "tool_call", "tool_call_update":
+		logWorthy = true
+	}
 	for _, evt := range mapSessionUpdate(p.Update) {
+		if logWorthy {
+			s.writeLogEvent(evt)
+		}
 		s.emit(evt)
 	}
 }
@@ -110,7 +121,7 @@ func mapSessionUpdate(raw json.RawMessage) []adapter.AgentEvent {
 }
 
 func toolMetadata(u toolCallUpdate) map[string]any {
-	meta := map[string]any{"tool_call_id": u.ToolCallID, "status": u.Status, "acp_update": u.SessionUpdate}
+	meta := map[string]any{"tool_call_id": u.ToolCallID, "status": u.Status, "acp_update": u.SessionUpdate, "is_error": u.Status == "failed"}
 	if u.Kind != "" {
 		meta["kind"] = u.Kind
 		meta["tool"] = u.Kind

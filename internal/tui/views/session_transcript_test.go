@@ -15,6 +15,20 @@ func testStyles() styles.Styles {
 	return styles.NewStyles(styles.DefaultTheme)
 }
 
+func renderedToolSeparatorLine(output string, animated bool) string {
+	for _, line := range strings.Split(output, "\n") {
+		stripped := ansi.Strip(line)
+		if strings.Contains(stripped, "│") && strings.Contains(stripped, "──") &&
+			!strings.Contains(stripped, "╭") && !strings.Contains(stripped, "╰") {
+			if animated {
+				return line
+			}
+			return stripped
+		}
+	}
+	return ""
+}
+
 func TestGroupEntriesGroupsToolBlock(t *testing.T) {
 	t.Parallel()
 	entries := []sessionlog.Entry{
@@ -375,6 +389,89 @@ func TestRenderTranscriptPromptRendersLabel(t *testing.T) {
 	}
 	if !strings.Contains(plain, "Begin planning") {
 		t.Errorf("expected output to contain %q, got: %q", "Begin planning", plain)
+	}
+}
+
+func TestRenderTranscriptToolOutputSeparatedFromCall(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindToolStart, Tool: "read", Intent: "Reading", Text: `{"path":"x.go"}`},
+		{Kind: sessionlog.KindToolOutput, Tool: "read", Text: "output line"},
+		{Kind: sessionlog.KindToolResult, Tool: "read", Text: "done"},
+	}
+
+	output := RenderTranscript(st, entries, 80, false, true)
+	lines := strings.Split(ansi.Strip(output), "\n")
+	titleIdx, separatorIdx, outputIdx := -1, -1, -1
+	for i, line := range lines {
+		switch {
+		case strings.Contains(line, "read"):
+			if titleIdx < 0 {
+				titleIdx = i
+			}
+		case strings.Contains(line, "output line"):
+			outputIdx = i
+		case strings.Contains(line, "│") && strings.Contains(line, "──") &&
+			!strings.Contains(line, "╭") && !strings.Contains(line, "╰"):
+			separatorIdx = i
+		}
+	}
+	if titleIdx < 0 || separatorIdx < 0 || outputIdx < 0 {
+		t.Fatalf("expected title, separator, and output lines, got:\n%s", ansi.Strip(output))
+	}
+	if !(titleIdx < separatorIdx && separatorIdx < outputIdx) {
+		t.Fatalf("separator must sit between tool call and output: title=%d separator=%d output=%d\n%s",
+			titleIdx, separatorIdx, outputIdx, ansi.Strip(output))
+	}
+}
+
+func TestRenderTranscriptRunningToolSeparatorAnimates(t *testing.T) {
+	t.Parallel()
+	const width = 60
+	st := testStyles()
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindToolStart, Tool: "read", Intent: "Reading", Text: `{"path":"x.go"}`},
+		{Kind: sessionlog.KindToolOutput, Tool: "read", Text: "still running"},
+	}
+
+	frame0, running0 := renderTranscriptWithMessageLabelFrame(st, entries, width, false, true, "", 0)
+	frame5, running5 := renderTranscriptWithMessageLabelFrame(st, entries, width, false, true, "", 5)
+	if !running0 || !running5 {
+		t.Fatal("running tool transcript must report animated tool state")
+	}
+	sep0 := renderedToolSeparatorLine(frame0, true)
+	sep5 := renderedToolSeparatorLine(frame5, true)
+	if sep0 == "" || sep5 == "" {
+		t.Fatalf("expected animated separator lines, got frame0=%q frame5=%q\nframe0:\n%s\nframe5:\n%s",
+			sep0, sep5, ansi.Strip(frame0), ansi.Strip(frame5))
+	}
+	travel := width - toolOutputSeparatorSegmentWidth
+	if toolOutputSeparatorBouncePosition(0, travel) == toolOutputSeparatorBouncePosition(5, travel) {
+		t.Fatal("separator segment position must advance between animation frames")
+	}
+	for _, output := range []string{frame0, frame5} {
+		for line := range strings.SplitSeq(output, "\n") {
+			if got := ansi.StringWidth(line); got > width {
+				t.Fatalf("line width = %d, want <= %d: %q", got, width, line)
+			}
+		}
+	}
+}
+
+func TestToolOutputSeparatorBouncePositionEasesAtEdges(t *testing.T) {
+	t.Parallel()
+	const travel = 80
+
+	startDelta := toolOutputSeparatorBouncePosition(4, travel) - toolOutputSeparatorBouncePosition(0, travel)
+	midDelta := toolOutputSeparatorBouncePosition(44, travel) - toolOutputSeparatorBouncePosition(40, travel)
+	endDelta := toolOutputSeparatorBouncePosition(80, travel) - toolOutputSeparatorBouncePosition(76, travel)
+
+	if midDelta <= startDelta {
+		t.Fatalf("bounce must accelerate away from edge: start delta=%d mid delta=%d", startDelta, midDelta)
+	}
+	if midDelta <= endDelta {
+		t.Fatalf("bounce must decelerate into edge: mid delta=%d end delta=%d", midDelta, endDelta)
 	}
 }
 
@@ -866,6 +963,23 @@ func TestRenderTranscriptWriteToolCardWidthBounded(t *testing.T) {
 		if w := ansi.StringWidth(line); w > width {
 			t.Errorf("line width %d > %d: %q", w, width, line)
 		}
+	}
+}
+
+func TestRenderTranscriptDropsBridgeInitializationInput(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	entries := []sessionlog.Entry{
+		{Kind: sessionlog.KindInput, InputKind: "message", Text: `{"type":"init","mode":"agent","systemPrompt":"context"}`},
+		{Kind: sessionlog.KindInput, InputKind: "message", Text: "actual follow-up prompt"},
+	}
+	output := RenderTranscriptWithMessageLabel(st, entries, 80, false, true, "Prompt")
+	plain := ansi.Strip(output)
+	if strings.Contains(plain, `"type":"init"`) || strings.Contains(plain, "systemPrompt") {
+		t.Fatalf("transcript rendered bridge initialization JSON: %q", plain)
+	}
+	if !strings.Contains(plain, "actual follow-up prompt") {
+		t.Fatalf("transcript missing real prompt: %q", plain)
 	}
 }
 

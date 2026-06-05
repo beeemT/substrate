@@ -567,6 +567,25 @@ func globalActions(a *App) []Action {
 		{ID: "open_worktree_picker", Label: "Open terminal in worktree", Shortcut: "t", Priority: 55, Condition: func(a *App) bool {
 			return a.content.Mode() == ContentModeOverview
 		}, Handler: func(a *App) tea.Cmd { return func() tea.Msg { return OpenWorktreePickerMsg{} } }},
+		{ID: "start_manual_agent_session", Label: "Start manual agent session", Shortcut: "m", Priority: 57, Condition: func(a *App) bool {
+			if a.provider == nil || a.provider.Manual() == nil {
+				return false
+			}
+			_, ok := a.manualAgentSessionTarget()
+			return ok
+		}, Handler: func(a *App) tea.Cmd {
+			target, ok := a.manualAgentSessionTarget()
+			if !ok {
+				return nil
+			}
+			return func() tea.Msg {
+				return StartManualAgentSessionMsg{
+					WorkItemID:     target.workItemID,
+					RepositoryName: target.repositoryName,
+					SubPlanID:      target.subPlanID,
+				}
+			}
+		}},
 		{ID: "open_terminal", Label: "Open terminal", Shortcut: "t", Priority: 56, Condition: func(a *App) bool {
 			return a.focusedTerminalAgentSession() != nil
 		}, Handler: func(a *App) tea.Cmd {

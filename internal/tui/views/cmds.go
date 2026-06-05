@@ -2,6 +2,7 @@ package views
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -575,8 +576,56 @@ func sessionInteractionPaths(sessionsDir, sessionID string) ([]string, error) {
 	return paths, nil
 }
 
+func readSessionInteractionActiveFile(path string, includePartial bool) ([]sessionlog.Entry, int64, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	end := len(data)
+	if !includePartial {
+		end = 0
+		if lastNewline := bytes.LastIndexByte(data, '\n'); lastNewline >= 0 {
+			end = lastNewline + 1
+		}
+	}
+	entries, err := sessionlog.ScanEntries(bytes.NewReader(data[:end]))
+	if err != nil {
+		return nil, int64(end), err
+	}
+	return entries, int64(end), nil
+}
+
 func readSessionInteractionFile(path string) ([]sessionlog.Entry, error) {
 	return sessionlog.ReadFile(path)
+}
+
+// loadAllSessionInteractionEntries reads the full session transcript: all
+// archived (gzipped) rotations plus the active log file. nextOffset is the byte
+// length consumed from the active file (1 when it is absent), matching the
+// continuation offset used by the tail poll.
+func loadAllSessionInteractionEntries(logPath, sessionID string, includePartial bool) ([]sessionlog.Entry, int64, error) {
+	paths, err := sessionInteractionPaths(filepath.Dir(logPath), sessionID)
+	if err != nil {
+		return nil, 0, err
+	}
+	var entries []sessionlog.Entry
+	nextOffset := int64(1)
+	for _, path := range paths {
+		if path == logPath {
+			chunk, activeOffset, readErr := readSessionInteractionActiveFile(path, includePartial)
+			if readErr == nil {
+				entries = append(entries, chunk...)
+				nextOffset = max(1, activeOffset)
+			}
+			continue
+		}
+		chunk, readErr := readSessionInteractionFile(path)
+		if readErr == nil {
+			entries = append(entries, chunk...)
+		}
+	}
+
+	return entries, nextOffset, nil
 }
 
 func LoadSessionInteractionCmd(sessionsDir, sessionID string) tea.Cmd {
@@ -598,36 +647,21 @@ func LoadSessionInteractionCmd(sessionsDir, sessionID string) tea.Cmd {
 	}
 }
 
+func TailSessionLogFinalCmd(logPath string, sessionID string, since int64) tea.Cmd {
+	return tailSessionLogCmd(logPath, sessionID, since, true)
+}
+
 func TailSessionLogCmd(logPath string, sessionID string, since int64) tea.Cmd {
+	return tailSessionLogCmd(logPath, sessionID, since, false)
+}
+
+func tailSessionLogCmd(logPath string, sessionID string, since int64, includePartial bool) tea.Cmd {
 	return func() tea.Msg {
 		if since == 0 {
 			// Initial call: load all archived content (gzipped rotations) plus the
 			// active log file so the viewport starts with the full session history.
 			// Subsequent polls use the continuation path below (since > 0).
-			sessionsDir := filepath.Dir(logPath)
-			paths, err := sessionInteractionPaths(sessionsDir, sessionID)
-			if err == nil {
-				var entries []sessionlog.Entry
-				for _, path := range paths {
-					chunk, readErr := readSessionInteractionFile(path)
-					if readErr == nil {
-						entries = append(entries, chunk...)
-					}
-				}
-				// nextOffset = current size of the active file so the first
-				// continuation poll reads only bytes written after this load.
-				// When the active file does not exist (only rotated archives
-				// remain), use a sentinel offset of 1 so the next call enters
-				// the continuation path instead of re-triggering a full archive
-				// reload. The continuation path handles a missing file gracefully
-				// (sleeps, retries). When the file eventually appears, the
-				// rotation-detection check (stat.Size < since) resets offset to 0
-				// so we read from the beginning.
-				nextOffset := int64(1)
-				if stat, statErr := os.Stat(logPath); statErr == nil {
-					nextOffset = max(1, stat.Size())
-				}
-
+			if entries, nextOffset, err := loadAllSessionInteractionEntries(logPath, sessionID, includePartial); err == nil {
 				return SessionLogLinesMsg{SessionID: sessionID, Entries: entries, NextOffset: nextOffset}
 			}
 			// Path discovery failed (should be rare); fall through to single-file read.
@@ -638,7 +672,17 @@ func TailSessionLogCmd(logPath string, sessionID string, since int64) tea.Cmd {
 		const tailPollInterval = 250 * time.Millisecond
 		stat, err := os.Stat(logPath)
 		if err != nil {
-			time.Sleep(tailPollInterval)
+			// The active log is gone — on completion the harness compresses it to a
+			// .gz archive and removes it, racing the final transcript flush. The last
+			// lines now live only in the archive. The one-shot final tail (includePartial)
+			// recovers them by re-reading the full transcript from archives and replacing.
+			if includePartial {
+				if entries, _, loadErr := loadAllSessionInteractionEntries(logPath, sessionID, includePartial); loadErr == nil && len(entries) > 0 {
+					return SessionLogLinesMsg{SessionID: sessionID, Entries: entries, NextOffset: since, Reload: true}
+				}
+			} else {
+				time.Sleep(tailPollInterval)
+			}
 
 			return SessionLogLinesMsg{SessionID: sessionID, NextOffset: since}
 		}
@@ -647,7 +691,9 @@ func TailSessionLogCmd(logPath string, sessionID string, since int64) tea.Cmd {
 			offset = 0 // rotation detected
 		}
 		if stat.Size() == offset {
-			time.Sleep(tailPollInterval)
+			if !includePartial {
+				time.Sleep(tailPollInterval)
+			}
 
 			return SessionLogLinesMsg{SessionID: sessionID, NextOffset: offset}
 		}
@@ -659,22 +705,38 @@ func TailSessionLogCmd(logPath string, sessionID string, since int64) tea.Cmd {
 		if _, err := f.Seek(offset, 0); err != nil {
 			return SessionLogLinesMsg{SessionID: sessionID, NextOffset: offset}
 		}
+		data, err := io.ReadAll(f)
+		if err != nil {
+			slog.Warn("agent session log read error", "error", err, "agent_session_id", sessionID)
+			return SessionLogLinesMsg{SessionID: sessionID, NextOffset: offset}
+		}
+		lastNewline := bytes.LastIndexByte(data, '\n')
+		if lastNewline < 0 {
+			if !includePartial {
+				time.Sleep(tailPollInterval)
+
+				return SessionLogLinesMsg{SessionID: sessionID, NextOffset: offset}
+			}
+			if entry, ok := sessionlog.ParseLine(string(data)); ok {
+				return SessionLogLinesMsg{SessionID: sessionID, Entries: []sessionlog.Entry{entry}, NextOffset: stat.Size()}
+			}
+
+			return SessionLogLinesMsg{SessionID: sessionID, NextOffset: stat.Size()}
+		}
+		completeEnd := lastNewline + 1
+		if includePartial && lastNewline < len(data)-1 {
+			completeEnd = len(data)
+		}
+		complete := data[:completeEnd]
 		var entries []sessionlog.Entry
-		scanner := bufio.NewScanner(f)
-		scanner.Buffer(make([]byte, 1024*1024), 10*1024*1024)
-		for scanner.Scan() {
-			if entry, ok := sessionlog.ParseLine(scanner.Text()); ok {
+		for len(complete) > 0 {
+			line, rest, _ := bytes.Cut(complete, []byte{'\n'})
+			if entry, ok := sessionlog.ParseLine(string(line)); ok {
 				entries = append(entries, entry)
 			}
+			complete = rest
 		}
-		pos, seekErr := f.Seek(0, io.SeekCurrent)
-		newOffset := offset
-		if seekErr == nil {
-			newOffset = pos
-		}
-		if scanErr := scanner.Err(); scanErr != nil {
-			slog.Warn("agent session log scanner error", "error", scanErr, "agent_session_id", sessionID)
-		}
+		newOffset := offset + int64(completeEnd)
 
 		return SessionLogLinesMsg{SessionID: sessionID, Entries: entries, NextOffset: newOffset}
 	}
@@ -793,7 +855,7 @@ func ReconcileOrphanedTasksCmd(
 // UI refreshes after dispatch.
 func RestartPlanningCmd(ctx context.Context, workItemSvc *service.SessionService, planningSvc *orchestrator.PlanningService, sessionSvc *service.AgentSessionService, send func(tea.Msg), workItemID string, prompt string) tea.Cmd {
 	return func() tea.Msg {
-		dispatchCtx := context.WithoutCancel(ctx)
+		dispatchCtx := ctx
 		go func() {
 			// Roll work item back from interrupted state so the resume can transition it
 			// back to planning (ResumeInterruptedPlanning requires SessionPlanning state).
@@ -891,6 +953,58 @@ func FinalizeWorkItemCmd(ctx context.Context, svc *orchestrator.ImplementationSe
 			// On success, EventWorkItemCompleted is emitted by the service.
 		}()
 		return nil // Don't block
+	}
+}
+
+// StartManualAgentSessionCmd starts a manual agent session asynchronously.
+func StartManualAgentSessionCmd(
+	ctx context.Context,
+	svc *orchestrator.ManualSessionService,
+	send func(tea.Msg),
+	workspaceID string,
+	instanceID string,
+	msg StartManualAgentSessionMsg,
+) tea.Cmd {
+	return func() tea.Msg {
+		if svc == nil {
+			return ErrMsg{Err: fmt.Errorf("manual session service is required")}
+		}
+		if msg.WorkItemID == "" {
+			return ErrMsg{Err: fmt.Errorf("work item is required")}
+		}
+		if workspaceID == "" {
+			return ErrMsg{Err: fmt.Errorf("workspace is required")}
+		}
+		if msg.RepositoryName == "" {
+			return ErrMsg{Err: fmt.Errorf("repository is required")}
+		}
+
+		dispatchCtx := context.WithoutCancel(ctx)
+		var owner *string
+		if instanceID != "" {
+			owner = &instanceID
+		}
+		go func() {
+			session, err := svc.StartManualSession(dispatchCtx, orchestrator.StartManualSessionRequest{
+				WorkItemID:      msg.WorkItemID,
+				WorkspaceID:     workspaceID,
+				RepositoryName:  msg.RepositoryName,
+				InitialMessage:  msg.InitialMessage,
+				SubPlanID:       msg.SubPlanID,
+				OwnerInstanceID: owner,
+			})
+			if err != nil {
+				slog.Error("start manual agent session failed", "error", err, "work_item_id", msg.WorkItemID, "repository", msg.RepositoryName)
+				if send != nil {
+					send(ErrMsg{Err: err})
+				}
+				return
+			}
+			if send != nil {
+				send(ManualAgentSessionStartedMsg{AgentSession: session})
+			}
+		}()
+		return nil
 	}
 }
 
@@ -1263,6 +1377,20 @@ func FollowUpFailedOrchestratedCmd(rf *orchestrator.ReviewFollowup, workItemID, 
 	}
 }
 
+// SendManualSessionMessageCmd sends a user prompt to a running manual session.
+func SendManualSessionMessageCmd(svc *orchestrator.ManualSessionService, sessionID, message string) tea.Cmd {
+	return func() tea.Msg {
+		if svc == nil {
+			return ErrMsg{Err: fmt.Errorf("manual session service is required")}
+		}
+		if err := svc.SendMessage(context.Background(), sessionID, message); err != nil {
+			return ErrMsg{Err: fmt.Errorf("prompt manual session %s: %w", sessionID, err)}
+		}
+
+		return SteerSessionSentMsg{SessionID: sessionID}
+	}
+}
+
 // SteerSessionCmd sends a steering/follow-up message to a running agent session.
 func SteerSessionCmd(registry orchestrator.SessionRegistry, sessionID, message string) tea.Cmd {
 	return func() tea.Msg {
@@ -1271,6 +1399,30 @@ func SteerSessionCmd(registry orchestrator.SessionRegistry, sessionID, message s
 		}
 
 		return SteerSessionSentMsg{SessionID: sessionID}
+	}
+}
+
+// FollowUpManualSessionCmd dispatches a user follow-up for a completed manual session.
+func FollowUpManualSessionCmd(ctx context.Context, svc *service.AgentSessionService, manualSvc *orchestrator.ManualSessionService, taskID, feedback string) tea.Cmd {
+	return func() tea.Msg {
+		if svc == nil {
+			return ErrMsg{Err: fmt.Errorf("agent session service is required for manual follow-up")}
+		}
+		if manualSvc == nil {
+			return ErrMsg{Err: fmt.Errorf("manual session service is required for manual follow-up")}
+		}
+		task, err := svc.Get(ctx, taskID)
+		if err != nil {
+			return ErrMsg{Err: fmt.Errorf("get manual session for follow-up: %w", err)}
+		}
+		if task.Kind != domain.AgentSessionKindManual {
+			return ErrMsg{Err: fmt.Errorf("manual follow-up not supported for kind %s", task.Kind)}
+		}
+		started, err := manualSvc.FollowUpManualSession(context.WithoutCancel(ctx), task, feedback)
+		if err != nil {
+			return ErrMsg{Err: fmt.Errorf("follow up manual session %s: %w", taskID, err)}
+		}
+		return ManualAgentSessionStartedMsg{AgentSession: started}
 	}
 }
 

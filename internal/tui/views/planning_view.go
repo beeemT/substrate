@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	sessionLogSpinnerInterval  = 100 * time.Millisecond
-	sessionLogSilenceThreshold = 3 * time.Minute
+	sessionLogSpinnerInterval   = 100 * time.Millisecond
+	sessionLogToolAnimationStep = 12
+	sessionLogSilenceThreshold  = 3 * time.Minute
 
 	sessionLogPlaceholderDefault   = "Send steering prompt to agent..."
 	sessionLogPlaceholderFailed    = "Send retry feedback for this session..."
@@ -44,30 +45,33 @@ type sessionLogSpinnerTickMsg struct{}
 //
 //nolint:recvcheck // Bubble Tea: Update returns value, View on value receiver
 type SessionLogModel struct {
-	viewport         viewport.Model
-	entries          []sessionlog.Entry
-	verbose          bool
-	collapseThinking bool
-	title            string
-	modeLabel        string
-	meta             string
-	notice           *sourceDetailsNotice
-	logPath          string
-	sessionID        string
-	offset           int64
-	live             bool
-	styles           styles.Styles
-	width            int
-	height           int
+	viewport          viewport.Model
+	entries           []sessionlog.Entry
+	verbose           bool
+	collapseThinking  bool
+	title             string
+	modeLabel         string
+	meta              string
+	notice            *sourceDetailsNotice
+	logPath           string
+	sessionID         string
+	offset            int64
+	live              bool
+	messageInputLabel string
+	styles            styles.Styles
+	width             int
+	height            int
 
 	// Rebuild guard: track the parameters used in the last RenderTranscript call so
 	// that syncViewportSize (called on every SetMeta / SetNotice / SetSize) can skip
 	// the expensive rebuild when only the viewport height changed (header line count
 	// differs) but the transcript content itself is unchanged.
-	renderedEntryCount int
-	renderedWidth      int
-	renderedVerbose    bool
-	renderedCollapse   bool
+	renderedEntryCount     int
+	renderedWidth          int
+	renderedVerbose        bool
+	renderedCollapse       bool
+	renderedAnimationFrame int
+	renderedRunningTools   bool
 
 	steerInput         components.GrowingTextArea
 	steerActive        bool
@@ -75,8 +79,9 @@ type SessionLogModel struct {
 	completedSessionID string // non-empty when viewing a completed session's log
 
 	// Activity spinner: shown when an agent is actively running for this session.
-	agentActive  bool
-	spinnerFrame int
+	agentActive        bool
+	spinnerFrame       int
+	toolAnimationFrame int
 
 	// Silence detection: track last event arrival to surface no-output warnings.
 	lastEventAt         time.Time
@@ -112,6 +117,11 @@ func (m *SessionLogModel) SetSize(width, height int) {
 }
 
 func (m *SessionLogModel) syncViewportSize() {
+	oldHeight := m.viewport.Height
+	oldOffset := m.viewport.YOffset
+	oldTotal := m.viewport.TotalLineCount()
+	oldBottomDistance := max(0, oldTotal-oldHeight-oldOffset)
+
 	m.rebuildHeader()
 	m.viewport.Width = m.width
 	m.steerInput.SetWidth(max(1, m.width))
@@ -120,9 +130,18 @@ func (m *SessionLogModel) syncViewportSize() {
 	if m.steerActive {
 		reserved += 1 + m.steerInput.Height() // divider + textarea rows
 	}
-	m.viewport.Height = max(1, m.height-reserved)
+	newHeight := max(1, m.height-reserved)
+	m.viewport.Height = newHeight
 	if len(m.entries) > 0 && m.transcriptNeedsRebuild() {
 		m.doRebuildTranscript()
+	}
+	if oldHeight != 0 && oldHeight != newHeight {
+		total := m.viewport.TotalLineCount()
+		if total == oldTotal {
+			m.viewport.SetYOffset(max(0, total-newHeight-oldBottomDistance))
+		} else {
+			m.viewport.SetYOffset(min(oldOffset, max(0, total-newHeight)))
+		}
 	}
 }
 
@@ -131,7 +150,8 @@ func (m *SessionLogModel) transcriptNeedsRebuild() bool {
 	return len(m.entries) != m.renderedEntryCount ||
 		m.width != m.renderedWidth ||
 		m.verbose != m.renderedVerbose ||
-		m.collapseThinking != m.renderedCollapse
+		m.collapseThinking != m.renderedCollapse ||
+		(m.renderedRunningTools && m.toolAnimationFrame != m.renderedAnimationFrame)
 }
 
 // doRebuildTranscript unconditionally re-renders the full transcript and
@@ -139,11 +159,14 @@ func (m *SessionLogModel) transcriptNeedsRebuild() bool {
 // changed (new entries, flag toggle, width change); prefer syncViewportSize
 // when only layout dimensions may have changed.
 func (m *SessionLogModel) doRebuildTranscript() {
-	m.viewport.SetContent(RenderTranscript(m.styles, m.entries, m.width, m.verbose, m.collapseThinking))
+	rendered, hasRunningTool := renderTranscriptWithMessageLabelFrame(m.styles, m.entries, m.width, m.verbose, m.collapseThinking, m.messageInputLabel, m.toolAnimationFrame)
+	m.viewport.SetContent(rendered)
 	m.renderedEntryCount = len(m.entries)
 	m.renderedWidth = m.width
 	m.renderedVerbose = m.verbose
 	m.renderedCollapse = m.collapseThinking
+	m.renderedAnimationFrame = m.toolAnimationFrame
+	m.renderedRunningTools = hasRunningTool
 }
 
 func (m *SessionLogModel) SetTitle(title string) {
@@ -161,6 +184,15 @@ func (m *SessionLogModel) SetMeta(meta string) {
 	m.syncViewportSize()
 }
 
+func (m *SessionLogModel) SetMessageInputLabel(label string) {
+	if m.messageInputLabel == label {
+		return
+	}
+	m.messageInputLabel = label
+	m.renderedEntryCount = -1
+	m.doRebuildTranscript()
+}
+
 func (m *SessionLogModel) SetNotice(notice *sourceDetailsNotice) {
 	m.notice = notice
 	m.syncViewportSize()
@@ -176,6 +208,9 @@ func (m *SessionLogModel) SetLogPath(sessionID, logPath string) {
 	m.offset = 0
 	m.entries = nil
 	m.renderedEntryCount = 0
+	m.renderedRunningTools = false
+	m.renderedAnimationFrame = 0
+	m.toolAnimationFrame = 0
 	m.viewport.SetContent("")
 	m.viewport.GotoTop()
 }
@@ -195,6 +230,7 @@ func (m *SessionLogModel) SetStaticContent(entries []sessionlog.Entry) {
 	m.sessionID = ""
 	m.offset = 0
 	m.agentActive = false
+	m.toolAnimationFrame = 0
 	m.silenceNoticeActive = false
 	m.lastEventAt = time.Time{}
 	m.entries = append([]sessionlog.Entry(nil), entries...)
@@ -239,6 +275,7 @@ func (m *SessionLogModel) SetAgentActive(active bool) tea.Cmd {
 	}
 	m.agentActive = active
 	m.spinnerFrame = 0
+	m.toolAnimationFrame = 0
 	if active {
 		m.lastEventAt = time.Now()
 		m.silenceNoticeActive = false
@@ -249,6 +286,9 @@ func (m *SessionLogModel) SetAgentActive(active bool) tea.Cmd {
 	// clear the warning text from the cache.
 	m.silenceNoticeActive = false
 	m.rebuildHeader()
+	if m.live && m.logPath != "" {
+		return TailSessionLogFinalCmd(m.logPath, m.sessionID, m.offset)
+	}
 	return nil
 }
 
@@ -327,6 +367,13 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 		if !m.live || msg.SessionID != m.sessionID {
 			return m, nil
 		}
+		if msg.Reload {
+			// Active log was compressed+removed on completion; replace the
+			// transcript with the full re-read from archives so the final
+			// lines written just before compression are not lost.
+			m.entries = nil
+			m.renderedEntryCount = 0
+		}
 		m.offset = msg.NextOffset
 		if len(msg.Entries) > 0 {
 			wasAtBottom := m.viewport.AtBottom()
@@ -340,6 +387,9 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 			if wasAtBottom {
 				m.viewport.GotoBottom()
 			}
+		}
+		if !m.agentActive {
+			return m, nil
 		}
 
 		return m, TailSessionLogCmd(m.logPath, m.sessionID, m.offset)
@@ -448,6 +498,14 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 			return m, nil
 		}
 		m.spinnerFrame = (m.spinnerFrame + 1) % len(sessionLogSpinnerFrames)
+		m.toolAnimationFrame += sessionLogToolAnimationStep
+		wasAtBottom := m.viewport.AtBottom()
+		if m.renderedRunningTools {
+			m.doRebuildTranscript()
+			if wasAtBottom {
+				m.viewport.GotoBottom()
+			}
+		}
 		// Surface a warning after prolonged silence while agent is active.
 		// The warning replaces the divider row in the header, so no viewport
 		// resize is needed when the state changes — but the header content
