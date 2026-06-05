@@ -169,6 +169,7 @@ Status:
 
 - Done: `internal/orchestrator/agent_run_supervisor.go` exists and owns harness start, event forwarding, registry lifecycle, wait, resume-info persistence, durable complete/fail/interrupt transitions, and completion callbacks.
 - Done: implementation graph runs use `AgentRunSupervisor` for harness lifecycle.
+- Done: review runs now use `AgentRunSupervisor` review-event mode, so `done`/`error` terminal events are consumed once by the supervisor while preserving durable complete/fail/interrupt transitions and registry cleanup.
 
 ### 4. Make ImplementationService own implementation graph progression
 
@@ -383,6 +384,12 @@ Do not keep both under the same UI label. Pick explicit labels, e.g.:
 - “Revise plan” -> planning follow-up.
 - “Request code changes” -> implementation graph follow-up.
 
+Status:
+
+- Done: completed work-item plan feedback is labeled and routed as “Revise plan” through `FollowUpPlanMsg`.
+- Done: completed graph-leaf code feedback is labeled and routed as “Request code changes” through `FollowUpSessionMsg` and `StartImplementationGraphRun(FollowUpCompleted)`.
+- Done: code follow-up payloads carry the completed implementation/review graph leaf session ID, never the work-item ID.
+
 ### 9. Make TUI actions async and event-driven — DONE
 
 Change long-running commands:
@@ -424,6 +431,7 @@ Status:
 - Done: focused `FollowUpSessionCmd`, `FollowUpFailedSessionCmd`, and `RetrySessionCmd` now return dispatch acknowledgements immediately and run implementation/review graph continuations asynchronously.
 - Done: async errors from these focused commands are logged and sent back through `program.Send` as `ErrMsg`.
 - Done: `ResumeAllSessionsForWorkItemCmd` uses the work-item graph entry point asynchronously.
+- Done: `RestartPlanningCmd` dispatches planning resume/restart work asynchronously and reports dispatch acceptance immediately.
 
 ### 10. Centralize bulk resume/retry orchestration — DONE
 
@@ -668,6 +676,11 @@ Add/adjust tests in layers:
 - Terminal agent-session helpers were moved out of `implementation.go` into `agent_session_terminal.go`.
 - Manual session row reuse now goes through the explicitly manual `RestartCompletedManualSession` primitive.
 - Bulk resume dispatch now propagates asynchronous graph dispatch failures through `ErrMsg`, and planning resume preserves the interrupted source session while creating a graph child.
+- Completed follow-up semantics are split explicitly: “Revise plan” re-enters planning, while “Request code changes” starts an append-only implementation graph child from a completed implementation/review leaf.
+- `AgentRunSupervisor` now also owns review harness lifecycle through event-terminal mode, including `done`/`error` detection without a second event-channel consumer.
+- `RestartPlanningCmd` no longer blocks the Bubble Tea command path while the planning harness runs.
+- Completed sub-plans can transition back to `in_progress` for completed work-item code follow-up.
+- Obsolete fallback behavior was removed: final aggregate state derivation now fails on sub-plan DB read errors instead of using wave state as a proxy, and already-passed review state no longer starts a fresh implementation.
 
 ## Migration Strategy
 
@@ -680,6 +693,8 @@ Add/adjust tests in layers:
 7. Remove old TUI direct lifecycle waits and continuation-wrapper calls.
 8. Delete obsolete resumption methods.
 9. Remove compensating stale-state checks that are no longer needed, but keep idempotency guards for crash recovery.
+
+Status: Done — all migration steps are complete.
 
 ## Acceptance Criteria
 

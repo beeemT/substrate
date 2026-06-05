@@ -273,7 +273,7 @@ func TestCompletedSubmitFeedbackActionEmitsPlanFollowUp(t *testing.T) {
 	app.content.SetMode(ContentModeOverview)
 	app.content.overview.overlay = overviewOverlayCompleted
 	app.content.overview.completed.SetWorkItemID(app.currentWorkItemID)
-	_ = app.content.overview.completed.OpenFeedback()
+	_ = app.content.overview.completed.OpenPlanFollowUp()
 	app.content.overview.completed.feedbackInput.SetValue("please revise the completed plan")
 
 	action := findAction(completedActions(app), "submit_feedback")
@@ -281,19 +281,67 @@ func TestCompletedSubmitFeedbackActionEmitsPlanFollowUp(t *testing.T) {
 		t.Fatalf("completed actions missing submit_feedback: %#v", actionIDs(completedActions(app)))
 	}
 
-	msg := action.Handler(app)()
-	if _, ok := msg.(FollowUpSessionMsg); ok {
-		t.Fatal("completed feedback emitted FollowUpSessionMsg")
-	}
-	followUp, ok := msg.(FollowUpPlanMsg)
+	cmd := action.Handler(app)
+	followUp, ok := cmdFollowUpPlan(cmd)
 	if !ok {
-		t.Fatalf("handler msg = %#v, want FollowUpPlanMsg", msg)
+		t.Fatalf("handler cmd did not emit FollowUpPlanMsg")
 	}
 	if followUp.WorkItemID != app.currentWorkItemID {
 		t.Fatalf("WorkItemID = %q, want %q", followUp.WorkItemID, app.currentWorkItemID)
 	}
 	if followUp.Feedback != "please revise the completed plan" {
 		t.Fatalf("Feedback = %q", followUp.Feedback)
+	}
+}
+
+func TestCompletedRequestCodeChangesActionEmitsSessionFollowUp(t *testing.T) {
+	app := newSidebarDrilldownTestApp()
+	app.content.SetMode(ContentModeOverview)
+	app.content.overview.overlay = overviewOverlayCompleted
+	impl := app.sessions[0]
+	impl.ID = "impl-1"
+	impl.Kind = domain.AgentSessionKindImplementation
+	impl.Status = domain.AgentSessionCompleted
+	review := impl
+	review.ID = "review-1"
+	review.Kind = domain.AgentSessionKindReview
+	review.ParentAgentSessionID = impl.ID
+	app.sessions = []domain.AgentSession{impl, review}
+	app.content.overview.completed.SetWorkItemID(app.currentWorkItemID)
+	app.content.overview.completed.SetCodeFollowUpSessionID(app.completedCodeFollowUpSessionID(app.currentWorkItemID))
+
+	action := findAction(filterAvailableActions(app, completedActions(app)), "request_code_changes_completed")
+	if action == nil {
+		t.Fatalf("completed actions missing request_code_changes_completed: %#v", actionIDs(filterAvailableActions(app, completedActions(app))))
+	}
+	if cmd := action.Handler(app); cmd == nil {
+		t.Fatal("request code changes action returned nil command")
+	}
+	app.content.overview.completed.feedbackInput.SetValue("please adjust the code")
+	submit := findAction(completedActions(app), "submit_feedback")
+	if submit == nil {
+		t.Fatalf("completed actions missing submit_feedback: %#v", actionIDs(completedActions(app)))
+	}
+
+	followUp, ok := cmdFollowUpSession(submit.Handler(app))
+	if !ok {
+		t.Fatalf("submit did not emit FollowUpSessionMsg")
+	}
+	if followUp.TaskID != "review-1" {
+		t.Fatalf("TaskID = %q, want review-1", followUp.TaskID)
+	}
+	if followUp.Feedback != "please adjust the code" {
+		t.Fatalf("Feedback = %q", followUp.Feedback)
+	}
+}
+
+func TestCompletedRequestCodeChangesActionHiddenWithoutCompletedGraphLeaf(t *testing.T) {
+	app := newSidebarDrilldownTestApp()
+	app.content.SetMode(ContentModeOverview)
+	app.content.overview.overlay = overviewOverlayCompleted
+
+	if action := findAction(filterAvailableActions(app, completedActions(app)), "request_code_changes_completed"); action != nil {
+		t.Fatalf("request_code_changes_completed visible without completed graph leaf")
 	}
 }
 

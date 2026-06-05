@@ -9,25 +9,51 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-func cmdEmitsFollowUpPlan(cmd tea.Cmd) bool {
+func cmdFollowUpPlan(cmd tea.Cmd) (FollowUpPlanMsg, bool) {
 	if cmd == nil {
-		return false
+		return FollowUpPlanMsg{}, false
 	}
 	msg := cmd()
-	if _, ok := msg.(FollowUpPlanMsg); ok {
-		return true
+	if followUp, ok := msg.(FollowUpPlanMsg); ok {
+		return followUp, true
 	}
 	batch, ok := msg.(tea.BatchMsg)
 	if !ok {
-		return false
+		return FollowUpPlanMsg{}, false
 	}
 	for _, c := range batch {
-		if cmdEmitsFollowUpPlan(c) {
-			return true
+		if followUp, ok := cmdFollowUpPlan(c); ok {
+			return followUp, true
 		}
 	}
 
-	return false
+	return FollowUpPlanMsg{}, false
+}
+
+func cmdEmitsFollowUpPlan(cmd tea.Cmd) bool {
+	_, ok := cmdFollowUpPlan(cmd)
+	return ok
+}
+
+func cmdFollowUpSession(cmd tea.Cmd) (FollowUpSessionMsg, bool) {
+	if cmd == nil {
+		return FollowUpSessionMsg{}, false
+	}
+	msg := cmd()
+	if followUp, ok := msg.(FollowUpSessionMsg); ok {
+		return followUp, true
+	}
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		return FollowUpSessionMsg{}, false
+	}
+	for _, c := range batch {
+		if followUp, ok := cmdFollowUpSession(c); ok {
+			return followUp, true
+		}
+	}
+
+	return FollowUpSessionMsg{}, false
 }
 
 func TestCompletedModelWheelScrollsWhileFeedbackActive(t *testing.T) {
@@ -77,5 +103,36 @@ func TestCompletedModelEmptyFeedbackDiscarded(t *testing.T) {
 	}
 	if m.InputCaptured() {
 		t.Fatal("feedback remained active after empty submission")
+	}
+}
+
+func TestCompletedModelCodeFeedbackEmitsSessionFollowUp(t *testing.T) {
+	t.Parallel()
+
+	m := NewCompletedModel(testStyles())
+	m.SetSize(80, 24)
+	m.SetTitle("T")
+	m.SetWorkItemID("wi-1")
+	m.SetCodeFollowUpSessionID("review-leaf-1")
+	m.SetPlan("plan content")
+	_ = m.OpenCodeFollowUp()
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("please adjust the code")})
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmdEmitsFollowUpPlan(cmd) {
+		t.Fatal("code feedback emitted FollowUpPlanMsg")
+	}
+	followUp, ok := cmdFollowUpSession(cmd)
+	if !ok {
+		t.Fatalf("cmd did not emit FollowUpSessionMsg: %#v", cmd)
+	}
+	if followUp.TaskID != "review-leaf-1" {
+		t.Fatalf("TaskID = %q, want review-leaf-1", followUp.TaskID)
+	}
+	if followUp.Feedback != "please adjust the code" {
+		t.Fatalf("Feedback = %q", followUp.Feedback)
+	}
+	if m.InputCaptured() {
+		t.Fatal("feedback remained active after submission")
 	}
 }

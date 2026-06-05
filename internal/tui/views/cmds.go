@@ -787,51 +787,68 @@ func ReconcileOrphanedTasksCmd(
 	}
 }
 
-// RestartPlanningCmd resumes an interrupted planning session with native harness
-// resume data when available, falling back to a fresh planning start when no
-// interrupted session exists. Prompt is optional operator guidance delivered as
-// revision feedback when native resume is used.
-func RestartPlanningCmd(ctx context.Context, workItemSvc *service.SessionService, planningSvc *orchestrator.PlanningService, sessionSvc *service.AgentSessionService, workItemID string, prompt string) tea.Cmd {
+// RestartPlanningCmd dispatches planning resume/restart work asynchronously.
+// Native resume data is used when an interrupted planning leaf exists; otherwise
+// the planning service starts a fresh planning run. Durable planning events drive
+// UI refreshes after dispatch.
+func RestartPlanningCmd(ctx context.Context, workItemSvc *service.SessionService, planningSvc *orchestrator.PlanningService, sessionSvc *service.AgentSessionService, send func(tea.Msg), workItemID string, prompt string) tea.Cmd {
 	return func() tea.Msg {
-		// Roll work item back from interrupted state so the resume can transition it
-		// back to planning (ResumeInterruptedPlanning requires SessionPlanning state).
-		if err := workItemSvc.RollbackPlanningInterrupt(ctx, workItemID); err != nil {
-			return ErrMsg{Err: err}
-		}
-
-		// Find the interrupted planning session for this work item to resume it.
-		sessions, listErr := sessionSvc.ListByWorkItemID(ctx, workItemID)
-		if listErr != nil {
-			return ErrMsg{Err: fmt.Errorf("list sessions for work item: %w", listErr)}
-		}
-		var interrupted *domain.AgentSession
-		for i := range sessions {
-			if sessions[i].Status == domain.AgentSessionInterrupted &&
-				sessions[i].Kind == domain.AgentSessionKindPlanning {
-				interrupted = &sessions[i]
-				break
+		dispatchCtx := context.WithoutCancel(ctx)
+		go func() {
+			// Roll work item back from interrupted state so the resume can transition it
+			// back to planning (ResumeInterruptedPlanning requires SessionPlanning state).
+			if err := workItemSvc.RollbackPlanningInterrupt(dispatchCtx, workItemID); err != nil {
+				slog.Error("rollback interrupted planning failed", "error", err, "work_item_id", workItemID)
+				if send != nil {
+					send(ErrMsg{Err: err})
+				}
+				return
 			}
-		}
 
-		if interrupted != nil {
-			// Resume the interrupted planning session with native resume data.
-			// Fail the old interrupted session so the overview clears the action card.
-			if failErr := sessionSvc.Fail(ctx, interrupted.ID, nil); failErr != nil {
-				slog.Warn("failed to fail interrupted planning session before resume",
-					"agent_session_id", interrupted.ID, "error", failErr)
+			// Find the interrupted planning session for this work item to resume it.
+			sessions, listErr := sessionSvc.ListByWorkItemID(dispatchCtx, workItemID)
+			if listErr != nil {
+				err := fmt.Errorf("list sessions for work item: %w", listErr)
+				slog.Error("list sessions for planning restart failed", "error", err, "work_item_id", workItemID)
+				if send != nil {
+					send(ErrMsg{Err: err})
+				}
+				return
 			}
-			_, err := planningSvc.ResumeInterruptedPlanning(ctx, *interrupted, prompt)
-			if err != nil {
-				return ErrMsg{Err: err}
+			var interrupted *domain.AgentSession
+			for i := range sessions {
+				if sessions[i].Status == domain.AgentSessionInterrupted &&
+					sessions[i].Kind == domain.AgentSessionKindPlanning {
+					interrupted = &sessions[i]
+					break
+				}
 			}
-			return PlanningRestartedMsg{WorkItemID: workItemID, Message: "Planning resumed"}
-		}
 
-		// No interrupted session found — fall back to fresh planning.
-		if _, err := planningSvc.Plan(ctx, workItemID); err != nil {
-			return ErrMsg{Err: err}
-		}
-		return PlanningRestartedMsg{WorkItemID: workItemID, Message: "Planning restarted"}
+			if interrupted != nil {
+				// Resume the interrupted planning session with native resume data.
+				// Fail the old interrupted session so the overview clears the action card.
+				if failErr := sessionSvc.Fail(dispatchCtx, interrupted.ID, nil); failErr != nil {
+					slog.Warn("failed to fail interrupted planning session before resume",
+						"agent_session_id", interrupted.ID, "error", failErr)
+				}
+				if _, err := planningSvc.ResumeInterruptedPlanning(dispatchCtx, *interrupted, prompt); err != nil {
+					slog.Error("resume interrupted planning failed", "error", err, "work_item_id", workItemID, "agent_session_id", interrupted.ID)
+					if send != nil {
+						send(ErrMsg{Err: err})
+					}
+				}
+				return
+			}
+
+			// No interrupted session found — fall back to fresh planning.
+			if _, err := planningSvc.Plan(dispatchCtx, workItemID); err != nil {
+				slog.Error("restart planning failed", "error", err, "work_item_id", workItemID)
+				if send != nil {
+					send(ErrMsg{Err: err})
+				}
+			}
+		}()
+		return PlanningRestartedMsg{WorkItemID: workItemID, Message: "Planning restart dispatched"}
 	}
 }
 
@@ -1258,15 +1275,20 @@ func SteerSessionCmd(registry orchestrator.SessionRegistry, sessionID, message s
 }
 
 // FollowUpSessionCmd dispatches a graph follow-up from a completed implementation
-// leaf. The long-running harness and review continuation run off the Bubble Tea
-// command path; durable events drive UI refreshes.
+// or review leaf. The long-running harness and review continuation run off the
+// Bubble Tea command path; durable events drive UI refreshes.
 func FollowUpSessionCmd(ctx context.Context, svc *service.AgentSessionService, implSvc *orchestrator.ImplementationService, send func(tea.Msg), taskID, feedback, instanceID string) tea.Cmd {
 	return func() tea.Msg {
 		task, err := svc.Get(ctx, taskID)
 		if err != nil {
 			return ErrMsg{Err: fmt.Errorf("get task for follow-up: %w", err)}
 		}
-		if implSvc == nil || task.Kind != domain.AgentSessionKindImplementation {
+		if implSvc == nil {
+			return ErrMsg{Err: fmt.Errorf("implementation service is required for follow-up")}
+		}
+		switch task.Kind {
+		case domain.AgentSessionKindImplementation, domain.AgentSessionKindReview:
+		default:
 			return ErrMsg{Err: fmt.Errorf("follow-up not supported for kind %s", task.Kind)}
 		}
 		dispatchCtx := context.WithoutCancel(ctx)

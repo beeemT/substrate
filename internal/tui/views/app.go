@@ -2060,7 +2060,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case RestartPlanMsg:
 		if a.provider.Planning() != nil && a.provider.Session() != nil {
-			cmds = append(cmds, RestartPlanningCmd(a.registerPipelineCancel(msg.WorkItemID), a.provider.Session(), a.provider.Planning(), a.provider.Task(), msg.WorkItemID, msg.Prompt))
+			cmds = append(cmds, RestartPlanningCmd(a.registerPipelineCancel(msg.WorkItemID), a.provider.Session(), a.provider.Planning(), a.provider.Task(), a.sendAsyncMsg, msg.WorkItemID, msg.Prompt))
 		} else {
 			a.toasts.AddToast("Planning service not configured", components.ToastError)
 		}
@@ -3319,6 +3319,30 @@ func firstSourceDetailsAffected(affected []string) string {
 	return strings.TrimSpace(affected[0])
 }
 
+func graphManagedFailedFollowUpCandidate(session domain.AgentSession, sessions []domain.AgentSession) bool {
+	if session.Status != domain.AgentSessionFailed {
+		return false
+	}
+	switch session.Kind {
+	case domain.AgentSessionKindImplementation, domain.AgentSessionKindReview:
+	default:
+		return false
+	}
+	return domain.IsLeafAgentSessionID(sessions, session.ID)
+}
+
+func graphManagedCompletedCodeFollowUpCandidate(session domain.AgentSession, sessions []domain.AgentSession) bool {
+	if session.Status != domain.AgentSessionCompleted {
+		return false
+	}
+	switch session.Kind {
+	case domain.AgentSessionKindImplementation, domain.AgentSessionKindReview:
+	default:
+		return false
+	}
+	return domain.IsLeafAgentSessionID(sessions, session.ID)
+}
+
 func (a *App) showTaskContent(wi *domain.Session, agentSession *domain.AgentSession) tea.Cmd {
 	title := firstNonEmptyString(wi.ExternalID, wi.ID) + " · " + taskSidebarSessionTitle(agentSession)
 	metaParts := []string{sessionStatusLabel(agentSession.Status)}
@@ -3351,13 +3375,22 @@ func (a *App) showTaskContent(wi *domain.Session, agentSession *domain.AgentSess
 	}
 	a.content.sessionLog.SetLogPath(agentSession.ID, logPath)
 	a.content.sessionLog.SetPlanID(agentSession.PlanID)
+	workItemSessions := a.sessionsForWorkItem(wi.ID)
 	switch agentSession.Status {
 	case domain.AgentSessionFailed:
 		a.content.sessionLog.ClearCompletedSession()
-		a.content.sessionLog.SetFailedSession(agentSession.ID)
+		if graphManagedFailedFollowUpCandidate(*agentSession, workItemSessions) {
+			a.content.sessionLog.SetFailedSession(agentSession.ID)
+		} else {
+			a.content.sessionLog.ClearFailedSession()
+		}
 	case domain.AgentSessionCompleted:
 		a.content.sessionLog.ClearFailedSession()
-		a.content.sessionLog.SetCompletedSession(agentSession.ID)
+		if graphManagedCompletedCodeFollowUpCandidate(*agentSession, workItemSessions) {
+			a.content.sessionLog.SetCompletedSession(agentSession.ID)
+		} else {
+			a.content.sessionLog.ClearCompletedSession()
+		}
 	default:
 		a.content.sessionLog.ClearFailedSession()
 		a.content.sessionLog.ClearCompletedSession()
@@ -3390,13 +3423,7 @@ func (a *App) showForemanContent(wi *domain.Session, foremanSession *domain.Agen
 	a.content.sessionLog.SetModeLabel("Foreman")
 	a.content.sessionLog.SetMeta(meta)
 	a.content.sessionLog.ClearFailedSession()
-	if foremanSession.Status == domain.AgentSessionCompleted {
-		a.content.sessionLog.SetCompletedSession(foremanSession.ID)
-	} else if foremanSession.Status == domain.AgentSessionFailed {
-		a.content.sessionLog.SetFailedSession(foremanSession.ID)
-	} else {
-		a.content.sessionLog.ClearCompletedSession()
-	}
+	a.content.sessionLog.ClearCompletedSession()
 	logPath := filepath.Join(a.sessionsDir, foremanSession.ID+".log")
 	resumeOffset := int64(0)
 	if a.content.sessionLog.live && a.content.sessionLog.sessionID == foremanSession.ID && a.content.sessionLog.logPath == logPath {

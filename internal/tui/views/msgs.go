@@ -666,7 +666,7 @@ type SteerSessionSentMsg struct {
 	SessionID string
 }
 
-// FollowUpSessionMsg fires when the user submits a follow-up prompt for a completed session.
+// FollowUpSessionMsg fires when the user submits code-change feedback for a completed graph leaf.
 type FollowUpSessionMsg struct {
 	TaskID   string
 	Feedback string
@@ -678,7 +678,7 @@ type FollowUpFailedSessionMsg struct {
 	Feedback string
 }
 
-// FollowUpPlanMsg requests a follow-up re-planning for a completed work item.
+// FollowUpPlanMsg requests a follow-up re-planning cycle for a completed work item.
 type FollowUpPlanMsg struct {
 	WorkItemID string
 	Feedback   string

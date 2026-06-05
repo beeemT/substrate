@@ -471,16 +471,16 @@ func TestOverviewExternalLifecycleUsesRecordedArtifacts(t *testing.T) {
 	if !strings.Contains(view, "External lifecycle") {
 		t.Fatalf("content view = %q, want External lifecycle section", view)
 	}
-	// Verify the completed action card is built and shows the correct hints.
+	// Verify the completed action card is built and shows the explicit plan-revision hint.
 	hints := app.content.KeybindHints()
-	foundInspectRequestChanges := false
+	foundInspectRevisePlan := false
 	for _, h := range hints {
-		if h.Key == "i" && h.Label == "Inspect / Request changes" {
-			foundInspectRequestChanges = true
+		if h.Key == "i" && h.Label == "Inspect / Revise plan" {
+			foundInspectRevisePlan = true
 		}
 	}
-	if !foundInspectRequestChanges {
-		t.Fatalf("expected 'i Inspect / Request changes' hint, got %v", hints)
+	if !foundInspectRevisePlan {
+		t.Fatalf("expected 'i Inspect / Revise plan' hint, got %v", hints)
 	}
 }
 
@@ -732,7 +732,7 @@ func TestCompletedActionCardCNoLongerOpensFollowUpInput(t *testing.T) {
 
 // TestCompletedActionCardIOpensOverlayWithFollowUpInput verifies that pressing [i] on a
 // completed action card opens the completed overlay with the feedback input active,
-// matching the Inspect / Request changes label.
+// matching the Inspect / Revise plan label.
 func TestCompletedActionCardIOpensOverlayWithFollowUpInput(t *testing.T) {
 	t.Parallel()
 

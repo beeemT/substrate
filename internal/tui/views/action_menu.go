@@ -752,38 +752,62 @@ func reviewingActions(a *App) []Action {
 
 func completedActions(a *App) []Action {
 	return []Action{
-		{ID: "request_changes_completed", Label: "Request changes", Shortcut: "i", Priority: 480, Condition: func(a *App) bool {
+		{ID: "revise_plan_completed", Label: "Revise plan", Shortcut: "i", Priority: 480, Condition: func(a *App) bool {
 			return a.content.Mode() == ContentModeOverview && a.content.overview.overlay == overviewOverlayCompleted
-		}, Handler: func(a *App) tea.Cmd { return a.content.overview.openCompletedOverlayForChanges() }},
+		}, Handler: func(a *App) tea.Cmd { return a.content.overview.openCompletedOverlayForPlanFollowUp() }},
+		{ID: "request_code_changes_completed", Label: "Request code changes", Shortcut: "p", Priority: 481, Condition: func(a *App) bool {
+			return a.content.Mode() == ContentModeOverview &&
+				a.content.overview.overlay == overviewOverlayCompleted &&
+				a.completedCodeFollowUpSessionID(a.currentWorkItemID) != ""
+		}, Handler: func(a *App) tea.Cmd {
+			a.content.overview.completed.SetCodeFollowUpSessionID(a.completedCodeFollowUpSessionID(a.currentWorkItemID))
+			return a.content.overview.openCompletedOverlayForCodeFollowUp()
+		}},
 		{ID: "submit_feedback", Label: "Submit feedback", Shortcut: "Enter", Priority: 490, Condition: func(a *App) bool {
 			return a.content.Mode() == ContentModeOverview && a.content.overview.overlay == overviewOverlayCompleted && a.content.overview.completed.inputActive
-		}, Handler: func(a *App) tea.Cmd {
-			c := a.content.overview.completed
-			c.feedbackInput.Flush()
-			feedback := c.feedbackInput.Value()
-			return func() tea.Msg { return FollowUpPlanMsg{WorkItemID: a.currentWorkItemID, Feedback: feedback} }
-		}},
+		}, Handler: func(a *App) tea.Cmd { return updateContentWithKey(a, "enter") }},
 		{ID: "copy_completed_plan", Label: "Copy plan", Shortcut: "c", Priority: 491, Condition: func(a *App) bool {
 			return a.content.Mode() == ContentModeOverview && a.content.overview.overlay == overviewOverlayCompleted
 		}, Handler: func(a *App) tea.Cmd { return updateContentWithKey(a, "c") }},
 	}
 }
 
+func sessionLogPromptActionLabel(a *App) string {
+	mode := a.content.Mode()
+	if mode != ContentModeAgentSession && mode != ContentModeSessionInteraction {
+		return ""
+	}
+	sessionID := a.content.sessionLog.SessionID()
+	session := a.workItemTaskSession(a.currentWorkItemID, sessionID)
+	if session == nil {
+		return ""
+	}
+	switch session.Status {
+	case domain.AgentSessionRunning:
+		return "Prompt agent"
+	case domain.AgentSessionFailed:
+		if a.content.sessionLog.failedSessionID == session.ID {
+			return "Retry with feedback"
+		}
+	case domain.AgentSessionCompleted:
+		if a.content.sessionLog.completedSessionID == session.ID {
+			return "Request code changes"
+		}
+	}
+	return ""
+}
+
 func sessionLogActions(a *App, ctx ActionContext) []Action {
 	var actions []Action
 
+	promptLabel := sessionLogPromptActionLabel(a)
+	if promptLabel == "" {
+		promptLabel = "Prompt agent"
+	}
 	actions = append(actions, Action{
-		ID: "steer", Label: "Steer / prompt", Shortcut: "p", Priority: 300,
+		ID: "steer", Label: promptLabel, Shortcut: "p", Priority: 300,
 		Condition: func(a *App) bool {
-			if a.content.Mode() != ContentModeAgentSession {
-				return false
-			}
-			sessionID := a.content.sessionLog.SessionID()
-			session := a.workItemTaskSession(a.currentWorkItemID, sessionID)
-			if session == nil {
-				return false
-			}
-			return session.Status == domain.AgentSessionRunning || session.Status == domain.AgentSessionFailed || session.Status == domain.AgentSessionCompleted
+			return sessionLogPromptActionLabel(a) != ""
 		},
 		Handler: func(a *App) tea.Cmd {
 			a.content.sessionLog.steerActive = true

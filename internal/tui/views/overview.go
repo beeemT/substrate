@@ -50,15 +50,16 @@ const (
 )
 
 type SessionOverviewData struct {
-	WorkItemID string
-	State      domain.SessionState
-	Header     OverviewHeader
-	Actions    []OverviewActionCard
-	Sources    []OverviewSourceItem
-	Plan       OverviewPlan
-	Tasks      []OverviewTaskRow
-	External   OverviewExternalLifecycle
-	Activity   []OverviewActivityItem
+	WorkItemID            string
+	State                 domain.SessionState
+	Header                OverviewHeader
+	Actions               []OverviewActionCard
+	Sources               []OverviewSourceItem
+	Plan                  OverviewPlan
+	Tasks                 []OverviewTaskRow
+	External              OverviewExternalLifecycle
+	Activity              []OverviewActivityItem
+	CodeFollowUpSessionID string
 }
 
 type OverviewHeader struct {
@@ -455,7 +456,7 @@ func (m SessionOverviewModel) Update(msg tea.Msg) (SessionOverviewModel, tea.Cmd
 
 					return m, nil
 				case overviewActionCompleted:
-					return m, m.openCompletedOverlayForChanges()
+					return m, m.openCompletedOverlayForPlanFollowUp()
 				case overviewActionMerged:
 					m.overlay = overviewOverlayCompleted
 
@@ -575,15 +576,25 @@ func (m *SessionOverviewModel) syncViewport(reset bool) {
 // feedback input while preserving mouse reporting; callers MUST batch it into
 // their reply.
 func (m *SessionOverviewModel) openPlanOverlayForChanges() tea.Cmd {
-	cmd := m.planReview.OpenFeedback("Describe the changes needed\u2026")
+	cmd := m.planReview.OpenFeedback("Describe the changes needed…")
 	m.overlay = overviewOverlayPlan
 	return cmd
 }
 
-// openCompletedOverlayForChanges resets the follow-up feedback input,
-// activates it, and opens the completed overlay.
+// openCompletedOverlayForChanges preserves the historical call path and now
+// means a plan revision, not a graph code follow-up.
 func (m *SessionOverviewModel) openCompletedOverlayForChanges() tea.Cmd {
-	cmd := m.completed.OpenFeedback()
+	return m.openCompletedOverlayForPlanFollowUp()
+}
+
+func (m *SessionOverviewModel) openCompletedOverlayForPlanFollowUp() tea.Cmd {
+	cmd := m.completed.OpenPlanFollowUp()
+	m.overlay = overviewOverlayCompleted
+	return cmd
+}
+
+func (m *SessionOverviewModel) openCompletedOverlayForCodeFollowUp() tea.Cmd {
+	cmd := m.completed.OpenCodeFollowUp()
 	m.overlay = overviewOverlayCompleted
 	return cmd
 }
@@ -598,6 +609,7 @@ func (m *SessionOverviewModel) syncActionModels() {
 	m.interrupted.SetTitle(title)
 	m.completed.SetTitle(title)
 	m.completed.SetWorkItemID(m.data.WorkItemID)
+	m.completed.SetCodeFollowUpSessionID(m.data.CodeFollowUpSessionID)
 	m.completed.SetStatusLabel(reviewArtifactOverlayLabel(m.data.State))
 	// Pass the full plan document so the completed overlay shows what was implemented.
 	m.completed.SetPlan(m.data.Plan.FullDocument)
@@ -874,7 +886,7 @@ func actionKeybindHints(action OverviewActionCard, actions []OverviewActionCard)
 	case overviewActionFinalize:
 		return []KeybindHint{{Key: "f", Label: "Finalize"}}
 	case overviewActionCompleted:
-		return []KeybindHint{{Key: "i", Label: "Inspect / Request changes"}}
+		return []KeybindHint{{Key: "i", Label: "Inspect / Revise plan"}}
 	case overviewActionMerged:
 		return []KeybindHint{{Key: "i", Label: "Inspect"}}
 	default:
@@ -1145,16 +1157,39 @@ func (a *App) buildOverviewData(wi *domain.Session) SessionOverviewData {
 	}
 
 	return SessionOverviewData{
-		WorkItemID: wi.ID,
-		State:      wi.State,
-		Header:     buildOverviewHeader(*wi, entry),
-		Actions:    a.buildOverviewActions(wi, plan, subPlans),
-		Sources:    buildOverviewSources(*wi, a.widthForInnerContent()),
-		Plan:       a.buildOverviewPlan(wi, plan, subPlans),
-		Tasks:      a.buildOverviewTasks(wi, subPlans),
-		External:   a.buildOverviewExternalLifecycle(wi),
-		Activity:   a.buildOverviewActivity(wi, plan),
+		WorkItemID:            wi.ID,
+		State:                 wi.State,
+		Header:                buildOverviewHeader(*wi, entry),
+		Actions:               a.buildOverviewActions(wi, plan, subPlans),
+		Sources:               buildOverviewSources(*wi, a.widthForInnerContent()),
+		Plan:                  a.buildOverviewPlan(wi, plan, subPlans),
+		Tasks:                 a.buildOverviewTasks(wi, subPlans),
+		External:              a.buildOverviewExternalLifecycle(wi),
+		Activity:              a.buildOverviewActivity(wi, plan),
+		CodeFollowUpSessionID: a.completedCodeFollowUpSessionID(wi.ID),
 	}
+}
+
+func (a App) completedCodeFollowUpSessionID(workItemID string) string {
+	var latest *domain.AgentSession
+	for _, leaf := range domain.LeafAgentSessions(a.sessionsForWorkItem(workItemID)) {
+		if leaf.Status != domain.AgentSessionCompleted {
+			continue
+		}
+		switch leaf.Kind {
+		case domain.AgentSessionKindImplementation, domain.AgentSessionKindReview:
+		default:
+			continue
+		}
+		session := leaf
+		if latest == nil || session.UpdatedAt.After(latest.UpdatedAt) || (session.UpdatedAt.Equal(latest.UpdatedAt) && session.ID > latest.ID) {
+			latest = &session
+		}
+	}
+	if latest == nil {
+		return ""
+	}
+	return latest.ID
 }
 
 func buildOverviewHeader(wi domain.Session, entry SidebarEntry) OverviewHeader {
@@ -1932,7 +1967,7 @@ func (a *App) buildCompletedActionCard(wi *domain.Session, subPlans []domain.Tas
 	return &OverviewActionCard{
 		Kind:     overviewActionCompleted,
 		Title:    "Implementation completed",
-		Why:      "The implementation is done. You can request follow-up changes or inspect the results.",
+		Why:      "The implementation is done. You can revise the plan or inspect the results.",
 		Affected: affected,
 		Context:  context,
 	}

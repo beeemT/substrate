@@ -182,12 +182,11 @@ func (p *ReviewPipeline) ReviewSessionWithParent(ctx context.Context, agentSessi
 		return nil, fmt.Errorf("get plan: %w", err)
 	}
 
-	// Start review agent session - now returns (session, output, sessionID, error)
-	reviewSession, reviewOutput, reviewSessionID, err := p.startReviewAgent(ctx, agentSession, subPlan, plan, reviewParentSessionID)
+	// Start review agent session and wait for its supervised terminal result.
+	_, reviewOutput, reviewSessionID, err := p.startReviewAgent(ctx, agentSession, subPlan, plan, reviewParentSessionID)
 	if err != nil {
 		return nil, fmt.Errorf("start review agent: %w", err)
 	}
-	defer reviewSession.Abort(ctx) // Abort when done
 
 	// Parse critiques from output. If the output is not parseable, log a warning and
 	// treat it as no critiques — the review agent runs in agent mode (bridge exits after
@@ -243,7 +242,8 @@ func (p *ReviewPipeline) ReviewSessionWithParent(ctx context.Context, agentSessi
 	return result, nil
 }
 
-// startReviewAgent starts a review agent session and returns the session (still alive) along with output.
+// startReviewAgent starts a review agent session through AgentRunSupervisor and
+// returns once the supervisor observes a terminal review event.
 func (p *ReviewPipeline) startReviewAgent(
 	ctx context.Context,
 	agentSession domain.AgentSession,
@@ -290,55 +290,51 @@ func (p *ReviewPipeline) startReviewAgent(
 		UserPrompt:   "Review the changes in this worktree. Compare against main and evaluate against the sub-plan.",
 	}
 
-	reviewSession, err := p.harness.StartSession(ctx, opts)
-	if err != nil {
-		if failErr := failSessionDurably(ctx, p.sessionSvc, reviewSessionID, ptrInt(1)); failErr != nil {
-			slog.Warn("failed to fail review session after harness start error", "error", failErr, "agent_session_id", reviewSessionID)
-		}
-		return nil, "", "", fmt.Errorf("start review session: %w", err)
+	type reviewAgentOutcome struct {
+		output string
+		err    error
+	}
+	outcomes := make(chan reviewAgentOutcome, 1)
+	var reviewSession adapter.AgentSession
+	supervisor := &AgentRunSupervisor{
+		harnesses:  staticHarnessSelector{harness: p.harness},
+		sessionSvc: p.sessionSvc,
+		registry:   p.registry,
+		timeout:    p.reviewTimeout,
+	}
+	if _, err := supervisor.Start(ctx, AgentRunRequest{
+		Session: reviewTask,
+		Opts:    opts,
+		Mode:    AgentRunModeReviewEvents,
+		AfterStart: func(_ context.Context, harnessSession adapter.AgentSession) error {
+			reviewSession = harnessSession
+			return nil
+		},
+		ReadOutput: p.readSessionOutputFromLog,
+		OnReviewCompleted: func(_ context.Context, _ domain.AgentSession, output string) error {
+			outcomes <- reviewAgentOutcome{output: output}
+			return nil
+		},
+		OnFailed: func(_ context.Context, _ domain.AgentSession, err error) error {
+			outcomes <- reviewAgentOutcome{err: err}
+			return nil
+		},
+		OnInterrupted: func(context.Context, domain.AgentSession) error {
+			outcomes <- reviewAgentOutcome{err: context.Canceled}
+			return nil
+		},
+	}); err != nil {
+		return reviewSession, "", reviewSessionID, fmt.Errorf("start review session: %w", err)
 	}
 
-	// In agent mode the harness sends UserPrompt automatically — no manual prompt needed.
-	// Watch for done event instead of calling Wait().
-	// Apply configured review timeout.
-	timeoutCtx, cancel := context.WithTimeout(ctx, p.reviewTimeout)
-	defer cancel()
-
-	// Register session for steering.
-	p.registry.Register(reviewSessionID, reviewSession)
-	defer p.registry.Deregister(reviewSessionID)
-	for {
-		select {
-		case <-timeoutCtx.Done():
-			if failErr := failSessionDurably(ctx, p.sessionSvc, reviewSessionID, ptrInt(1)); failErr != nil {
-				slog.Warn("failed to fail timed out review session", "error", failErr, "agent_session_id", reviewSessionID)
-			}
-			return reviewSession, "", reviewSessionID, fmt.Errorf("review session timed out: %w", timeoutCtx.Err())
-		case evt, ok := <-reviewSession.Events():
-			if !ok {
-				if failErr := failSessionDurably(ctx, p.sessionSvc, reviewSessionID, ptrInt(1)); failErr != nil {
-					slog.Warn("failed to fail closed review session", "error", failErr, "agent_session_id", reviewSessionID)
-				}
-				return reviewSession, "", reviewSessionID, errors.New("review session events channel closed unexpectedly")
-			}
-			switch evt.Type {
-			case "done":
-				// "done" is the normal agent-mode completion signal (lifecycle.completed).
-				if completeErr := completeSessionDurably(ctx, p.sessionSvc, reviewSessionID); completeErr != nil {
-					slog.Warn("failed to complete review session", "error", completeErr, "agent_session_id", reviewSessionID)
-				}
-				output, err := p.readSessionOutputFromLog(ctx, reviewSessionID)
-				if err != nil {
-					return reviewSession, "", reviewSessionID, fmt.Errorf("read review session output: %w", err)
-				}
-				return reviewSession, output, reviewSessionID, nil
-			case "error":
-				if failErr := failSessionDurably(ctx, p.sessionSvc, reviewSessionID, ptrInt(1)); failErr != nil {
-					slog.Warn("failed to fail review session after agent error", "error", failErr, "agent_session_id", reviewSessionID)
-				}
-				return reviewSession, "", reviewSessionID, fmt.Errorf("review session error: %s", evt.Payload)
-			}
+	select {
+	case outcome := <-outcomes:
+		if outcome.err != nil {
+			return reviewSession, "", reviewSessionID, outcome.err
 		}
+		return reviewSession, outcome.output, reviewSessionID, nil
+	case <-ctx.Done():
+		return reviewSession, "", reviewSessionID, ctx.Err()
 	}
 }
 

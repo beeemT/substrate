@@ -195,7 +195,7 @@ func (s *ImplementationService) BeginForeman(ctx context.Context, workItemID, pl
 }
 
 // EndForeman stops the foreman for the work item.
-// Called when implementation completes or is abandoned.
+// Called when implementation completes, pauses for review, or is abandoned.
 func (s *ImplementationService) EndForeman(ctx context.Context, workItemID string) error {
 	foreman := s.registry.GetForeman(workItemID)
 	if foreman == nil {
@@ -214,6 +214,21 @@ func (s *ImplementationService) EndForeman(ctx context.Context, workItemID strin
 	// Deregister from session registry
 	s.registry.DeregisterForeman(workItemID)
 
+	return nil
+}
+
+func (s *ImplementationService) submitForHumanReview(ctx context.Context, workItemID string) error {
+	// No agents are running while the operator decides from the review action
+	// card. Stop the Foreman before publishing the reviewing state so the
+	// persisted Foreman session is not left running until the next extension.
+	if err := s.EndForeman(ctx, workItemID); err != nil {
+		slog.Warn("failed to stop foreman before human review",
+			"error", err,
+			"work_item_id", workItemID)
+	}
+	if err := s.workItemSvc.SubmitForReview(ctx, workItemID); err != nil {
+		return fmt.Errorf("transition work item to reviewing: %w", err)
+	}
 	return nil
 }
 
@@ -456,18 +471,17 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (r
 	// map is incomplete (e.g. after crash recovery or focused retry).
 	hasEscalated := false
 	hasFailed := false
-	if freshSubPlans, err := s.planSvc.ListSubPlansByPlanID(ctx, planID); err == nil {
-		for _, sp := range freshSubPlans {
-			switch sp.Status {
-			case domain.SubPlanFailed:
-				hasFailed = true
-			case domain.SubPlanEscalated:
-				hasEscalated = true
-			}
+	freshSubPlans, err := s.planSvc.ListSubPlansByPlanID(ctx, planID)
+	if err != nil {
+		return result, fmt.Errorf("list sub-plans for final state derivation: %w", err)
+	}
+	for _, sp := range freshSubPlans {
+		switch sp.Status {
+		case domain.SubPlanFailed:
+			hasFailed = true
+		case domain.SubPlanEscalated:
+			hasEscalated = true
 		}
-	} else {
-		// Fallback: if DB read fails, use wave completion state as proxy.
-		hasFailed = !state.AllWavesCompleted()
 	}
 
 	switch {
@@ -478,10 +492,10 @@ func (s *ImplementationService) Implement(ctx context.Context, planID string) (r
 		}
 		cleanupCancel()
 	case hasEscalated:
-		// At least one repo needs human decision. Transition to reviewing.
+		// At least one repo needs human decision. Stop Foreman and transition to reviewing.
 		cleanupCtx, cleanupCancel := durableCleanupContext(ctx)
-		if reviewErr := s.workItemSvc.SubmitForReview(cleanupCtx, workItem.ID); reviewErr != nil {
-			slog.Warn("failed to transition work item to reviewing", "error", reviewErr)
+		if reviewErr := s.submitForHumanReview(cleanupCtx, workItem.ID); reviewErr != nil {
+			slog.Warn("failed to submit work item for human review", "error", reviewErr)
 		}
 		cleanupCancel()
 	default:
@@ -650,13 +664,14 @@ func (s *ImplementationService) executeSubPlan(
 			passedReview := s.implHasPassedReview(ctx, prevImpl.ID)
 			switch {
 			case passedReview:
-				// Defensive: the sub-plan should not be entering executeSubPlan
-				// when its latest impl already has a passed review. Log and
-				// fall through to a fresh implementation so the system at
-				// least makes progress; this matches the existing "no review
-				// retry possible" fallback.
-				slog.Warn("sub-plan re-entered executeSubPlan despite latest impl having a passed review; running fresh implementation",
-					"sub_plan_id", subPlan.ID, "prev_impl_session_id", prevImpl.ID)
+				result.Status = domain.AgentSessionCompleted
+				result.SessionID = prevImpl.ID
+				result.WorktreePath = prevImpl.WorktreePath
+				result.Summary = "Existing implementation already passed review"
+				result.CompletedAt = ptrTime(time.Now())
+				state.CompleteSubPlan(subPlan.ID, time.Now().UnixNano())
+				s.persistSubPlanStatus(ctx, &subPlan, domain.SubPlanCompleted)
+				return result, nil
 			case outstandingCritique:
 				// Auto-reimpl path: critique feedback exists; runImplementation
 				// will resume the impl session and feed the critique back in.
@@ -957,21 +972,15 @@ func (s *ImplementationService) StartImplementationGraphRun(ctx context.Context,
 	if err != nil {
 		return AgentGraphRunResult{}, fmt.Errorf("get source session: %w", err)
 	}
-	if source.Kind != domain.AgentSessionKindImplementation {
-		return AgentGraphRunResult{}, fmt.Errorf("session %s is not an implementation session (kind: %s)", source.ID, source.Kind)
-	}
 	if intent.WorkItemID != "" && source.WorkItemID != intent.WorkItemID {
-		return AgentGraphRunResult{}, fmt.Errorf("implementation session %s belongs to work item %s, not %s", source.ID, source.WorkItemID, intent.WorkItemID)
+		return AgentGraphRunResult{}, fmt.Errorf("agent session %s belongs to work item %s, not %s", source.ID, source.WorkItemID, intent.WorkItemID)
 	}
 	if intent.SubPlanID != "" && source.SubPlanID != intent.SubPlanID {
-		return AgentGraphRunResult{}, fmt.Errorf("implementation session %s belongs to sub-plan %s, not %s", source.ID, source.SubPlanID, intent.SubPlanID)
+		return AgentGraphRunResult{}, fmt.Errorf("agent session %s belongs to sub-plan %s, not %s", source.ID, source.SubPlanID, intent.SubPlanID)
 	}
 	trigger := intent.Trigger
 	if trigger == "" {
 		trigger = defaultImplementationGraphTrigger(source.Status)
-	}
-	if err := validateImplementationGraphTrigger(source, trigger); err != nil {
-		return AgentGraphRunResult{}, err
 	}
 	sessions, err := s.sessionSvc.ListByWorkItemID(ctx, source.WorkItemID)
 	if err != nil {
@@ -981,7 +990,34 @@ func (s *ImplementationService) StartImplementationGraphRun(ctx context.Context,
 		return AgentGraphRunResult{}, service.ErrAgentSessionNotLeaf
 	}
 
-	subPlan, err := s.planSvc.GetSubPlan(ctx, source.SubPlanID)
+	switch source.Kind {
+	case domain.AgentSessionKindImplementation:
+		if err := validateImplementationGraphTrigger(source, trigger); err != nil {
+			return AgentGraphRunResult{}, err
+		}
+		return s.startImplementationGraphRunFromSource(ctx, intent, source, source, trigger)
+	case domain.AgentSessionKindReview:
+		if trigger != AgentGraphTriggerFollowUpCompleted {
+			return AgentGraphRunResult{}, fmt.Errorf("review session %s only supports completed follow-up through implementation graph (trigger: %s)", source.ID, trigger)
+		}
+		if source.Status != domain.AgentSessionCompleted {
+			return AgentGraphRunResult{}, fmt.Errorf("review session %s is not completed (status: %s)", source.ID, source.Status)
+		}
+		impl, err := nearestCompletedImplementationAncestor(source, sessions)
+		if err != nil {
+			return AgentGraphRunResult{}, err
+		}
+		if impl.WorkItemID != source.WorkItemID || impl.SubPlanID != source.SubPlanID {
+			return AgentGraphRunResult{}, fmt.Errorf("implementation ancestor %s does not match review leaf %s", impl.ID, source.ID)
+		}
+		return s.startImplementationGraphRunFromSource(ctx, intent, source, impl, trigger)
+	default:
+		return AgentGraphRunResult{}, fmt.Errorf("session %s is not an implementation or completed review session (kind: %s)", source.ID, source.Kind)
+	}
+}
+
+func (s *ImplementationService) startImplementationGraphRunFromSource(ctx context.Context, intent AgentGraphIntent, source domain.AgentSession, implementation domain.AgentSession, trigger AgentGraphTrigger) (AgentGraphRunResult, error) {
+	subPlan, err := s.planSvc.GetSubPlan(ctx, implementation.SubPlanID)
 	if err != nil {
 		return AgentGraphRunResult{}, fmt.Errorf("get sub-plan: %w", err)
 	}
@@ -1001,12 +1037,15 @@ func (s *ImplementationService) StartImplementationGraphRun(ctx context.Context,
 		return AgentGraphRunResult{}, err
 	}
 
-	worktreePath := source.WorktreePath
+	worktreePath := implementation.WorktreePath
 	if worktreePath == "" {
-		return AgentGraphRunResult{}, fmt.Errorf("implementation session %s has no worktree path", source.ID)
+		worktreePath = source.WorktreePath
+	}
+	if worktreePath == "" {
+		return AgentGraphRunResult{}, fmt.Errorf("implementation session %s has no worktree path", implementation.ID)
 	}
 	feedback := implementationGraphFeedback(intent, trigger)
-	newSession, err := s.runImplementation(ctx, subPlan, &workspace, &plan, &workItem, worktreePath, feedback, &source, source.ID, true)
+	newSession, err := s.runImplementation(ctx, subPlan, &workspace, &plan, &workItem, worktreePath, feedback, &implementation, source.ID, true)
 	if err != nil {
 		return AgentGraphRunResult{SourceSession: source, Trigger: trigger}, fmt.Errorf("run implementation graph child: %w", err)
 	}
@@ -1403,8 +1442,8 @@ func (s *ImplementationService) continueImplementationGraph(ctx context.Context,
 			return fmt.Errorf("transition work item to failed: %w", err)
 		}
 	case hasEscalated:
-		if err := s.workItemSvc.SubmitForReview(ctx, workItem.ID); err != nil {
-			return fmt.Errorf("transition work item to reviewing: %w", err)
+		if err := s.submitForHumanReview(ctx, workItem.ID); err != nil {
+			return err
 		}
 	case allCompleted:
 		repoPaths, err := s.discoverRepoPaths(ctx, workspace.RootPath)

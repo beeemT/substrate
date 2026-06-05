@@ -862,8 +862,11 @@ func (m SidebarModel) View() string {
 	} else {
 		lines = append(lines, components.RenderDivider(m.styles, contentWidth))
 	}
-	inGroup := false
+	inGroup := sidebarEntryStartsInGroup(m.entries, start)
 	indent := 0
+	if inGroup {
+		indent = 1
+	}
 	for i := start; i < end; i++ {
 		entry := m.entries[i]
 		if entry.Kind == SidebarEntryGroupHeader {
@@ -907,6 +910,19 @@ func (m SidebarModel) View() string {
 	*m.viewDirty = false
 
 	return result
+}
+
+func sidebarEntryStartsInGroup(entries []SidebarEntry, index int) bool {
+	if index <= 0 || index >= len(entries) || entries[index].Kind == SidebarEntryGroupHeader {
+		return false
+	}
+	for i := index - 1; i >= 0; i-- {
+		if entries[i].Kind == SidebarEntryGroupHeader {
+			return true
+		}
+	}
+
+	return false
 }
 
 // computeVisibleRange finds the inclusive start, exclusive end, and whether

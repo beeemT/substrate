@@ -463,6 +463,63 @@ func TestSidebarScrollbarThumbMovesWithScroll(t *testing.T) {
 	}
 }
 
+func TestSidebarKeepsGroupIndentWhenHeaderScrolledOut(t *testing.T) {
+	t.Parallel()
+
+	const (
+		width  = 34
+		height = 8
+	)
+	m := views.NewSidebarModel(makeSidebarStyles())
+	m.SetWidth(width)
+	m.SetHeight(height)
+	m.SetEntries([]views.SidebarEntry{
+		{Kind: views.SidebarEntryGroupHeader, GroupTitle: "Repository group"},
+		{Kind: views.SidebarEntryTaskSession, WorkItemID: "wi-1", SessionID: "s1", RepositoryName: "repo", Title: "Implement 1"},
+		{Kind: views.SidebarEntryTaskSession, WorkItemID: "wi-1", SessionID: "s2", RepositoryName: "repo", Title: "Implement 2"},
+		{Kind: views.SidebarEntryTaskSession, WorkItemID: "wi-1", SessionID: "s3", RepositoryName: "repo", Title: "Implement 3"},
+		{Kind: views.SidebarEntryTaskSession, WorkItemID: "wi-1", SessionID: "s4", RepositoryName: "repo", Title: "Implement 4"},
+	})
+	if !m.SelectEntry("wi-1", "s4") {
+		t.Fatal("failed to select bottom session")
+	}
+
+	view := stripANSI(m.View())
+	if strings.Contains(view, "Repository group") {
+		t.Fatalf("group header should be scrolled out of view, got:\n%s", view)
+	}
+
+	lines := strings.Split(view, "\n")
+	if got := len(lines); got != height {
+		t.Fatalf("sidebar line count = %d, want %d\n%s", got, height, view)
+	}
+	for i, line := range lines {
+		if got := ansi.StringWidth(line); got > width {
+			t.Fatalf("line %d width = %d, want <= %d: %q", i, got, width, line)
+		}
+	}
+
+	var previousLine, selectedLine string
+	for _, line := range lines {
+		if strings.Contains(line, "Implement 3") {
+			previousLine = line
+		}
+		if strings.Contains(line, "Implement 4") {
+			selectedLine = line
+		}
+	}
+	if previousLine == "" || selectedLine == "" {
+		t.Fatalf("expected visible previous and selected sessions, got:\n%s", view)
+	}
+
+	previousStart := headerStart(previousLine, "Implement 3")
+	selectedStart := headerStart(selectedLine, "Implement 4")
+	if previousStart != selectedStart+1 {
+		t.Fatalf("scrolled group indentation start = %d, want %d\nprevious: %q\nselected: %q\n%s",
+			previousStart, selectedStart+1, previousLine, selectedLine, view)
+	}
+}
+
 func thumbLineIndex(view string) int {
 	lines := strings.Split(view, "\n")
 	for i, line := range lines {

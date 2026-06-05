@@ -24,28 +24,37 @@ const (
 	completedFeedbackCharLimit = 20000
 )
 
+type completedFeedbackMode int
+
+const (
+	completedFeedbackPlan completedFeedbackMode = iota
+	completedFeedbackCode
+)
+
 // CompletedModel shows the implemented plan and hosts the follow-up feedback
 // input when the user requests additional changes. Completion metadata (timestamp,
 // MR/PR links) belongs on the overview page and is intentionally absent here.
 //
 //nolint:recvcheck // Bubble Tea: Update returns value, View on value receiver
 type CompletedModel struct {
-	title         string
-	statusLabel   string
-	planContent   string
-	styles        styles.Styles
-	width         int
-	height        int
-	viewport      viewport.Model
-	workItemID    string
-	feedbackInput components.GrowingTextArea
-	inputActive   bool
+	title                 string
+	statusLabel           string
+	planContent           string
+	styles                styles.Styles
+	width                 int
+	height                int
+	viewport              viewport.Model
+	workItemID            string
+	codeFollowUpSessionID string
+	feedbackInput         components.GrowingTextArea
+	feedbackMode          completedFeedbackMode
+	inputActive           bool
 }
 
 func NewCompletedModel(st styles.Styles) CompletedModel {
 	ta := components.NewGrowingTextArea(completedScrollSource)
 	ta.SetMaxLines(completedFeedbackMaxLines)
-	ta.SetPlaceholder("Describe what needs to change...")
+	ta.SetPlaceholder("Describe how the plan should change...")
 	ta.SetCharLimit(completedFeedbackCharLimit)
 	return CompletedModel{
 		styles:        st,
@@ -98,10 +107,34 @@ func (m *CompletedModel) refreshViewportContent() {
 	m.viewport.SetContent(renderPlanReviewContent(m.styles, m.planContent, m.viewport.Width))
 }
 
-// OpenFeedback enters request-changes mode and focuses the follow-up textarea.
-// Returns the cmd that focuses the input while preserving mouse reporting;
-// callers MUST batch it into their reply.
+// SetCodeFollowUpSessionID sets the completed graph leaf used when the operator
+// requests another code pass from the completed work-item overlay.
+func (m *CompletedModel) SetCodeFollowUpSessionID(id string) {
+	m.codeFollowUpSessionID = id
+}
+
+// OpenFeedback preserves the historical completed-overlay behavior: feedback
+// submitted from this path revises the plan, not an implementation session.
 func (m *CompletedModel) OpenFeedback() tea.Cmd {
+	return m.OpenPlanFollowUp()
+}
+
+func (m *CompletedModel) OpenPlanFollowUp() tea.Cmd {
+	m.feedbackMode = completedFeedbackPlan
+	m.feedbackInput.SetPlaceholder("Describe how the plan should change...")
+	return m.openFeedback()
+}
+
+func (m *CompletedModel) OpenCodeFollowUp() tea.Cmd {
+	if m.codeFollowUpSessionID == "" {
+		return nil
+	}
+	m.feedbackMode = completedFeedbackCode
+	m.feedbackInput.SetPlaceholder("Describe the code changes to apply...")
+	return m.openFeedback()
+}
+
+func (m *CompletedModel) openFeedback() tea.Cmd {
 	m.inputActive = true
 	cmd := m.feedbackInput.FocusKeepMouse()
 	m.syncViewportSize()
@@ -114,6 +147,7 @@ func (m *CompletedModel) CloseFeedback() tea.Cmd {
 	}
 	resetCmd := m.feedbackInput.Reset()
 	m.inputActive = false
+	m.feedbackMode = completedFeedbackPlan
 	m.syncViewportSize()
 	return resetCmd
 }
@@ -132,7 +166,10 @@ func (m CompletedModel) KeybindHints() []KeybindHint {
 		hints = append(hints, KeybindHint{Key: "c", Label: "Copy"})
 	}
 	if m.workItemID != "" {
-		hints = append(hints, KeybindHint{Key: "Enter", Label: "Request changes"})
+		hints = append(hints, KeybindHint{Key: "Enter", Label: "Revise plan"})
+	}
+	if m.codeFollowUpSessionID != "" {
+		hints = append(hints, KeybindHint{Key: "p", Label: "Request code changes"})
 	}
 	return hints
 }
@@ -158,20 +195,37 @@ func (m CompletedModel) Update(msg tea.Msg) (CompletedModel, tea.Cmd) {
 				feedback := m.feedbackInput.Value()
 				resetCmd := m.feedbackInput.Reset()
 				trimmedFeedback := strings.TrimSpace(feedback)
+				feedbackMode := m.feedbackMode
+				codeFollowUpSessionID := m.codeFollowUpSessionID
 				m.inputActive = false
+				m.feedbackMode = completedFeedbackPlan
 				m.syncViewportSize()
 				if trimmedFeedback == "" {
 					return m, resetCmd
 				}
-				return m, tea.Batch(
-					func() tea.Msg {
-						return FollowUpPlanMsg{WorkItemID: m.workItemID, Feedback: feedback}
-					},
-					resetCmd,
-				)
+				switch feedbackMode {
+				case completedFeedbackCode:
+					if codeFollowUpSessionID == "" {
+						return m, resetCmd
+					}
+					return m, tea.Batch(
+						func() tea.Msg {
+							return FollowUpSessionMsg{TaskID: codeFollowUpSessionID, Feedback: feedback}
+						},
+						resetCmd,
+					)
+				default:
+					return m, tea.Batch(
+						func() tea.Msg {
+							return FollowUpPlanMsg{WorkItemID: m.workItemID, Feedback: feedback}
+						},
+						resetCmd,
+					)
+				}
 			case "esc":
 				resetCmd := m.feedbackInput.Reset()
 				m.inputActive = false
+				m.feedbackMode = completedFeedbackPlan
 				m.syncViewportSize()
 				return m, resetCmd
 			default:
@@ -189,7 +243,11 @@ func (m CompletedModel) Update(msg tea.Msg) (CompletedModel, tea.Cmd) {
 			return m, cmd
 		case "enter":
 			if m.workItemID != "" {
-				return m, m.OpenFeedback()
+				return m, m.OpenPlanFollowUp()
+			}
+		case "p":
+			if m.codeFollowUpSessionID != "" {
+				return m, m.OpenCodeFollowUp()
 			}
 		case "c":
 			if clipErr := clipboard.WriteAll(m.planContent); clipErr != nil {

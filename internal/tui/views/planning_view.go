@@ -20,8 +20,8 @@ const (
 	sessionLogSilenceThreshold = 3 * time.Minute
 
 	sessionLogPlaceholderDefault   = "Send steering prompt to agent..."
-	sessionLogPlaceholderFailed    = "Send follow-up to restart failed session..."
-	sessionLogPlaceholderCompleted = "Send follow-up to completed session..."
+	sessionLogPlaceholderFailed    = "Send retry feedback for this session..."
+	sessionLogPlaceholderCompleted = "Request code changes for this session..."
 
 	// sessionLogScrollSource identifies GrowingTextAreaScrollMsg events from
 	// the steering textarea so they route to the session log viewport.
@@ -296,8 +296,10 @@ func (m SessionLogModel) KeybindHints() []KeybindHint {
 	if m.notice != nil {
 		hints = append(hints, KeybindHint{Key: "Enter", Label: "Open overview"})
 	}
-	if m.failedSessionID != "" || m.completedSessionID != "" {
-		hints = append(hints, KeybindHint{Key: "p", Label: "Follow up"})
+	if m.completedSessionID != "" {
+		hints = append(hints, KeybindHint{Key: "p", Label: "Request code changes"})
+	} else if m.failedSessionID != "" {
+		hints = append(hints, KeybindHint{Key: "p", Label: "Retry with feedback"})
 	} else if m.live {
 		hints = append(hints, KeybindHint{Key: "p", Label: "Prompt agent"})
 	}

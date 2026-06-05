@@ -865,6 +865,91 @@ func TestImplement_StartsAndStopsForemanDuringImplementation(t *testing.T) {
 	}
 }
 
+func TestSubmitForHumanReviewStopsForeman(t *testing.T) {
+	svc, workItemRepo, _, sessionRepo, _ := newImplementationServiceForTest(t.TempDir(), "repo-a")
+	foremanHarness := &blockingForemanHarness{}
+	svc.foremanHarness = foremanHarness
+	svc.registry = NewSessionRegistry()
+
+	if err := svc.BeginForeman(context.Background(), "wi-1", "plan-1"); err != nil {
+		t.Fatalf("BeginForeman: %v", err)
+	}
+	if err := svc.workItemSvc.StartImplementation(context.Background(), "wi-1"); err != nil {
+		t.Fatalf("StartImplementation: %v", err)
+	}
+	foreman := svc.registry.GetForeman("wi-1")
+	if foreman == nil || !foreman.IsRunning() {
+		t.Fatal("foreman must be running before human review handoff")
+	}
+
+	if err := svc.submitForHumanReview(context.Background(), "wi-1"); err != nil {
+		t.Fatalf("submitForHumanReview: %v", err)
+	}
+
+	workItem, err := workItemRepo.Get(context.Background(), "wi-1")
+	if err != nil {
+		t.Fatalf("get work item: %v", err)
+	}
+	if workItem.State != domain.SessionReviewing {
+		t.Fatalf("work item state = %q, want %q", workItem.State, domain.SessionReviewing)
+	}
+	if foreman.IsRunning() {
+		t.Fatal("foreman is still running after human review handoff")
+	}
+	if got := svc.registry.GetForeman("wi-1"); got != nil {
+		t.Fatal("foreman remains registered after human review handoff")
+	}
+
+	sessions, err := sessionRepo.ListByWorkItemID(context.Background(), "wi-1")
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	var foremanSession *domain.AgentSession
+	for i := range sessions {
+		if sessions[i].Kind == domain.AgentSessionKindForeman {
+			foremanSession = &sessions[i]
+			break
+		}
+	}
+	if foremanSession == nil {
+		t.Fatal("foreman session row was not persisted")
+	}
+	if foremanSession.Status != domain.AgentSessionCompleted {
+		t.Fatalf("foreman session status = %q, want %q", foremanSession.Status, domain.AgentSessionCompleted)
+	}
+
+	if err := svc.RestartForemanWithPlan(context.Background(), "wi-1", "plan-1"); err != nil {
+		t.Fatalf("RestartForemanWithPlan after human review handoff: %v", err)
+	}
+	defer func() {
+		if err := svc.EndForeman(context.Background(), "wi-1"); err != nil {
+			t.Fatalf("EndForeman after restart: %v", err)
+		}
+	}()
+	restarted := svc.registry.GetForeman("wi-1")
+	if restarted == nil || !restarted.IsRunning() {
+		t.Fatal("foreman was not restarted for review extension")
+	}
+
+	sessions, err = sessionRepo.ListByWorkItemID(context.Background(), "wi-1")
+	if err != nil {
+		t.Fatalf("list sessions after restart: %v", err)
+	}
+	foremanSession = nil
+	for i := range sessions {
+		if sessions[i].Kind == domain.AgentSessionKindForeman {
+			foremanSession = &sessions[i]
+			break
+		}
+	}
+	if foremanSession == nil {
+		t.Fatal("foreman session row was not persisted after restart")
+	}
+	if foremanSession.Status != domain.AgentSessionRunning {
+		t.Fatalf("foreman session status after restart = %q, want %q", foremanSession.Status, domain.AgentSessionRunning)
+	}
+}
+
 func TestRestartForemanWithPlanFallsBackToCurrentWorkItemPlan(t *testing.T) {
 	svc, _, _, _, _ := newImplementationServiceForTest(t.TempDir(), "repo-a")
 	foremanHarness := &completingHarness{}
@@ -1259,6 +1344,44 @@ func (h *completingHarness) StartSession(_ context.Context, opts adapter.Session
 	h.mu.Unlock()
 	return s, nil
 }
+
+type blockingForemanHarness struct{}
+
+func (h *blockingForemanHarness) SupportsCompact() bool { return true }
+func (h *blockingForemanHarness) Name() string          { return "blocking-foreman" }
+func (h *blockingForemanHarness) StartSession(_ context.Context, opts adapter.SessionOpts) (adapter.AgentSession, error) {
+	return &blockingForemanSession{
+		id:     opts.SessionID,
+		events: make(chan adapter.AgentEvent),
+		done:   make(chan struct{}),
+	}, nil
+}
+
+type blockingForemanSession struct {
+	id     string
+	events chan adapter.AgentEvent
+	done   chan struct{}
+	once   sync.Once
+}
+
+func (s *blockingForemanSession) ID() string { return s.id }
+func (s *blockingForemanSession) Wait(ctx context.Context) error {
+	<-s.done
+	return ctx.Err()
+}
+func (s *blockingForemanSession) Events() <-chan adapter.AgentEvent         { return s.events }
+func (s *blockingForemanSession) SendMessage(context.Context, string) error { return nil }
+func (s *blockingForemanSession) Steer(context.Context, string) error       { return nil }
+func (s *blockingForemanSession) SendAnswer(context.Context, string) error  { return nil }
+func (s *blockingForemanSession) Abort(context.Context) error {
+	s.once.Do(func() {
+		close(s.done)
+	})
+	return nil
+}
+func (s *blockingForemanSession) ResumeInfo() map[string]string { return nil }
+func (s *blockingForemanSession) Compact(context.Context) error { return nil }
+func (s *blockingForemanSession) Done() <-chan struct{}         { return s.done }
 
 // failingMockSession is a mock session whose Wait returns an error.
 type failingMockSession struct {
@@ -1833,6 +1956,63 @@ func TestStartImplementationGraphRun_RejectsHistoricalImplementation(t *testing.
 	})
 	if !errors.Is(err, service.ErrAgentSessionNotLeaf) {
 		t.Fatalf("StartImplementationGraphRun error = %v, want ErrAgentSessionNotLeaf", err)
+	}
+}
+
+func TestStartImplementationGraphRun_CompletedReviewLeafCreatesImplementationChild(t *testing.T) {
+	ctx := context.Background()
+	svc, workItemRepo, _, sessionRepo, subPlanRepo := newImplementationServiceForTest(t.TempDir(), "repo-a")
+	svc.harness = &completingHarness{}
+	continuationRepo := newImplementationContinuationRepo()
+	svc.sessionSvc = service.NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo, AgentSessionContinuations: continuationRepo}}, &mockPublisher{})
+	svc.continuationSvc = service.NewAgentSessionContinuationService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: sessionRepo, AgentSessionContinuations: continuationRepo}})
+	workItem := workItemRepo.items["wi-1"]
+	workItem.State = domain.SessionCompleted
+	workItemRepo.items["wi-1"] = workItem
+	subPlan := subPlanRepo.subPlans["sp-1"]
+	subPlan.Status = domain.SubPlanCompleted
+	subPlanRepo.subPlans["sp-1"] = subPlan
+	worktreePath := t.TempDir()
+	impl := domain.AgentSession{
+		ID:             "impl-1",
+		Kind:           domain.AgentSessionKindImplementation,
+		Status:         domain.AgentSessionCompleted,
+		WorkItemID:     "wi-1",
+		WorkspaceID:    "ws-1",
+		SubPlanID:      "sp-1",
+		RepositoryName: "repo-a",
+		WorktreePath:   worktreePath,
+	}
+	review := domain.AgentSession{
+		ID:                   "review-1",
+		Kind:                 domain.AgentSessionKindReview,
+		Status:               domain.AgentSessionCompleted,
+		WorkItemID:           "wi-1",
+		WorkspaceID:          "ws-1",
+		SubPlanID:            "sp-1",
+		RepositoryName:       "repo-a",
+		WorktreePath:         worktreePath,
+		ParentAgentSessionID: impl.ID,
+	}
+	sessionRepo.sessions[impl.ID] = impl
+	sessionRepo.sessions[review.ID] = review
+
+	result, err := svc.StartImplementationGraphRun(ctx, AgentGraphIntent{
+		SourceSessionID: review.ID,
+		Trigger:         AgentGraphTriggerFollowUpCompleted,
+		Feedback:        "apply one more code change",
+	})
+	if err == nil {
+		t.Fatal("expected finalization error from temp workspace without git repos")
+	}
+	if result.NewSession.ID == "" {
+		t.Fatalf("expected implementation child before continuation error, err=%v result=%#v", err, result)
+	}
+	if result.NewSession.ParentAgentSessionID != review.ID {
+		t.Fatalf("new parent = %q, want review leaf %q", result.NewSession.ParentAgentSessionID, review.ID)
+	}
+	if result.NewSession.Kind != domain.AgentSessionKindImplementation {
+		t.Fatalf("new kind = %s, want implementation", result.NewSession.Kind)
 	}
 }
 

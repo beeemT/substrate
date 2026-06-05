@@ -141,7 +141,7 @@ func canTransitionPlan(from, to domain.PlanStatus) bool {
 var validSubPlanTransitions = map[domain.TaskPlanStatus][]domain.TaskPlanStatus{
 	domain.SubPlanPending:    {domain.SubPlanInProgress},
 	domain.SubPlanInProgress: {domain.SubPlanCompleted, domain.SubPlanFailed, domain.SubPlanEscalated, domain.SubPlanPending},
-	domain.SubPlanCompleted:  {},                                                // Terminal state
+	domain.SubPlanCompleted:  {domain.SubPlanInProgress},                        // Completed work-item code follow-up
 	domain.SubPlanFailed:     {domain.SubPlanInProgress, domain.SubPlanPending}, // Direct retry + wave reset
 	domain.SubPlanEscalated:  {domain.SubPlanInProgress, domain.SubPlanPending}, // Human-resumed retry
 }
