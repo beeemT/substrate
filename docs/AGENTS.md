@@ -44,6 +44,7 @@ Core docs:
 - `09-stage-aware-question-routing.md` — product behavior for question routing
 - `10-foreman-lifecycle.md` — ownership boundary for Foreman runtime
 - `11-settings.md` — settings system interaction model
+- `12-agent-session-graph-continuation.md` — graph-driven resume/retry/follow-up, continuation lifecycle, kind routing
 - `13-electron-app-plan.md` — additive future direction
 
 ---

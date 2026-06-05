@@ -302,6 +302,7 @@ Current interpretation:
 - `Resume` creates a new `Task`; the interrupted task remains interrupted for audit purposes.
 - `Completed -> Running`: follow-up restart for a completed task — creates a new `Task` row; the completed task remains for audit.
 - `Failed -> Running`: follow-up on a failed task — same pattern, creates a new `Task` row; the failed task remains for audit.
+
 ### Review, question, and critique sub-lifecycles
 
 `ReviewService` transition rules:
@@ -318,7 +319,6 @@ Current interpretation:
 `Critique` transition rules:
 
 - `open -> resolved`
-
 
 ### AgentSessionContinuation
 
@@ -350,6 +350,7 @@ The `pending` row is created in the same transaction that marks the agent sessio
 Replaceable agent sessions are append-only children of their predecessor, identified by `ParentAgentSessionID`. Each user-triggered resume, retry, or follow-up may only target a graph leaf — a session with no children. Historical non-leaf failed or interrupted sessions cannot drive new child creation.
 
 Resume and retry candidates are selected by domain helpers (`LeafAgentSessions`, `RetryableAgentSessionLeaves`, `ResumableAgentSessionLeaves`); the TUI and orchestrator do not reconstruct eligibility. Kind-specific routing, the supervisor that owns harness lifecycle, and the bulk work-item entry point are described in the agent-session graph continuation document.
+
 ---
 
 ## Relationship Narrative

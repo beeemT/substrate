@@ -1,5 +1,6 @@
 # 02 - Layered Architecture
 <!-- docs:last-integrated-commit 5cbffc696e10a65fb98b6957c93e3c5f68e837d8 -->
+
 This document describes the layered structure of the application and the patterns that connect layers.
 
 ## 1. Layer Diagram

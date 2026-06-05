@@ -2,7 +2,7 @@
 
 <!-- docs:last-integrated-commit 5cbffc696e10a65fb98b6957c93e3c5f68e837d8 -->
 
-Graph-driven model for resuming, retrying, following up on, and continuing agent sessions. This document is the single home for the contracts that govern how a user-initiated TUI action becomes a durable state change in the agent-session graph. It does not cover plan approval, review critique parsing, or Foreman question routing — those live in §3 Plan Review Loop and §4 Foreman Handling of the orchestration document and in the foreman lifecycle document.
+Graph-driven model for resuming, retrying, following up on, and continuing agent sessions. This document is the single home for the contracts that govern how a user-initiated TUI action becomes a durable state change in the agent-session graph. It does not cover plan approval, review critique parsing, or Foreman question routing — those live in §2 Plan Review Loop and §4 Foreman Handling of the orchestration document and in the foreman lifecycle document.
 
 ---
 
@@ -79,7 +79,7 @@ flowchart TD
 
 The TUI emits an intent (source session, trigger, optional feedback). The orchestrator reloads the source from the database, validates it is still a current leaf for the requested trigger, and then hands the harness off to the agent run supervisor. The supervisor starts the harness, owns the single consumer of the harness event channel, and translates the terminal harness result into durable `complete`/`fail`/`interrupt` plus a `pending` continuation row. From that point the continuation is durably tracked and can be recovered across crashes.
 
-Foreman sessions are not part of this flow. Foreman has its own restart and recovery contract — see §3 Foreman Handling in the orchestration document and the foreman lifecycle document.
+Foreman sessions are not part of this flow. Foreman has its own restart and recovery contract — see §4 Foreman Handling in the orchestration document and the foreman lifecycle document.
 
 ---
 
@@ -138,7 +138,7 @@ UI visibility: a completed implementation session whose continuation is `pending
 
 ## 7. Event contract
 
-The event bus carries the durable state transitions described in §3 of the event-system document. Two additions matter for the graph model:
+The event bus carries the durable state transitions described in the event-system document. Two additions matter for the graph model:
 
 **`agent_session.continuation_failed`** is published whenever a continuation cannot finish. The payload includes the failed agent session ID, the continuation kind, and the error chain. This event is for notification only — the continuation table is the source of truth, and the UI must not infer continuation state from event timing.
 
@@ -205,8 +205,8 @@ The graph model is correct when all of the following hold:
 
 ## 12. Referenced documents
 
-- Agent-session graph model (leaves, parent links, legacy fallback): see §1 of the domain model
-- Resume and recovery semantics at the user level: see §7 of the orchestration document
-- Event catalog and append-only child event payloads: see §3 of the event-system document
-- TUI leaf-based status derivation and async dispatch pattern: see §1 and §5 of the TUI design document
+- Agent-session graph model (leaves, parent links, legacy fallback): see Core Domain Types in the domain model
+- Resume and recovery semantics at the user level: see §7 Resume and Recovery in the orchestration document
+- Event catalog and append-only child event payloads: see the event-system document
+- TUI leaf-based status derivation and async dispatch pattern: see §1 Layout (Leaf-Based Status Derivation) and §5 Interaction Model in the TUI design document
 - Foreman lifecycle ownership boundary: see the foreman lifecycle document; foreman-specific routing rules see §5 of this document

@@ -1,6 +1,6 @@
 # 06 - TUI Design
 
-<!-- docs:last-integrated-commit 10e50295fb75f72c67233e191ae34fb8fc091f1e -->
+<!-- docs:last-integrated-commit 5cbffc696e10a65fb98b6957c93e3c5f68e837d8 -->
 
 The Substrate terminal interface is built with Bubble Tea and lipgloss. The top-level app owns: left sidebar pane, right content pane, single footer/status row, centered overlays (work browser, session-history, workspace init, action menu), full-screen settings page, and a toast stack rendered over the shell.
 
@@ -357,6 +357,8 @@ Shell geometry is shared across views: sidebar and content panes share pane chro
 **Confirmation dialogs:** Destructive actions (delete, abandon, reject, override) show a modal. `y` confirms, `n`/`Esc` cancels. Quitting with active sessions shows a confirmation listing the count. `y` quits, `n`/`Esc` cancels. No active sessions: `q` quits immediately. SIGTERM routes through the same confirmation path.
 
 **Human escalation:** `Override accept` (accepts a repo escalated by review — max cycles reached) and `Re-implement` (manually triggers reimplementation when auto-feedback disabled) are available from the overview's "Under review" action card.
+
+**Async dispatch contract.** Long-running commands — focused retry, focused follow-up (completed and failed), focused resumed-session continuation, bulk work-item resume and retry, planning restart — return a dispatch acknowledgement immediately. The actual graph entry point runs in a background goroutine; async errors surface as `ErrMsg` so dispatch failures are observable. The TUI never blocks on harness or review completion. Candidate selection (which leaves are eligible for a given bulk action) is delegated to the orchestrator entry point; the TUI does not recompute eligibility. The state for resumed, retried, or followed-up sessions arrives through the event bus, and the UI decoders preserve both the superseded source session ID and the new child session ID so the graph edge is reflected in the sidebar and overview.
 
 ---
 
