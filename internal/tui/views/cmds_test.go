@@ -301,6 +301,51 @@ func TestTailSessionLogCmd_InitialLoadDoesNotAdvancePastPartialLine(t *testing.T
 	}
 }
 
+// TestTailSessionLogFinalCmd_FallsBackToArchiveWhenActiveLogMissing verifies that
+// when the active .log was compressed+removed on completion, the one-shot final
+// tail recovers the transcript (including the final lines) from the archive and
+// asks the model to replace its entries.
+func TestTailSessionLogFinalCmd_FallsBackToArchiveWhenActiveLogMissing(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "sess1.log")
+	// Active .log intentionally absent (compressed+removed on completion).
+	archivePath := filepath.Join(dir, "sess1.log.1700000000.gz")
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gz := gzip.NewWriter(f)
+	full := `{"type":"event","event":{"type":"assistant_output","text":"first"}}` + "\n" +
+		`{"type":"event","event":{"type":"assistant_output","text":"final sentence"}}` + "\n"
+	if _, err := gz.Write([]byte(full)); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	// since>0 mimics the live final tail fired when the agent went inactive.
+	msg := views.TailSessionLogFinalCmd(logPath, "sess1", 10)()
+	got, ok := msg.(views.SessionLogLinesMsg)
+	if !ok {
+		t.Fatalf("expected SessionLogLinesMsg, got %T", msg)
+	}
+	if !got.Reload {
+		t.Fatalf("want Reload=true to replace transcript from archive, got false")
+	}
+	found := false
+	for _, e := range got.Entries {
+		if e.Text == "final sentence" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("archive fallback missing final line: %+v", got.Entries)
+	}
+}
+
 func TestTailSessionLogFinalCmd_IncludesPartialLine(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
