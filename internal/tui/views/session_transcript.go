@@ -401,7 +401,7 @@ func renderToolBlock(st styles.Styles, block transcriptBlock, width int, verbose
 	var icon string
 	switch {
 	case block.toolRunning:
-		icon = st.Active.Render("●")
+		icon = st.Active.Render(components.SpinnerFrame(animationFrame))
 	case block.toolError:
 		icon = st.Error.Render("✗")
 	default:
@@ -414,9 +414,15 @@ func renderToolBlock(st styles.Styles, block transcriptBlock, width int, verbose
 			nameAndTitle = block.toolName + " — " + st.Accent.Render(primary)
 		}
 	}
-	// icon is 1 visual char, " " is 1, so 2 visual chars of overhead
-	titleText := ansi.Truncate(nameAndTitle, max(1, innerW-2), "…")
-	titleLine := icon + " " + titleText
+	iconWidth := ansi.StringWidth(icon)
+	iconGap := " "
+	if block.toolRunning {
+		iconGap = ""
+	}
+	// Finished/error icons are 1 visual char plus a 1-cell gap. Spinner frames
+	// include their own trailing gap.
+	titleText := ansi.Truncate(nameAndTitle, max(1, innerW-iconWidth-ansi.StringWidth(iconGap)), "…")
+	titleLine := icon + iconGap + titleText
 
 	var bodyLines []string
 	bodyLines = append(bodyLines, titleLine)
@@ -440,7 +446,7 @@ func renderToolBlock(st styles.Styles, block transcriptBlock, width int, verbose
 
 	shouldSeparateOutput := block.toolRunning || len(block.toolOutput) > 0 || (!block.toolRunning && block.toolResult != "")
 	if shouldSeparateOutput {
-		bodyLines = append(bodyLines, toolOutputSeparator(st, innerW, block.toolRunning, animationFrame))
+		bodyLines = append(bodyLines, toolOutputSeparator(st, innerW))
 	}
 
 	// Output section
@@ -512,46 +518,8 @@ func renderToolBlock(st styles.Styles, block transcriptBlock, width int, verbose
 	return components.RenderCallout(st, components.CalloutSpec{Body: body, Width: width, Variant: variant})
 }
 
-const toolOutputSeparatorSegmentWidth = 8
-
-func toolOutputSeparator(st styles.Styles, width int, running bool, frame int) string {
-	width = max(1, width)
-	if !running {
-		return st.Divider.Render(strings.Repeat("─", width))
-	}
-
-	segmentWidth := minInt(width, toolOutputSeparatorSegmentWidth)
-	pos := toolOutputSeparatorBouncePosition(frame, width-segmentWidth)
-
-	var b strings.Builder
-	b.Grow(width)
-	if pos > 0 {
-		b.WriteString(st.ToolShimmerTrack.Render(strings.Repeat("─", pos)))
-	}
-	b.WriteString(st.ToolShimmerSegment.Render(strings.Repeat("─", segmentWidth)))
-	if tail := width - pos - segmentWidth; tail > 0 {
-		b.WriteString(st.ToolShimmerTrack.Render(strings.Repeat("─", tail)))
-	}
-	return b.String()
-}
-
-func toolOutputSeparatorBouncePosition(frame, travel int) int {
-	if travel <= 0 {
-		return 0
-	}
-	period := travel * 2
-	phase := frame % period
-	if phase < 0 {
-		phase += period
-	}
-	if phase > travel {
-		phase = period - phase
-	}
-
-	const scale = 1024
-	t := phase * scale / travel
-	eased := t * t * (3*scale - 2*t) / (scale * scale)
-	return (travel*eased + scale/2) / scale
+func toolOutputSeparator(st styles.Styles, width int) string {
+	return st.Divider.Render(strings.Repeat("─", max(1, width)))
 }
 
 func renderTranscriptWithMessageLabelFrame(st styles.Styles, entries []sessionlog.Entry, width int, verbose, collapseThinking bool, messageLabel string, animationFrame int) (string, bool) {
@@ -602,6 +570,20 @@ func toolIntArg(args map[string]any, key string) int {
 		}
 	}
 	return 0
+}
+
+func toolStringListArg(args map[string]any, key string) []string {
+	values, ok := args[key].([]any)
+	if !ok || len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if s, ok := value.(string); ok && s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func firstToolOperation(args map[string]any) map[string]any {
@@ -709,6 +691,57 @@ func toolContentSummaryParts(st styles.Styles, content string) []string {
 	return parts
 }
 
+func todoListPrimaryArg(args map[string]any) string {
+	switch toolStringArg(args, "command") {
+	case "create":
+		if n := todoTaskCount(args); n > 0 {
+			return "create " + pluralize(n, "task")
+		}
+		return "create"
+	case "complete":
+		if ids := todoCompletedTaskIDs(args); len(ids) > 0 {
+			return "complete " + todoIDList(ids)
+		}
+		return "complete"
+	default:
+		return ""
+	}
+}
+
+func todoTaskCount(args map[string]any) int {
+	tasks, ok := args["tasks"].([]any)
+	if !ok {
+		return 0
+	}
+	return len(tasks)
+}
+
+func todoCompletedTaskIDs(args map[string]any) []string {
+	return toolStringListArg(args, "completed_task_ids")
+}
+
+func todoIDList(ids []string) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for i, id := range ids {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteByte('#')
+		b.WriteString(id)
+	}
+	return b.String()
+}
+
+func pluralize(n int, singular string) string {
+	if n == 1 {
+		return fmt.Sprintf("1 %s", singular)
+	}
+	return fmt.Sprintf("%d %ss", n, singular)
+}
+
 // toolPrimaryArg returns the primary single-line label for a tool call,
 // shown in the title after " — ". Returns "" for unknown tools or when no
 // meaningful label can be derived from the args.
@@ -754,6 +787,8 @@ func toolPrimaryArg(toolName, argsJSON string) string {
 		return singleLine(toolStringArg(args, "url"))
 	case "web_search":
 		return singleLine(toolStringArg(args, "query"))
+	case "todo_list":
+		return todoListPrimaryArg(args)
 	case "task":
 		if tasks, ok := args["tasks"]; ok {
 			if taskSlice, ok := tasks.([]any); ok && len(taskSlice) > 0 {
@@ -845,6 +880,22 @@ func toolArgsSummary(st styles.Styles, toolName, argsJSON string, innerW int) st
 		parts = append(parts, toolContentSummaryParts(st, toolStringArg(args, "content"))...)
 		if command := toolStringArg(args, "command"); command != "" && command != "create" {
 			parts = append(parts, dim(command))
+		}
+
+	case "todo_list":
+		switch toolStringArg(args, "command") {
+		case "create":
+			if desc := toolStringArg(args, "task_list_description"); desc != "" {
+				parts = append(parts, dim(singleLine(desc)))
+			}
+		case "complete":
+			if update := toolStringArg(args, "context_update"); update != "" {
+				parts = append(parts, dim(singleLine(update)))
+			}
+			if files := toolStringListArg(args, "modified_files"); len(files) > 0 {
+				parts = append(parts, dim(pluralize(len(files), "file")))
+				parts = append(parts, dim(files[0]))
+			}
 		}
 
 	case "find", "bash", "execute", "shell", "fetch", "web_search", "task", "ask_foreman", "mcp__substrate__ask_foreman", "mcp__substrate-foreman__ask_foreman":

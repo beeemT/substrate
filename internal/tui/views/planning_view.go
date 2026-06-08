@@ -16,9 +16,8 @@ import (
 )
 
 const (
-	sessionLogSpinnerInterval   = 100 * time.Millisecond
-	sessionLogToolAnimationStep = 12
-	sessionLogSilenceThreshold  = 3 * time.Minute
+	sessionLogSpinnerInterval  = 100 * time.Millisecond
+	sessionLogSilenceThreshold = 3 * time.Minute
 
 	sessionLogPlaceholderDefault   = "Send steering prompt to agent..."
 	sessionLogPlaceholderFailed    = "Send retry feedback for this session..."
@@ -498,7 +497,7 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 			return m, nil
 		}
 		m.spinnerFrame = (m.spinnerFrame + 1) % len(sessionLogSpinnerFrames)
-		m.toolAnimationFrame += sessionLogToolAnimationStep
+		m.toolAnimationFrame = (m.toolAnimationFrame + 1) % len(sessionLogSpinnerFrames)
 		wasAtBottom := m.viewport.AtBottom()
 		if m.renderedRunningTools {
 			m.doRebuildTranscript()

@@ -135,8 +135,6 @@ type Styles struct {
 	CalloutError        lipgloss.Style
 	CalloutTool         lipgloss.Style
 	CalloutPrompt       lipgloss.Style
-	ToolShimmerTrack    lipgloss.Style
-	ToolShimmerSegment  lipgloss.Style
 
 	SettingsText              lipgloss.Style
 	SettingsTextStrong        lipgloss.Style
@@ -256,10 +254,6 @@ func NewStyles(t Theme) Styles {
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color(t.Accent)).
 			Padding(chrome.Callout.PaddingTop, chrome.Callout.PaddingRight, chrome.Callout.PaddingBottom, chrome.Callout.PaddingLeft),
-		ToolShimmerTrack: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(t.Divider)),
-		ToolShimmerSegment: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(t.Active)),
 		SettingsText:            lipgloss.NewStyle().Foreground(lipgloss.Color(t.SettingsText)),
 		SettingsTextStrong:      lipgloss.NewStyle().Foreground(lipgloss.Color(t.SettingsTextStrong)).Bold(true),
 		SettingsBreadcrumb:      lipgloss.NewStyle().Foreground(lipgloss.Color(t.SettingsBreadcrumb)),

@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/beeemT/substrate/internal/sessionlog"
+	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
@@ -15,15 +16,11 @@ func testStyles() styles.Styles {
 	return styles.NewStyles(styles.DefaultTheme)
 }
 
-func renderedToolSeparatorLine(output string, animated bool) string {
-	for _, line := range strings.Split(output, "\n") {
-		stripped := ansi.Strip(line)
-		if strings.Contains(stripped, "│") && strings.Contains(stripped, "──") &&
-			!strings.Contains(stripped, "╭") && !strings.Contains(stripped, "╰") {
-			if animated {
-				return line
-			}
-			return stripped
+func renderedToolSeparatorLine(output string) string {
+	for _, line := range strings.Split(ansi.Strip(output), "\n") {
+		if strings.Contains(line, "│") && strings.Contains(line, "──") &&
+			!strings.Contains(line, "╭") && !strings.Contains(line, "╰") {
+			return line
 		}
 	}
 	return ""
@@ -426,7 +423,7 @@ func TestRenderTranscriptToolOutputSeparatedFromCall(t *testing.T) {
 	}
 }
 
-func TestRenderTranscriptRunningToolSeparatorAnimates(t *testing.T) {
+func TestRenderTranscriptRunningToolUsesSpinnerAndStaticSeparator(t *testing.T) {
 	t.Parallel()
 	const width = 60
 	st := testStyles()
@@ -436,42 +433,36 @@ func TestRenderTranscriptRunningToolSeparatorAnimates(t *testing.T) {
 	}
 
 	frame0, running0 := renderTranscriptWithMessageLabelFrame(st, entries, width, false, true, "", 0)
-	frame5, running5 := renderTranscriptWithMessageLabelFrame(st, entries, width, false, true, "", 5)
-	if !running0 || !running5 {
+	frame1, running1 := renderTranscriptWithMessageLabelFrame(st, entries, width, false, true, "", 1)
+	if !running0 || !running1 {
 		t.Fatal("running tool transcript must report animated tool state")
 	}
-	sep0 := renderedToolSeparatorLine(frame0, true)
-	sep5 := renderedToolSeparatorLine(frame5, true)
-	if sep0 == "" || sep5 == "" {
-		t.Fatalf("expected animated separator lines, got frame0=%q frame5=%q\nframe0:\n%s\nframe5:\n%s",
-			sep0, sep5, ansi.Strip(frame0), ansi.Strip(frame5))
+	plain0 := ansi.Strip(frame0)
+	plain1 := ansi.Strip(frame1)
+	if !strings.Contains(plain0, components.SpinnerFrame(0)) {
+		t.Fatalf("running tool must render spinner frame %q, got:\n%s", components.SpinnerFrame(0), plain0)
 	}
-	travel := width - toolOutputSeparatorSegmentWidth
-	if toolOutputSeparatorBouncePosition(0, travel) == toolOutputSeparatorBouncePosition(5, travel) {
-		t.Fatal("separator segment position must advance between animation frames")
+	if !strings.Contains(plain1, components.SpinnerFrame(1)) {
+		t.Fatalf("running tool must render spinner frame %q, got:\n%s", components.SpinnerFrame(1), plain1)
 	}
-	for _, output := range []string{frame0, frame5} {
+	if strings.Contains(plain0, "●") || strings.Contains(plain1, "●") {
+		t.Fatalf("running tool must not render blue ball marker, got:\n%s\n%s", plain0, plain1)
+	}
+	sep0 := renderedToolSeparatorLine(frame0)
+	sep1 := renderedToolSeparatorLine(frame1)
+	if sep0 == "" || sep1 == "" {
+		t.Fatalf("expected static separator lines, got frame0=%q frame1=%q\nframe0:\n%s\nframe1:\n%s",
+			sep0, sep1, plain0, plain1)
+	}
+	if sep0 != sep1 {
+		t.Fatalf("separator must not animate, got frame0=%q frame1=%q", sep0, sep1)
+	}
+	for _, output := range []string{frame0, frame1} {
 		for line := range strings.SplitSeq(output, "\n") {
 			if got := ansi.StringWidth(line); got > width {
 				t.Fatalf("line width = %d, want <= %d: %q", got, width, line)
 			}
 		}
-	}
-}
-
-func TestToolOutputSeparatorBouncePositionEasesAtEdges(t *testing.T) {
-	t.Parallel()
-	const travel = 80
-
-	startDelta := toolOutputSeparatorBouncePosition(4, travel) - toolOutputSeparatorBouncePosition(0, travel)
-	midDelta := toolOutputSeparatorBouncePosition(44, travel) - toolOutputSeparatorBouncePosition(40, travel)
-	endDelta := toolOutputSeparatorBouncePosition(80, travel) - toolOutputSeparatorBouncePosition(76, travel)
-
-	if midDelta <= startDelta {
-		t.Fatalf("bounce must accelerate away from edge: start delta=%d mid delta=%d", startDelta, midDelta)
-	}
-	if midDelta <= endDelta {
-		t.Fatalf("bounce must decelerate into edge: mid delta=%d end delta=%d", midDelta, endDelta)
 	}
 }
 
@@ -887,6 +878,38 @@ func TestToolArgsSummaryBash(t *testing.T) {
 	}
 }
 
+func TestToolArgsSummaryTodoList(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+
+	createArgs := `{"command":"create","task_list_description":"Implement flink-streamer shared Helm chart","tasks":[{"task_description":"Create Chart.yaml"},{"task_description":"Create values.yaml"}]}`
+	createSummary := ansi.Strip(toolArgsSummary(st, "todo_list", createArgs, 80))
+	if !strings.Contains(createSummary, "Implement flink-streamer shared Helm chart") {
+		t.Errorf("todo create summary missing description, got: %q", createSummary)
+	}
+
+	completeArgs := `{"command":"complete","completed_task_ids":["1","2"],"context_update":"Created chart metadata and values schema","modified_files":["flink-streamer/Chart.yaml","flink-streamer/values.yaml"]}`
+	completeSummary := ansi.Strip(toolArgsSummary(st, "todo_list", completeArgs, 120))
+	for _, want := range []string{"Created chart metadata", "2 files", "flink-streamer/Chart.yaml"} {
+		if !strings.Contains(completeSummary, want) {
+			t.Errorf("todo complete summary missing %q, got: %q", want, completeSummary)
+		}
+	}
+}
+
+func TestToolPrimaryArgTodoList(t *testing.T) {
+	t.Parallel()
+	createArgs := `{"command":"create","tasks":[{"task_description":"A"},{"task_description":"B"}]}`
+	if got := toolPrimaryArg("todo_list", createArgs); got != "create 2 tasks" {
+		t.Errorf("todo create primary arg = %q, want create 2 tasks", got)
+	}
+
+	completeArgs := `{"command":"complete","completed_task_ids":["1","2"]}`
+	if got := toolPrimaryArg("todo_list", completeArgs); got != "complete #1, #2" {
+		t.Errorf("todo complete primary arg = %q, want complete #1, #2", got)
+	}
+}
+
 func TestToolArgsSummaryUnknownTool(t *testing.T) {
 	t.Parallel()
 	st := testStyles()
@@ -1040,6 +1063,49 @@ func TestRenderTranscriptACPExecuteArgsShownInToolCard(t *testing.T) {
 	plain := ansi.Strip(output)
 	if !strings.Contains(plain, "cd /Users/benedikt/workspace && ls -la") {
 		t.Errorf("expected ACP execute command in tool card, got: %q", plain)
+	}
+}
+
+func TestRenderTranscriptTodoListToolCard(t *testing.T) {
+	t.Parallel()
+	st := testStyles()
+	entries := []sessionlog.Entry{
+		{
+			Kind: sessionlog.KindToolStart,
+			Tool: "todo_list",
+			Text: `{"command":"complete","completed_task_ids":["1","2"],"context_update":"Created chart metadata and values schema","modified_files":["flink-streamer/Chart.yaml","flink-streamer/values.yaml"]}`,
+		},
+		{Kind: sessionlog.KindToolResult, Tool: "todo_list"},
+	}
+	output := RenderTranscript(st, entries, 80, false, true)
+	plain := ansi.Strip(output)
+	for _, want := range []string{"todo_list", "complete #1, #2", "Created chart metadata", "2 files"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("expected %q in todo tool card, got: %q", want, plain)
+		}
+	}
+	if strings.Contains(plain, "completed_task_ids") || strings.Contains(plain, "context_update") {
+		t.Errorf("todo tool card leaked raw args JSON: %q", plain)
+	}
+}
+
+func TestRenderTranscriptTodoListToolCardWidthBounded(t *testing.T) {
+	t.Parallel()
+	const width = 44
+	st := testStyles()
+	entries := []sessionlog.Entry{
+		{
+			Kind: sessionlog.KindToolStart,
+			Tool: "todo_list",
+			Text: `{"command":"create","task_list_description":"Implement flink-streamer shared Helm chart with a deliberately long description","tasks":[{"task_description":"Create Chart.yaml"},{"task_description":"Create values.yaml"},{"task_description":"Create templates"}]}`,
+		},
+		{Kind: sessionlog.KindToolResult, Tool: "todo_list"},
+	}
+	output := RenderTranscript(st, entries, width, false, true)
+	for line := range strings.SplitSeq(output, "\n") {
+		if w := ansi.StringWidth(line); w > width {
+			t.Errorf("line width %d > %d: %q", w, width, line)
+		}
 	}
 }
 

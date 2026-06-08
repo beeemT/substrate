@@ -311,15 +311,15 @@ func TestSessionLogSpinnerTickAdvancesFrame(t *testing.T) {
 	if updated.spinnerFrame != 1 {
 		t.Fatalf("spinnerFrame = %d, want 1 after first tick", updated.spinnerFrame)
 	}
-	if updated.toolAnimationFrame != sessionLogToolAnimationStep {
-		t.Fatalf("toolAnimationFrame = %d, want %d after first tick", updated.toolAnimationFrame, sessionLogToolAnimationStep)
+	if updated.toolAnimationFrame != 1 {
+		t.Fatalf("toolAnimationFrame = %d, want 1 after first tick", updated.toolAnimationFrame)
 	}
 	if cmd == nil {
 		t.Fatal("spinner tick must return a follow-up tick cmd")
 	}
 }
 
-func TestSessionLogRunningToolSeparatorAnimatesOnTick(t *testing.T) {
+func TestSessionLogRunningToolSpinnerAnimatesOnTick(t *testing.T) {
 	t.Parallel()
 
 	st := styles.NewStyles(styles.DefaultTheme)
@@ -336,18 +336,26 @@ func TestSessionLogRunningToolSeparatorAnimatesOnTick(t *testing.T) {
 		},
 		NextOffset: 10,
 	})
-	before := renderedToolSeparatorLine(model.viewport.View(), true)
-	if before == "" {
-		t.Fatalf("expected initial animated separator, got:\n%s", ansi.Strip(model.viewport.View()))
+	before := model.viewport.View()
+	if !strings.Contains(ansi.Strip(before), components.SpinnerFrame(0)) {
+		t.Fatalf("expected initial running-tool spinner frame %q, got:\n%s", components.SpinnerFrame(0), ansi.Strip(before))
+	}
+	beforeSeparator := renderedToolSeparatorLine(before)
+	if beforeSeparator == "" {
+		t.Fatalf("expected initial static separator, got:\n%s", ansi.Strip(before))
 	}
 
 	updated, cmd := model.Update(sessionLogSpinnerTickMsg{})
-	after := renderedToolSeparatorLine(updated.viewport.View(), true)
-	if after == "" {
-		t.Fatalf("expected animated separator after tick, got:\n%s", ansi.Strip(updated.viewport.View()))
+	after := updated.viewport.View()
+	if !strings.Contains(ansi.Strip(after), components.SpinnerFrame(1)) {
+		t.Fatalf("expected running-tool spinner frame %q after tick, got:\n%s", components.SpinnerFrame(1), ansi.Strip(after))
 	}
-	if updated.toolAnimationFrame <= model.toolAnimationFrame {
-		t.Fatalf("toolAnimationFrame = %d, want > %d", updated.toolAnimationFrame, model.toolAnimationFrame)
+	afterSeparator := renderedToolSeparatorLine(after)
+	if afterSeparator == "" {
+		t.Fatalf("expected static separator after tick, got:\n%s", ansi.Strip(after))
+	}
+	if beforeSeparator != afterSeparator {
+		t.Fatalf("separator must not animate, got before=%q after=%q", beforeSeparator, afterSeparator)
 	}
 	if cmd == nil {
 		t.Fatal("spinner tick must continue while agent is active")
