@@ -102,7 +102,11 @@ func mapSessionUpdate(raw json.RawMessage) []adapter.AgentEvent {
 		}
 		payload := contentPayload(u.Content)
 		if payload == "" {
-			payload = contentPayload(u.RawOutput)
+			if acpToolName(u) == acpTodoToolName {
+				payload = contentTextPayload(u.RawOutput)
+			} else {
+				payload = contentPayload(u.RawOutput)
+			}
 		}
 		return []adapter.AgentEvent{{Type: eventType, Timestamp: now, Payload: payload, Metadata: toolMetadata(u)}}
 	case "tool_call_chunk":
@@ -120,13 +124,15 @@ func mapSessionUpdate(raw json.RawMessage) []adapter.AgentEvent {
 	}
 }
 
+const acpTodoToolName = "todo_list"
+
 func toolMetadata(u toolCallUpdate) map[string]any {
 	meta := map[string]any{"tool_call_id": u.ToolCallID, "status": u.Status, "acp_update": u.SessionUpdate, "is_error": u.Status == "failed"}
 	if u.Kind != "" {
 		meta["kind"] = u.Kind
-		meta["tool"] = u.Kind
-	} else if u.Title != "" {
-		meta["tool"] = u.Title
+	}
+	if tool := acpToolName(u); tool != "" {
+		meta["tool"] = tool
 	}
 	if u.Title != "" {
 		meta["title"] = u.Title
@@ -138,6 +144,47 @@ func toolMetadata(u toolCallUpdate) map[string]any {
 	return meta
 }
 
+func acpToolName(u toolCallUpdate) string {
+	if acpTodoToolCall(u.RawInput, u.Title) {
+		return acpTodoToolName
+	}
+	if u.Kind != "" && u.Kind != "other" {
+		return u.Kind
+	}
+	if u.Title != "" {
+		return u.Title
+	}
+	return u.Kind
+}
+
+func acpTodoToolCall(rawInput json.RawMessage, title string) bool {
+	raw := rawJSONPayload(rawInput)
+	if strings.TrimSpace(raw) != "" {
+		var input struct {
+			Command             string            `json:"command"`
+			TaskListDescription string            `json:"task_list_description"`
+			Tasks               []json.RawMessage `json:"tasks"`
+			CompletedTaskIDs    []json.RawMessage `json:"completed_task_ids"`
+			ContextUpdate       string            `json:"context_update"`
+		}
+		if err := json.Unmarshal([]byte(raw), &input); err == nil {
+			switch input.Command {
+			case "create":
+				if input.TaskListDescription != "" || len(input.Tasks) > 0 {
+					return true
+				}
+			case "complete":
+				if len(input.CompletedTaskIDs) > 0 || input.ContextUpdate != "" {
+					return true
+				}
+			}
+		}
+	}
+
+	title = strings.TrimSpace(title)
+	return title == acpTodoToolName || strings.HasPrefix(title, "Creating task list") || strings.HasPrefix(title, "Completing #")
+}
+
 func rawJSONPayload(raw json.RawMessage) string {
 	if len(raw) == 0 || string(raw) == "null" {
 		return ""
@@ -146,26 +193,11 @@ func rawJSONPayload(raw json.RawMessage) string {
 }
 
 func contentPayload(raw json.RawMessage) string {
+	if text := contentTextPayload(raw); text != "" {
+		return text
+	}
 	if len(raw) == 0 || string(raw) == "null" {
 		return ""
-	}
-	var items []contentItem
-	if err := json.Unmarshal(raw, &items); err == nil {
-		if text := joinContentItems(items); text != "" {
-			return text
-		}
-	}
-	var wrapped struct {
-		Items []contentItem `json:"items"`
-	}
-	if err := json.Unmarshal(raw, &wrapped); err == nil {
-		if text := joinContentItems(wrapped.Items); text != "" {
-			return text
-		}
-	}
-	var single textContent
-	if err := json.Unmarshal(raw, &single); err == nil && single.Text != "" {
-		return single.Text
 	}
 	const max = 8192
 	if len(raw) > max {
@@ -185,6 +217,35 @@ func contentPayload(raw json.RawMessage) string {
 		return "…"
 	}
 	return string(raw)
+}
+
+func contentTextPayload(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text
+	}
+	var items []contentItem
+	if err := json.Unmarshal(raw, &items); err == nil {
+		if text := joinContentItems(items); text != "" {
+			return text
+		}
+	}
+	var wrapped struct {
+		Items []contentItem `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err == nil {
+		if text := joinContentItems(wrapped.Items); text != "" {
+			return text
+		}
+	}
+	var single textContent
+	if err := json.Unmarshal(raw, &single); err == nil && single.Text != "" {
+		return single.Text
+	}
+	return ""
 }
 
 type contentItem struct {

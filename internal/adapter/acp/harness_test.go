@@ -461,6 +461,36 @@ func TestMapSessionUpdateToolCallRawOutput(t *testing.T) {
 	}
 }
 
+func TestMapSessionUpdateTodoToolCall(t *testing.T) {
+	start := mapSessionUpdate(json.RawMessage(`{"sessionUpdate":"tool_call","toolCallId":"tc1","title":"Creating task list: Implement chart","rawInput":{"command":"create","task_list_description":"Implement chart","tasks":[{"task_description":"Create chart"}]}}`))
+	if len(start) != 1 {
+		t.Fatalf("got %d start events, want 1: %#v", len(start), start)
+	}
+	if start[0].Type != "tool_start" {
+		t.Fatalf("start event type = %q, want tool_start", start[0].Type)
+	}
+	if got, _ := start[0].Metadata["tool"].(string); got != "todo_list" {
+		t.Fatalf("start metadata tool = %q, want todo_list", got)
+	}
+	if got, _ := start[0].Metadata["intent"].(string); got != "Creating task list: Implement chart" {
+		t.Fatalf("start metadata intent = %q", got)
+	}
+
+	result := mapSessionUpdate(json.RawMessage(`{"sessionUpdate":"tool_call_update","toolCallId":"tc1","title":"Creating task list: Implement chart","kind":"other","status":"completed","rawInput":{"command":"create","task_list_description":"Implement chart","tasks":[{"task_description":"Create chart"}]},"rawOutput":{"items":[{"Json":{"tasks":[{"id":"1","task_description":"Create chart","completed":false}],"description":"Implement chart","context":[],"modified_files":[]}}]}}`))
+	if len(result) != 1 {
+		t.Fatalf("got %d result events, want 1: %#v", len(result), result)
+	}
+	if result[0].Type != "tool_result" {
+		t.Fatalf("result event type = %q, want tool_result", result[0].Type)
+	}
+	if got, _ := result[0].Metadata["tool"].(string); got != "todo_list" {
+		t.Fatalf("result metadata tool = %q, want todo_list", got)
+	}
+	if result[0].Payload != "" {
+		t.Fatalf("result payload = %q, want todo state payload suppressed", result[0].Payload)
+	}
+}
+
 func TestStartSessionIncludesEmptyMCPServers(t *testing.T) {
 	cfg := helperACPConfig(t)
 	h := NewHarness(cfg, t.TempDir())

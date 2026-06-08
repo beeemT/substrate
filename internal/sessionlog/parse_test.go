@@ -220,6 +220,41 @@ func TestParseLine_ACPToolCallRawOutput(t *testing.T) {
 	}
 }
 
+func TestParseLine_ACPTodoToolNameMatchesResult(t *testing.T) {
+	startLine := `2026-06-01T12:09:48.282706+02:00 in {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call","toolCallId":"tc1","title":"Creating task list: Implement chart","rawInput":{"command":"create","task_list_description":"Implement chart","tasks":[{"task_description":"Create chart"}]}}}}`
+	start, ok := ParseLine(startLine)
+	if !ok {
+		t.Fatal("ParseLine returned ok=false for ACP todo tool_call")
+	}
+	if start.Kind != KindToolStart {
+		t.Fatalf("start.Kind = %q, want %q", start.Kind, KindToolStart)
+	}
+	if start.Tool != "todo_list" {
+		t.Fatalf("start.Tool = %q, want todo_list", start.Tool)
+	}
+	if start.Intent != "Creating task list: Implement chart" {
+		t.Fatalf("start.Intent = %q", start.Intent)
+	}
+	if !strings.Contains(start.Text, `"command":"create"`) {
+		t.Fatalf("start.Text = %q, want raw todo args", start.Text)
+	}
+
+	resultLine := `2026-06-01T12:09:49.282706+02:00 in {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call_update","toolCallId":"tc1","title":"Creating task list: Implement chart","kind":"other","status":"completed","rawInput":{"command":"create","task_list_description":"Implement chart","tasks":[{"task_description":"Create chart"}]},"rawOutput":{"items":[{"Json":{"tasks":[{"id":"1","task_description":"Create chart","completed":false}],"description":"Implement chart","context":[],"modified_files":[]}}]}}}}`
+	result, ok := ParseLine(resultLine)
+	if !ok {
+		t.Fatal("ParseLine returned ok=false for ACP todo tool_call_update")
+	}
+	if result.Kind != KindToolResult {
+		t.Fatalf("result.Kind = %q, want %q", result.Kind, KindToolResult)
+	}
+	if result.Tool != "todo_list" {
+		t.Fatalf("result.Tool = %q, want todo_list", result.Tool)
+	}
+	if result.Text != "" {
+		t.Fatalf("result.Text = %q, want todo state payload suppressed", result.Text)
+	}
+}
+
 func TestParseLine_ACPControlFramesDropped(t *testing.T) {
 	lines := []string{
 		`2026-06-01T12:09:45.851972+02:00 in {"jsonrpc":"2.0","method":"_kiro.dev/session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call_chunk","toolCallId":"tc1","title":"read","kind":"read"}}}`,

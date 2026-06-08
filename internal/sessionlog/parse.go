@@ -131,12 +131,17 @@ func (e sessionLogEvent) entry() Entry {
 		if entry.Intent == "" {
 			entry.Intent, _ = e.Metadata["title"].(string)
 		}
-		if entry.Kind == KindToolStart {
-			if rawInput, _ := e.Metadata["raw_input"].(string); strings.TrimSpace(rawInput) != "" {
-				text := strings.TrimSpace(entry.Text)
-				if text == "" || !strings.HasPrefix(text, "{") {
-					entry.Text = rawInput
-				}
+		rawInput, _ := e.Metadata["raw_input"].(string)
+		if entry.Kind == KindToolStart && strings.TrimSpace(rawInput) != "" {
+			text := strings.TrimSpace(entry.Text)
+			if text == "" || !strings.HasPrefix(text, "{") {
+				entry.Text = rawInput
+			}
+		}
+		if isToolEntryKind(entry.Kind) {
+			entry.Tool = acpToolNameFromRaw(entry.Tool, entry.Intent, rawInput)
+			if entry.Tool == acpTodoToolName && entry.Kind != KindToolStart && acpTodoStatePayload(entry.Text) {
+				entry.Text = ""
 			}
 		}
 		if !entry.IsError {
@@ -230,6 +235,80 @@ type acpToolCallUpdate struct {
 	RawOutput     json.RawMessage `json:"rawOutput,omitempty"`
 }
 
+const acpTodoToolName = "todo_list"
+
+func isToolEntryKind(kind EntryKind) bool {
+	return kind == KindToolStart || kind == KindToolOutput || kind == KindToolResult
+}
+
+func acpToolName(kind, title string, rawInput json.RawMessage) string {
+	return acpToolNameFromRaw(kind, title, rawJSONText(rawInput))
+}
+
+func acpToolNameFromRaw(kind, title, rawInput string) string {
+	if acpTodoToolCall(rawInput, title) {
+		return acpTodoToolName
+	}
+	if kind != "" && kind != "other" {
+		return kind
+	}
+	if title != "" {
+		return title
+	}
+	return kind
+}
+
+func acpTodoToolCall(rawInput, title string) bool {
+	if strings.TrimSpace(rawInput) != "" {
+		var input struct {
+			Command             string            `json:"command"`
+			TaskListDescription string            `json:"task_list_description"`
+			Tasks               []json.RawMessage `json:"tasks"`
+			CompletedTaskIDs    []json.RawMessage `json:"completed_task_ids"`
+			ContextUpdate       string            `json:"context_update"`
+		}
+		if err := json.Unmarshal([]byte(rawInput), &input); err == nil {
+			switch input.Command {
+			case "create":
+				if input.TaskListDescription != "" || len(input.Tasks) > 0 {
+					return true
+				}
+			case "complete":
+				if len(input.CompletedTaskIDs) > 0 || input.ContextUpdate != "" {
+					return true
+				}
+			}
+		}
+	}
+
+	title = strings.TrimSpace(title)
+	return title == acpTodoToolName || strings.HasPrefix(title, "Creating task list") || strings.HasPrefix(title, "Completing #")
+}
+
+func acpTodoStatePayload(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" || !strings.HasPrefix(text, "{") {
+		return false
+	}
+	var output struct {
+		Items []struct {
+			JSON json.RawMessage `json:"Json"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(text), &output); err != nil {
+		return false
+	}
+	for _, item := range output.Items {
+		var state struct {
+			Tasks []json.RawMessage `json:"tasks"`
+		}
+		if len(item.JSON) > 0 && json.Unmarshal(item.JSON, &state) == nil && len(state.Tasks) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func parseACPProtocolPayload(payload string) (Entry, bool, bool) {
 	var msg acpRPCMessage
 	if err := json.Unmarshal([]byte(payload), &msg); err != nil || msg.JSONRPC == "" {
@@ -267,7 +346,7 @@ func parseACPUpdate(raw json.RawMessage) (Entry, bool, bool) {
 		if err := json.Unmarshal(raw, &u); err != nil {
 			return Entry{}, false, true
 		}
-		return Entry{Kind: KindToolStart, Tool: firstNonEmpty(u.Kind, u.Title), Intent: u.Title, Text: rawJSONText(u.RawInput)}, true, true
+		return Entry{Kind: KindToolStart, Tool: acpToolName(u.Kind, u.Title, u.RawInput), Intent: u.Title, Text: rawJSONText(u.RawInput)}, true, true
 	case "tool_call_update":
 		var u acpToolCallUpdate
 		if err := json.Unmarshal(raw, &u); err != nil {
@@ -281,7 +360,7 @@ func parseACPUpdate(raw json.RawMessage) (Entry, bool, bool) {
 		if text == "" {
 			text = acpContentPayload(u.RawOutput)
 		}
-		return Entry{Kind: kind, Tool: firstNonEmpty(u.Kind, u.Title), Intent: u.Title, Text: text, IsError: u.Status == "failed"}, true, true
+		return Entry{Kind: kind, Tool: acpToolName(u.Kind, u.Title, u.RawInput), Intent: u.Title, Text: text, IsError: u.Status == "failed"}, true, true
 	case "tool_call_chunk", "available_commands_update", "current_mode_update", "config_option_update", "session_info_update":
 		return Entry{}, false, true
 	default:
