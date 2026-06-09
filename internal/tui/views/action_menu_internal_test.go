@@ -124,6 +124,36 @@ func TestActionRegistryIncludesManualAgentSessionForSingleRepoWorkItem(t *testin
 	}
 }
 
+func TestActionRegistryUsesFocusedSessionInteractionRepoForManualAgentSession(t *testing.T) {
+	app := newSidebarDrilldownTestApp()
+	app.provider = &testProvider{svcs: Services{Manual: &orchestrator.ManualSessionService{}}}
+	app.subPlans["plan-1"] = append(app.subPlans["plan-1"], domain.TaskPlan{
+		ID:             "sp-2",
+		PlanID:         "plan-1",
+		RepositoryName: "repo-b",
+		Status:         domain.SubPlanInProgress,
+	})
+	app.mainFocus = mainFocusContent
+	app.sidebarMode = sidebarPaneTasks
+	app.setSelectedTaskSessionID("sess-1")
+	app.content.SetMode(ContentModeSessionInteraction)
+	app.content.sessionLog.SetLogPath("sess-1", "/tmp/session.log")
+
+	actions := app.BuildActionRegistry(ContextSessionInteractionLog)
+	action := findAction(actions, "start_manual_agent_session")
+	if action == nil {
+		t.Fatalf("session interaction actions missing start_manual_agent_session: %#v", actionIDs(actions))
+	}
+	msg := action.Handler(app)()
+	start, ok := msg.(StartManualAgentSessionMsg)
+	if !ok {
+		t.Fatalf("handler msg = %#v, want StartManualAgentSessionMsg", msg)
+	}
+	if start.WorkItemID != "wi-1" || start.RepositoryName != "repo-a" || start.SubPlanID != "sp-1" {
+		t.Fatalf("manual target = %#v, want focused sess-1 repo-a/sp-1", start)
+	}
+}
+
 func TestActionRegistryIncludesOverviewOpenTerminalPickerInOverviewSubcontexts(t *testing.T) {
 	st := styles.NewStyles(styles.DefaultTheme)
 	app := &App{

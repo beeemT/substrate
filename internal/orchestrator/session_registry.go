@@ -70,7 +70,7 @@ func (r *sessionRegistry) Steer(ctx context.Context, sessionID string, msg strin
 	return session.Steer(ctx, msg)
 }
 
-// SendAnswer sends an answer to resolve a pending ask_foreman tool call.
+// SendAnswer sends an answer to resolve a pending question tool call.
 // Returns ErrSessionNotRunning if the session is not registered.
 func (r *sessionRegistry) SendAnswer(ctx context.Context, sessionID string, answer string) error {
 	r.mu.RLock()

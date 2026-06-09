@@ -80,10 +80,11 @@ func resolveReadyBridgeRuntime(cfg config.OhMyPiConfig) (bridge.BridgeRuntime, s
 
 // bridgeInitMsg is sent before any prompt to configure the session.
 type bridgeInitMsg struct {
-	Type            string  `json:"type"`
-	SystemPrompt    string  `json:"system_prompt,omitempty"`
-	Model           *string `json:"model,omitempty"` // nil = use harness default; empty string would mean "no model"
-	AnswerTimeoutMs int64   `json:"answer_timeout_ms"`
+	Type               string  `json:"type"`
+	SystemPrompt       string  `json:"system_prompt,omitempty"`
+	Model              *string `json:"model,omitempty"` // nil = use harness default; empty string would mean "no model"
+	AnswerTimeoutMs    int64   `json:"answer_timeout_ms"`
+	QuestionToolPolicy string  `json:"question_tool_policy,omitempty"`
 }
 
 // StartSession spawns a new agent session with the given options.
@@ -200,9 +201,10 @@ func (h *OhMyPiHarness) StartSession(ctx context.Context, opts adapter.SessionOp
 	// Always send an init message — it carries the system prompt and answer timeout.
 	// Using an explicit struct write avoids exposing config in /proc/pid/environ.
 	initMsg := bridgeInitMsg{
-		Type:            "init",
-		SystemPrompt:    opts.SystemPrompt,
-		AnswerTimeoutMs: opts.AnswerTimeoutMs,
+		Type:               "init",
+		SystemPrompt:       opts.SystemPrompt,
+		AnswerTimeoutMs:    opts.AnswerTimeoutMs,
+		QuestionToolPolicy: string(opts.QuestionToolPolicy),
 	}
 	// Only send Model when explicitly set — nil omits it from JSON (omitempty),
 	// which lets the bridge use OMP's own default. Sending an empty string

@@ -491,6 +491,73 @@ func TestMapSessionUpdateTodoToolCall(t *testing.T) {
 	}
 }
 
+func TestBuildMCPServersUsesHumanQuestionToolForHumanPolicy(t *testing.T) {
+	dir := t.TempDir()
+	bridgePath := filepath.Join(dir, "question-mcp")
+	if err := os.WriteFile(bridgePath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write bridge: %v", err)
+	}
+	s := &Session{
+		mode:      adapter.SessionModeAgent,
+		acpCfg:    config.ACPConfig{QuestionBridgePath: bridgePath},
+		questions: newQuestionBroker("manual-session", adapter.SessionModeAgent, func(adapter.AgentEvent) {}),
+	}
+	servers := s.buildQuestionMCPServers(adapter.QuestionToolPolicyHuman)
+	if s.questionSocket != nil {
+		defer s.questionSocket.close()
+	}
+	if len(servers) != 1 {
+		t.Fatalf("mcp servers = %d, want 1", len(servers))
+	}
+	if servers[0].Name != "substrate-user" {
+		t.Fatalf("server name = %q, want substrate-user", servers[0].Name)
+	}
+	if s.questionSocket == nil || s.questionSocket.source != adapter.AgentQuestionSourceAskUser {
+		t.Fatalf("socket source = %#v, want ask_user", s.questionSocket)
+	}
+	var modeEnv string
+	for _, env := range servers[0].Env {
+		if env.Name == questionToolModeEnv {
+			modeEnv = env.Value
+		}
+	}
+	if modeEnv != "human" {
+		t.Fatalf("%s = %q, want human", questionToolModeEnv, modeEnv)
+	}
+}
+
+func TestBuildMCPServersSkipsQuestionToolsForNonePolicy(t *testing.T) {
+	s := &Session{mode: adapter.SessionModeAgent}
+	if servers := s.buildQuestionMCPServers(adapter.QuestionToolPolicyNone); len(servers) != 0 {
+		t.Fatalf("mcp servers = %#v, want none", servers)
+	}
+}
+
+func TestSessionSendAnswerWritesAnswerInputLog(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "session.log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatalf("open log: %v", err)
+	}
+	broker := newQuestionBroker("manual-session", adapter.SessionModeAgent, func(adapter.AgentEvent) {})
+	broker.pending["q-1"] = &pendingQuestion{id: "q-1", answer: make(chan string, 1)}
+	s := &Session{questions: broker, logFile: logFile}
+
+	if err := s.SendAnswer(context.Background(), "operator answer"); err != nil {
+		t.Fatalf("SendAnswer: %v", err)
+	}
+	if err := logFile.Close(); err != nil {
+		t.Fatalf("close log: %v", err)
+	}
+	entries, err := sessionlog.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	if len(entries) != 1 || entries[0].InputKind != "answer" || entries[0].Text != "operator answer" {
+		t.Fatalf("entries = %+v, want answer input", entries)
+	}
+}
+
 func TestStartSessionIncludesEmptyMCPServers(t *testing.T) {
 	cfg := helperACPConfig(t)
 	h := NewHarness(cfg, t.TempDir())
@@ -535,37 +602,37 @@ func TestAbortAfterSessionFinished(t *testing.T) {
 	}
 }
 
-func TestResolveForemanMCPBridgeUsesConfiguredExecutable(t *testing.T) {
+func TestResolveQuestionMCPBridgeUsesConfiguredExecutable(t *testing.T) {
 	dir := t.TempDir()
-	bridgePath := filepath.Join(dir, "custom-foreman")
+	bridgePath := filepath.Join(dir, "custom-question-mcp")
 	if err := os.WriteFile(bridgePath, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatalf("write bridge: %v", err)
 	}
-	cmd, args, err := resolveForemanMCPBridgeFrom(bridgePath, filepath.Join(dir, "substrate"))
+	cmd, args, err := resolveQuestionMCPBridgeFrom(bridgePath, filepath.Join(dir, "substrate"))
 	if err != nil {
-		t.Fatalf("resolveForemanMCPBridgeFrom: %v", err)
+		t.Fatalf("resolveQuestionMCPBridgeFrom: %v", err)
 	}
 	if cmd != bridgePath || len(args) != 0 {
 		t.Fatalf("resolved cmd=%q args=%v, want configured executable with no args", cmd, args)
 	}
 }
 
-func TestResolveForemanMCPBridgeUsesConfiguredScript(t *testing.T) {
+func TestResolveQuestionMCPBridgeUsesConfiguredScript(t *testing.T) {
 	bun, err := exec.LookPath("bun")
 	if err != nil {
 		t.Skipf("bun not on PATH: %v", err)
 	}
 	dir := t.TempDir()
-	bridgePath := filepath.Join(dir, "foreman-mcp", "index.ts")
+	bridgePath := filepath.Join(dir, "question-mcp", "index.ts")
 	if err := os.MkdirAll(filepath.Dir(bridgePath), 0o755); err != nil {
 		t.Fatalf("create bridge dir: %v", err)
 	}
-	if err := os.WriteFile(bridgePath, []byte("console.log('foreman')\n"), 0o644); err != nil {
+	if err := os.WriteFile(bridgePath, []byte("console.log('question')\n"), 0o644); err != nil {
 		t.Fatalf("write bridge script: %v", err)
 	}
-	cmd, args, err := resolveForemanMCPBridgeFrom(bridgePath, filepath.Join(dir, "substrate"))
+	cmd, args, err := resolveQuestionMCPBridgeFrom(bridgePath, filepath.Join(dir, "substrate"))
 	if err != nil {
-		t.Fatalf("resolveForemanMCPBridgeFrom: %v", err)
+		t.Fatalf("resolveQuestionMCPBridgeFrom: %v", err)
 	}
 	if cmd != bun || len(args) != 1 || args[0] != bridgePath {
 		t.Fatalf("resolved cmd=%q args=%v, want bun %q with configured script", cmd, args, bun)
@@ -591,6 +658,7 @@ func TestCapabilitiesReportSubstrateACPTools(t *testing.T) {
 	caps := NewHarness(config.ACPConfig{}, t.TempDir()).Capabilities()
 	expectedTools := []string{
 		"mcp__substrate-foreman__ask_foreman",
+		"mcp__substrate-user__ask_user",
 		"acp/fs.read_text_file",
 		"acp/fs.write_text_file",
 		"acp/terminal.create",
@@ -618,8 +686,10 @@ func TestCapabilitiesRespectDisabledACPClientTools(t *testing.T) {
 			t.Fatalf("SupportedTools contains disabled tool %q; got %v", disabledTool, caps.SupportedTools)
 		}
 	}
-	if !slices.Contains(caps.SupportedTools, "mcp__substrate-foreman__ask_foreman") {
-		t.Fatalf("SupportedTools missing foreman MCP tool; got %v", caps.SupportedTools)
+	for _, questionTool := range []string{"mcp__substrate-foreman__ask_foreman", "mcp__substrate-user__ask_user"} {
+		if !slices.Contains(caps.SupportedTools, questionTool) {
+			t.Fatalf("SupportedTools missing question MCP tool %q; got %v", questionTool, caps.SupportedTools)
+		}
 	}
 }
 

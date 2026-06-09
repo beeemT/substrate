@@ -7,7 +7,7 @@
  *   - {"type":"init","system_prompt":"..."} — optional init message (must be first if present)
  *   - {"type":"prompt","text":"..."} — initial prompt or continuation
  *   - {"type":"message","text":"..."} — follow-up message (human iteration)
- *   - {"type":"answer","text":"..."} — resolve pending ask_foreman tool call
+ *   - {"type":"answer","text":"..."} — resolve pending question tool call
  *   - {"type":"abort"} — terminate session
  *   - {"type":"compact"} — request manual context compaction
  *
@@ -35,6 +35,35 @@ const thinkingLevel: ThinkingLevel | undefined = process.env.SUBSTRATE_THINKING_
 const worktreePath = process.env.SUBSTRATE_WORKTREE_PATH ?? process.cwd();
 let systemPrompt: string | undefined;
 let modelPattern: string | undefined;
+let questionToolPolicy = "";
+
+// Question tool routing is driven by a policy string from the Go harness
+// ("" = default, "foreman", "human", "none"). The harness default for OMP is
+// "both" — historically the bridge exposed both ask_foreman and the native
+// user question tool when no policy was provided.
+type QuestionToolTarget = "none" | "foreman" | "human" | "both";
+const DEFAULT_QUESTION_TOOL_TARGET: QuestionToolTarget = "both";
+
+function questionToolTarget(policy: string): QuestionToolTarget {
+  switch (policy) {
+    case "foreman":
+      return "foreman";
+    case "human":
+      return "human";
+    case "none":
+      return "none";
+    default:
+      return DEFAULT_QUESTION_TOOL_TARGET;
+  }
+}
+
+function exposesForemanQuestions(target: QuestionToolTarget): boolean {
+  return target === "foreman" || target === "both";
+}
+
+function exposesHumanQuestions(target: QuestionToolTarget): boolean {
+  return target === "human" || target === "both";
+}
 
 const agentToolNames =
   mode === "agent" ? ["read", "grep", "find", "edit", "write", "bash"] : ["read", "grep", "find"];
@@ -45,7 +74,6 @@ let lastAssistantText = "";
 let answerTimeoutMs = 10 * 60 * 1000; // default 10 min; 0 = no timeout
 let session: AgentSession | null = null;
 let activePromptRun: Promise<void> | null = null;
-
 // Set when the SDK exhausts all rate-limit retries (auto_retry_end with
 // success: false). prompt() resolves without throwing in this case, so the
 // bridge must check this flag before declaring the session successful.
@@ -78,7 +106,10 @@ function emitLifecycle(
   emit({ type: "lifecycle", stage, ...payload });
 }
 
-function emitInput(inputKind: "session_context" | "prompt" | "message" | "answer", text: string): void {
+function emitInput(
+  inputKind: "session_context" | "prompt" | "message" | "answer",
+  text: string,
+): void {
   if (text.trim() === "") return;
   emit({ type: "input", input_kind: inputKind, text });
 }
@@ -533,7 +564,14 @@ async function initSession(): Promise<void> {
       : resumeSessionFile
         ? await SessionManager.open(resumeSessionFile)
         : SessionManager.create(worktreePath);
-  const customTools = mode === "agent" ? [createAskForemanTool(), createNativeAskTool()] : [];
+  const questionTarget = questionToolTarget(questionToolPolicy);
+  const customTools =
+    mode === "agent"
+      ? [
+          ...(exposesForemanQuestions(questionTarget) ? [createAskForemanTool()] : []),
+          ...(exposesHumanQuestions(questionTarget) ? [createNativeAskTool()] : []),
+        ]
+      : [];
 
   const sessionOpts: NonNullable<Parameters<typeof createAgentSession>[0]> = {
     cwd: worktreePath,
@@ -746,6 +784,9 @@ async function main(): Promise<void> {
         }
         if (typeof parsed.model === "string" && parsed.model) {
           modelPattern = parsed.model;
+        }
+        if (typeof parsed.question_tool_policy === "string") {
+          questionToolPolicy = parsed.question_tool_policy;
         }
       } else {
         // Not an init message — process it as a regular command after session starts.

@@ -25,11 +25,33 @@ type QuestionSource string
 
 const (
 	QuestionSourceAskForeman            QuestionSource = "ask_foreman"
+	QuestionSourceAskUser               QuestionSource = "ask_user"
 	QuestionSourceClaudeAsk             QuestionSource = "claude_ask"
 	QuestionSourceOMPAsk                QuestionSource = "omp_ask"
 	QuestionSourceOpenCodeQuestion      QuestionSource = "opencode_question"
 	QuestionSourceFutureHarnessQuestion QuestionSource = "future_harness_question"
 )
+
+// IsHumanDirected reports whether this source expects an operator answer sent
+// directly back into the live agent session.
+func (s QuestionSource) IsHumanDirected() bool {
+	switch s {
+	case QuestionSourceAskUser,
+		QuestionSourceClaudeAsk,
+		QuestionSourceOMPAsk,
+		QuestionSourceOpenCodeQuestion,
+		QuestionSourceFutureHarnessQuestion:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsForemanDirected reports whether this source expects Foreman to produce or
+// escalate the answer before the live agent session is unblocked.
+func (s QuestionSource) IsForemanDirected() bool {
+	return s == QuestionSourceAskForeman
+}
 
 // QuestionOption is one selectable option in a structured agent question.
 type QuestionOption struct {

@@ -80,7 +80,7 @@ jobs:
       - name: Install Bun dependencies
         run: |
           bun install --cwd bridge --frozen-lockfile
-          bun install --cwd bridge/foreman-mcp --frozen-lockfile
+          bun install --cwd bridge/question-mcp --frozen-lockfile
 
       - name: Build
         env:
@@ -106,10 +106,10 @@ jobs:
             --target "${{ matrix.bridge_target }}" \
             --outfile "dist/bridge/claude-agent-bridge"
 
-          bun build bridge/foreman-mcp/index.ts \
+          bun build bridge/question-mcp/index.ts \
             --compile \
             --target "${{ matrix.bridge_target }}" \
-            --outfile "dist/bridge/foreman-mcp"
+            --outfile "dist/bridge/question-mcp"
 
           cp "bridge/node_modules/@oh-my-pi/pi-natives/native/${{ matrix.native_addon }}" "dist/bridge/${{ matrix.native_addon }}"
 
@@ -212,9 +212,9 @@ jobs:
               assert_match "session_ready", pipe_output("#{pkgshare}/bridge/omp-bridge", '{"type":"abort"}\n', 0)
               assert_path_exists pkgshare/"bridge/claude-agent-bridge"
               assert_match "claude-agent-bridge", shell_output("#{pkgshare}/bridge/claude-agent-bridge --version", 0)
-              assert_path_exists pkgshare/"bridge/foreman-mcp"
-              assert_predicate pkgshare/"bridge/foreman-mcp", :executable?
-              assert_match "foreman-mcp", shell_output("#{pkgshare}/bridge/foreman-mcp --version", 0)
+              assert_path_exists pkgshare/"bridge/question-mcp"
+              assert_predicate pkgshare/"bridge/question-mcp", :executable?
+              assert_match "question-mcp", shell_output("#{pkgshare}/bridge/question-mcp --version", 0)
             end
           end
           FORMULA

@@ -538,9 +538,9 @@ func (s *AgentSessionService) Interrupt(ctx context.Context, id string) error {
 	return nil
 }
 
-// RestartCompletedManualSession transitions a completed manual agent session
-// back to running for a follow-up session. Graph-managed implementation/review
-// sessions must create a child node instead of mutating the completed source row.
+// RestartCompletedManualSession transitions a terminal manual agent session
+// back to running for a follow-up prompt. Graph-managed implementation/review
+// sessions must create a child node instead of mutating the terminal source row.
 func (s *AgentSessionService) RestartCompletedManualSession(ctx context.Context, id string, ownerInstanceID *string) error {
 	var agentSession domain.AgentSession
 	err := s.transacter.Transact(ctx, func(ctx context.Context, res repository.Resources) error {
@@ -565,6 +565,7 @@ func (s *AgentSessionService) RestartCompletedManualSession(ctx context.Context,
 		now := time.Now()
 		agentSession.Status = domain.AgentSessionRunning
 		agentSession.CompletedAt = nil
+		agentSession.ExitCode = nil
 		agentSession.OwnerInstanceID = ownerInstanceID
 		agentSession.UpdatedAt = now
 

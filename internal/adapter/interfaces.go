@@ -102,8 +102,8 @@ type AgentSession interface {
 	// Returns ErrSteerNotSupported if the harness does not support mid-stream steering.
 	Steer(ctx context.Context, msg string) error
 
-	// SendAnswer sends an answer to resolve a pending ask_foreman tool call.
-	// The answer is delivered to the bridge subprocess via stdin.
+	// SendAnswer sends an answer to resolve a pending question tool call.
+	// The answer is delivered through the harness-specific live-session channel.
 	SendAnswer(ctx context.Context, answer string) error
 
 	// Abort terminates the agent session gracefully.
@@ -138,7 +138,7 @@ var (
 	ErrSteerNotSupported = error(steerNotSupported{})
 
 	// ErrSendAnswerNotSupported is returned when SendAnswer is called
-	// on a harness that doesn't support answering foreman questions.
+	// on a harness that does not support live question answers.
 	ErrSendAnswerNotSupported = error(sendAnswerNotSupported{})
 
 	// ErrCompactNotSupported is returned when Compact is called

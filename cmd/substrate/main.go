@@ -639,7 +639,7 @@ func initializeGlobalConfig(cfgPath string) error {
 		"#     bun_path: /opt/homebrew/bin/bun",
 		"#     bridge_path: /custom/path/to/omp-bridge",
 		"#   acp:",
-		"#     foreman_bridge_path: /custom/path/to/foreman-mcp/index.ts",
+		"#     question_bridge_path: /custom/path/to/question-mcp/index.ts",
 		"",
 	}, "\n")
 	if err := os.WriteFile(cfgPath, []byte(defaultConfig), 0o600); err != nil {

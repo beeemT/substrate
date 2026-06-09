@@ -198,18 +198,6 @@ func (s *ManualSessionService) Steer(ctx context.Context, sessionID, message str
 	return s.registry.Steer(ctx, sessionID, message)
 }
 
-// SendAnswer sends an operator answer to resolve a pending question in a manual session.
-func (s *ManualSessionService) SendAnswer(ctx context.Context, sessionID, answer string) error {
-	if err := s.registry.SendAnswer(ctx, sessionID, answer); err != nil {
-		return fmt.Errorf("send answer to manual session: %w", err)
-	}
-	// Transition session back to running after answer is sent.
-	if err := s.sessionSvc.ResumeFromAnswer(ctx, sessionID); err != nil {
-		return fmt.Errorf("resume manual session from answer: %w", err)
-	}
-	return nil
-}
-
 // Abort aborts a running manual session.
 func (s *ManualSessionService) Abort(ctx context.Context, sessionID string) error {
 	// AbortAndDeregister handles both abort and deregistration.
@@ -285,8 +273,8 @@ func (s *ManualSessionService) ResumeManualSession(ctx context.Context, interrup
 	return newSession, nil
 }
 
-// FollowUpManualSession sends a follow-up message to a completed manual session.
-// It reuses the same session row (completed → running) when native resume is available,
+// FollowUpManualSession sends a follow-up message to a completed or failed manual session.
+// It reuses the same session row (terminal → running) when native resume is available,
 // otherwise starts a new session and links old→new via EventAgentSessionResumed.
 func (s *ManualSessionService) FollowUpManualSession(ctx context.Context, completed domain.AgentSession, message string) (domain.AgentSession, error) {
 	if completed.Kind != domain.AgentSessionKindManual {

@@ -3,6 +3,8 @@ package opencode
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -91,6 +93,40 @@ func TestSession_SendAnswer_NoPendingQuestion(t *testing.T) {
 	}
 	if !contains(err.Error(), "no pending question") {
 		t.Errorf("error should mention 'no pending question', got: %v", err)
+	}
+}
+
+func TestSessionSendAnswerWritesAnswerInputLog(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "session.log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatalf("open log: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/question/req-1/reply" {
+			t.Fatalf("request path = %q, want /question/req-1/reply", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	s := &session{
+		serverURL:         server.URL,
+		httpClient:        server.Client(),
+		pendingQuestionID: "req-1",
+		logFile:           logFile,
+	}
+	if err := s.SendAnswer(context.Background(), "operator answer"); err != nil {
+		t.Fatalf("SendAnswer: %v", err)
+	}
+	if err := logFile.Close(); err != nil {
+		t.Fatalf("close log: %v", err)
+	}
+	entries, err := sessionlog.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	if len(entries) != 1 || entries[0].InputKind != "answer" || entries[0].Text != "operator answer" {
+		t.Fatalf("entries = %+v, want answer input", entries)
 	}
 }
 

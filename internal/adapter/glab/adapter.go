@@ -241,9 +241,13 @@ func (a *GlabAdapter) onWorktreeReused(ctx context.Context, payload string) erro
 		return errors.New("worktree reused payload missing branch or worktree_path")
 	}
 
-	// Update MR description with new sub-plan content
+	projectPath := gitlabProjectPathFromReview(p.Review, p.Repository)
+	iid := 0
+	if mr, ok := a.trackedMRForWorkItem(ctx, p.WorkItemID, projectPath, p.Branch, p.WorktreePath); ok {
+		iid = mr.IID
+	}
 	description := appendTrackerFooter(strings.TrimSpace(p.SubPlan), renderGitLabTrackerRefs(p.TrackerRefs))
-	if err := a.updateMRDescription(ctx, p.WorktreePath, p.Branch, description); err != nil {
+	if err := a.updateMRDescription(ctx, p.WorktreePath, p.Branch, iid, description); err != nil {
 		slog.Warn("glab: failed to update MR description on reuse", "repo", p.Repository, "branch", p.Branch, "error", err)
 	}
 
@@ -610,24 +614,38 @@ func (a *GlabAdapter) mrExists(ctx context.Context, dir, branch string) bool {
 }
 
 func (a *GlabAdapter) trackedMRForSubPlanPRReady(ctx context.Context, p subPlanPRReadyPayload, projectPath string) (glabMRView, bool) {
-	if a.repos.SessionArtifacts == nil || a.repos.GitlabMRs == nil || strings.TrimSpace(p.WorkItemID) == "" {
+	return a.trackedMRForWorkItem(ctx, p.WorkItemID, projectPath, p.Branch, p.WorktreePath)
+}
+
+func (a *GlabAdapter) trackedMRForWorkItem(ctx context.Context, workItemID, projectPath, branch, worktreePath string) (glabMRView, bool) {
+	if a.repos.SessionArtifacts == nil || a.repos.GitlabMRs == nil || strings.TrimSpace(workItemID) == "" {
 		return glabMRView{}, false
 	}
-	links, err := a.repos.SessionArtifacts.ListByWorkItemID(ctx, p.WorkItemID)
+	links, err := a.repos.SessionArtifacts.ListByWorkItemID(ctx, workItemID)
 	if err != nil {
-		slog.Warn("glab: list tracked MR artifacts failed", "work_item_id", p.WorkItemID, "error", err)
+		slog.Warn("glab: list tracked MR artifacts failed", "work_item_id", workItemID, "error", err)
 		return glabMRView{}, false
 	}
+	projectPath = strings.TrimSpace(projectPath)
+	requireProjectMatch := strings.Contains(projectPath, "/")
+	branch = strings.TrimSpace(branch)
+	worktreePath = strings.TrimSpace(worktreePath)
 	for _, link := range links {
 		if link.Provider != "gitlab" || strings.TrimSpace(link.ProviderArtifactID) == "" {
 			continue
 		}
 		mr, err := a.repos.GitlabMRs.Get(ctx, link.ProviderArtifactID)
 		if err != nil {
-			slog.Warn("glab: get tracked MR artifact failed", "work_item_id", p.WorkItemID, "artifact_id", link.ProviderArtifactID, "error", err)
+			slog.Warn("glab: get tracked MR artifact failed", "work_item_id", workItemID, "artifact_id", link.ProviderArtifactID, "error", err)
 			continue
 		}
-		if strings.TrimSpace(mr.ProjectPath) != strings.TrimSpace(projectPath) || strings.TrimSpace(mr.SourceBranch) != strings.TrimSpace(p.Branch) || mr.IID <= 0 {
+		if requireProjectMatch && strings.TrimSpace(resolveProjectPath(mr)) != projectPath {
+			continue
+		}
+		if worktreePath != "" && strings.TrimSpace(mr.WorktreePath) != "" && strings.TrimSpace(mr.WorktreePath) != worktreePath {
+			continue
+		}
+		if strings.TrimSpace(mr.SourceBranch) != branch || mr.IID <= 0 {
 			continue
 		}
 		return glabMRView{
@@ -702,9 +720,12 @@ func (a *GlabAdapter) linkExistsForWorkItem(ctx context.Context, workItemID stri
 	return false
 }
 
-// markMRReady runs `glab mr update <iid> --ready --yes` when the MR IID is known.
+// markMRReady runs `glab mr update <iid> --ready --yes` against a resolved MR IID.
 func (a *GlabAdapter) markMRReady(ctx context.Context, dir, branch string, iid int) error {
-	target := a.mrUpdateTarget(ctx, dir, branch, iid)
+	target, ok := a.mrUpdateTarget(ctx, dir, branch, iid)
+	if !ok {
+		return fmt.Errorf("resolve GitLab MR update target for branch %q", branch)
+	}
 	out, err := a.runner(ctx, dir, "glab",
 		"mr", "update", target,
 		"--ready",
@@ -718,8 +739,11 @@ func (a *GlabAdapter) markMRReady(ctx context.Context, dir, branch string, iid i
 }
 
 // updateMRDescription updates the description of an existing MR.
-func (a *GlabAdapter) updateMRDescription(ctx context.Context, dir, branch, description string) error {
-	target := a.mrUpdateTarget(ctx, dir, branch, 0)
+func (a *GlabAdapter) updateMRDescription(ctx context.Context, dir, branch string, iid int, description string) error {
+	target, ok := a.mrUpdateTarget(ctx, dir, branch, iid)
+	if !ok {
+		return fmt.Errorf("resolve GitLab MR update target for branch %q", branch)
+	}
 	out, err := a.runner(ctx, dir, "glab",
 		"mr", "update", target,
 		"--description", description,
@@ -732,14 +756,53 @@ func (a *GlabAdapter) updateMRDescription(ctx context.Context, dir, branch, desc
 	return nil
 }
 
-func (a *GlabAdapter) mrUpdateTarget(ctx context.Context, dir, branch string, iid int) string {
+func (a *GlabAdapter) mrUpdateTarget(ctx context.Context, dir, branch string, iid int) (string, bool) {
 	if iid > 0 {
-		return strconv.Itoa(iid)
+		return strconv.Itoa(iid), true
 	}
 	if mr, ok := a.mrView(ctx, dir, branch); ok {
-		return strconv.Itoa(mr.IID)
+		return strconv.Itoa(mr.IID), true
 	}
-	return branch
+	if mr, ok := a.mrViewBySourceBranchAPI(ctx, dir, branch); ok {
+		return strconv.Itoa(mr.IID), true
+	}
+	return "", false
+}
+
+func (a *GlabAdapter) mrViewBySourceBranchAPI(ctx context.Context, dir, branch string) (glabMRView, bool) {
+	branch = strings.TrimSpace(branch)
+	if branch == "" || strings.TrimSpace(dir) == "" {
+		return glabMRView{}, false
+	}
+	projectPath, err := a.projectPathFromLocalRepo(ctx, dir)
+	if err != nil {
+		slog.Debug("glab: resolve project path for source branch MR lookup failed", "dir", dir, "branch", branch, "error", err)
+		return glabMRView{}, false
+	}
+	endpoint := fmt.Sprintf(
+		"/projects/%s/merge_requests?source_branch=%s&state=opened&order_by=updated_at&sort=desc&per_page=2",
+		url.PathEscape(projectPath),
+		url.QueryEscape(branch),
+	)
+	out, err := a.runGlabApi(ctx, dir, endpoint)
+	if err != nil {
+		slog.Debug("glab: source branch MR lookup failed", "project", projectPath, "branch", branch, "error", err)
+		return glabMRView{}, false
+	}
+	var mrs []glabMRView
+	if err := json.Unmarshal(out, &mrs); err != nil {
+		slog.Warn("glab: unmarshal source branch MR lookup failed", "project", projectPath, "branch", branch, "error", err)
+		return glabMRView{}, false
+	}
+	for _, mr := range mrs {
+		if mr.IID > 0 {
+			if len(mrs) > 1 {
+				slog.Debug("glab: multiple MRs share source branch; using most recently updated", "project", projectPath, "branch", branch, "iid", mr.IID)
+			}
+			return mr, true
+		}
+	}
+	return glabMRView{}, false
 }
 
 // parseMRURL scans command output for the first line containing a GitLab MR URL.

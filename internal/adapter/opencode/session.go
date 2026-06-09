@@ -156,6 +156,7 @@ func (s *session) SendAnswer(ctx context.Context, answer string) error {
 	s.mu.Lock()
 	s.pendingQuestionID = ""
 	s.mu.Unlock()
+	s.writeInputLog("answer", answer)
 
 	return nil
 }

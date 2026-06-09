@@ -34,11 +34,11 @@ func NewQuestionRouter(questionSvc *service.QuestionService, sessionSvc *service
 func (r *QuestionRouter) Route(ctx context.Context, kind domain.AgentSessionKind, evt adapter.AgentEvent, sessionID string) error {
 	switch kind {
 	case domain.AgentSessionKindPlanning:
-		return r.routePlanning(ctx, evt, sessionID)
+		return r.routeHumanSessionQuestion(ctx, kind, evt, sessionID, "planning")
 	case domain.AgentSessionKindImplementation, domain.AgentSessionKindReview:
 		return r.routeImplementation(ctx, kind, evt, sessionID)
 	case domain.AgentSessionKindManual:
-		return r.routeManual(ctx, evt, sessionID)
+		return r.routeHumanSessionQuestion(ctx, kind, evt, sessionID, "manual")
 	case domain.AgentSessionKindForeman:
 		return fmt.Errorf("route question: foreman sessions cannot route questions (session %s)", sessionID)
 	default:
@@ -46,34 +46,34 @@ func (r *QuestionRouter) Route(ctx context.Context, kind domain.AgentSessionKind
 	}
 }
 
-func (r *QuestionRouter) routeManual(ctx context.Context, evt adapter.AgentEvent, sessionID string) error {
-	q := questionFromEvent(evt, sessionID, domain.AgentSessionKindManual)
-	if err := r.persistAndPublish(ctx, q, "manual question raised"); err != nil {
-		return err
-	}
-	if err := r.sessionSvc.WaitForAnswer(ctx, sessionID); err != nil {
-		return fmt.Errorf("mark manual session waiting for answer: %w", err)
-	}
-	return nil
+// routeHumanSessionQuestion persists a normalized question, publishes the
+// raised event, and marks the session as waiting for an operator answer.
+// Shared by manual and planning sessions, which route questions inline to
+// the operator rather than the Foreman. label is used in log/error context
+// (e.g. "manual" or "planning") to disambiguate the call site.
+func (r *QuestionRouter) routeHumanSessionQuestion(ctx context.Context, kind domain.AgentSessionKind, evt adapter.AgentEvent, sessionID, label string) error {
+	q := questionFromEvent(evt, sessionID, kind)
+	return r.persistPublishAndWait(ctx, q, label+" question raised", label)
 }
 
-func (r *QuestionRouter) routePlanning(ctx context.Context, evt adapter.AgentEvent, sessionID string) error {
-	q := questionFromEvent(evt, sessionID, domain.AgentSessionKindPlanning)
-	if err := r.persistAndPublish(ctx, q, "planning question raised"); err != nil {
+func (r *QuestionRouter) persistPublishAndWait(ctx context.Context, q domain.Question, eventLabel, sessionLabel string) error {
+	if err := r.persistAndPublish(ctx, q, eventLabel); err != nil {
 		return err
 	}
-	if err := r.sessionSvc.WaitForAnswer(ctx, sessionID); err != nil {
-		return fmt.Errorf("mark planning session waiting for answer: %w", err)
+	if err := r.sessionSvc.WaitForAnswer(ctx, q.AgentSessionID); err != nil {
+		return fmt.Errorf("mark %s session waiting for answer: %w", sessionLabel, err)
 	}
 	return nil
 }
 
 func (r *QuestionRouter) routeImplementation(ctx context.Context, kind domain.AgentSessionKind, evt adapter.AgentEvent, sessionID string) error {
 	q := questionFromEvent(evt, sessionID, kind)
+	if q.Source.IsHumanDirected() {
+		return r.persistPublishAndWait(ctx, q, "implementation human-directed question raised", "implementation")
+	}
 	if err := r.persistAndPublish(ctx, q, "implementation question raised"); err != nil {
 		return err
 	}
-
 	// Look up the foreman dynamically for this question's work item
 	workItemID, err := r.sessionWorkItemID(ctx, sessionID)
 	if err != nil {

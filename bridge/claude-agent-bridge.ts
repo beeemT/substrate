@@ -8,7 +8,7 @@
  *   - {"type":"prompt","text":"..."}   — initial task
  *   - {"type":"message","text":"..."}  — follow-up message
  *   - {"type":"steer","text":"..."}    — interrupt + new direction
- *   - {"type":"answer","text":"..."}   — resolve pending ask_foreman tool call
+ *   - {"type":"answer","text":"..."}   — resolve pending question tool call
  *   - {"type":"abort"}                 — terminate session
  *   - {"type":"compact"}               — request manual context compaction (/compact slash command)
  *
@@ -48,7 +48,10 @@ function emitLifecycle(
   emit({ type: "lifecycle", stage, ...payload });
 }
 
-function emitInput(inputKind: "session_context" | "prompt" | "message" | "steer" | "answer", text: string): void {
+function emitInput(
+  inputKind: "session_context" | "prompt" | "message" | "steer" | "answer",
+  text: string,
+): void {
   if (text.trim() === "") return;
   emit({ type: "input", input_kind: inputKind, text });
 }
@@ -194,37 +197,88 @@ class TurnQueue {
 }
 
 // ---------------------------------------------------------------------------
-// ask_foreman MCP tool + server (module-level; only wired in agent mode)
+// Question tool routing (module-level; wired per question_tool_policy)
 // ---------------------------------------------------------------------------
 
-const askForemanTool = tool(
-  "ask_foreman",
-  "Ask the foreman a clarifying question you cannot resolve from the plan or codebase.",
-  {
-    question: z.string().describe("The question to ask"),
-    context: z.string().optional().describe("Surrounding context (optional)"),
-  },
-  async ({ question, context }: { question: string; context?: string }) => {
-    emit({ type: "question", question, context: context ?? "" });
-    const answer = await new Promise<string>((resolve) => {
-      pendingAnswerResolve = resolve;
-      if (answerTimeoutMs > 0) {
-        setTimeout(() => {
-          if (pendingAnswerResolve === resolve) {
-            pendingAnswerResolve = null;
-            resolve("[No answer received within timeout. Proceed with your best judgment.]");
-          }
-        }, answerTimeoutMs);
-      }
-    });
-    return { content: [{ type: "text" as const, text: answer }] };
-  },
-);
+// Question tool routing is driven by a policy string from the Go harness
+// ("" = default, "foreman", "human", "none"). The harness default for the
+// Claude bridge is "foreman" — historically the bridge exposed only
+// ask_foreman when no policy was provided.
+type QuestionToolTarget = "none" | "foreman" | "human" | "both";
+const DEFAULT_QUESTION_TOOL_TARGET: QuestionToolTarget = "foreman";
 
-const substrateMcpServer = createSdkMcpServer({
+function questionToolTarget(policy: string): QuestionToolTarget {
+  switch (policy) {
+    case "foreman":
+      return "foreman";
+    case "human":
+      return "human";
+    case "none":
+      return "none";
+    default:
+      return DEFAULT_QUESTION_TOOL_TARGET;
+  }
+}
+
+function exposesForemanQuestions(target: QuestionToolTarget): boolean {
+  return target === "foreman" || target === "both";
+}
+
+function exposesHumanQuestions(target: QuestionToolTarget): boolean {
+  return target === "human" || target === "both";
+}
+
+// ---------------------------------------------------------------------------
+// Question MCP tools + server (module-level; wired per question tool target)
+// ---------------------------------------------------------------------------
+function createQuestionTool(name: "ask_foreman" | "ask_user", description: string, source: string) {
+  return tool(
+    name,
+    description,
+    {
+      question: z.string().describe("The question to ask"),
+      context: z.string().optional().describe("Surrounding context (optional)"),
+    },
+    async ({ question, context }: { question: string; context?: string }) => {
+      emit({ type: "question", question, context: context ?? "", source });
+      const answer = await new Promise<string>((resolve) => {
+        pendingAnswerResolve = resolve;
+        if (answerTimeoutMs > 0) {
+          setTimeout(() => {
+            if (pendingAnswerResolve === resolve) {
+              pendingAnswerResolve = null;
+              resolve("[No answer received within timeout. Proceed with your best judgment.]");
+            }
+          }, answerTimeoutMs);
+        }
+      });
+      return { content: [{ type: "text" as const, text: answer }] };
+    },
+  );
+}
+
+const substrateForemanMcpServer = createSdkMcpServer({
   name: "substrate",
   version: "1.0.0",
-  tools: [askForemanTool],
+  tools: [
+    createQuestionTool(
+      "ask_foreman",
+      "Ask the foreman a clarifying question you cannot resolve from the plan or codebase.",
+      "ask_foreman",
+    ),
+  ],
+});
+
+const substrateHumanMcpServer = createSdkMcpServer({
+  name: "substrate",
+  version: "1.0.0",
+  tools: [
+    createQuestionTool(
+      "ask_user",
+      "Ask the operator a clarifying question and wait for their answer.",
+      "claude_ask",
+    ),
+  ],
 });
 
 // ---------------------------------------------------------------------------
@@ -418,6 +472,8 @@ async function main(): Promise<void> {
   const thinking =
     typeof initMsg.thinking === "string" && initMsg.thinking ? initMsg.thinking : undefined;
   const effort = typeof initMsg.effort === "string" && initMsg.effort ? initMsg.effort : undefined;
+  const questionToolPolicy =
+    typeof initMsg.question_tool_policy === "string" ? initMsg.question_tool_policy : "";
   if (typeof initMsg.answer_timeout_ms === "number" && initMsg.answer_timeout_ms >= 0) {
     answerTimeoutMs = initMsg.answer_timeout_ms;
   }
@@ -439,18 +495,16 @@ async function main(): Promise<void> {
   if (mode === "foreman") {
     options.allowedTools = ["Read", "Grep", "Glob"];
   } else {
-    options.allowedTools = [
-      "Read",
-      "Write",
-      "Edit",
-      "Bash",
-      "Glob",
-      "Grep",
-      "WebSearch",
-      "WebFetch",
-      "mcp__substrate__ask_foreman",
-    ];
-    options.mcpServers = { substrate: substrateMcpServer };
+    const allowedTools = ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch"];
+    const questionTarget = questionToolTarget(questionToolPolicy);
+    if (exposesForemanQuestions(questionTarget)) {
+      allowedTools.push("mcp__substrate__ask_foreman");
+      options.mcpServers = { substrate: substrateForemanMcpServer };
+    } else if (exposesHumanQuestions(questionTarget)) {
+      allowedTools.push("mcp__substrate__ask_user");
+      options.mcpServers = { substrate: substrateHumanMcpServer };
+    }
+    options.allowedTools = allowedTools;
   }
 
   const turnQueue = new TurnQueue();

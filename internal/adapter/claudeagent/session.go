@@ -43,7 +43,7 @@ func (s *claudeAgentSession) Steer(ctx context.Context, msg string) error {
 }
 func (s *claudeAgentSession) Abort(ctx context.Context) error { return s.bs.Abort(ctx) }
 
-// SendAnswer sends an answer to resolve a pending ask_foreman tool call.
+// SendAnswer sends an answer to resolve a pending question tool call.
 func (s *claudeAgentSession) SendAnswer(ctx context.Context, answer string) error {
 	return s.bs.SendAnswer(ctx, answer)
 }

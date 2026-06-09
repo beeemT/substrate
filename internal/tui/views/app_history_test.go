@@ -48,6 +48,28 @@ func (r *manualPromptRegistry) Steer(context.Context, string, string) error {
 	return nil
 }
 
+type recordingAnswerRouter struct {
+	questionID string
+	answer     string
+	answeredBy string
+}
+
+func (r *recordingAnswerRouter) Answer(_ context.Context, questionID, answer, answeredBy string) error {
+	r.questionID = questionID
+	r.answer = answer
+	r.answeredBy = answeredBy
+	return nil
+}
+
+func (r *recordingAnswerRouter) Skip(_ context.Context, questionID string) error {
+	r.questionID = questionID
+	return nil
+}
+
+func (r *recordingAnswerRouter) RefineAnswer(_ context.Context, _ string, _ string) (string, bool, error) {
+	return "", false, nil
+}
+
 type emptyEventRepo struct{}
 
 func (emptyEventRepo) Create(_ context.Context, _ domain.SystemEvent) error { return nil }
@@ -1378,6 +1400,91 @@ func TestSteerSessionMsgSendsManualPromptAsMessage(t *testing.T) {
 	}
 }
 
+func TestSteerSessionMsgAnswersManualPendingQuestion(t *testing.T) {
+	app := newSidebarDrilldownTestApp()
+	router := &recordingAnswerRouter{}
+	registry := &manualPromptRegistry{}
+	app.provider = &testProvider{svcs: Services{
+		AnswerRouter: router,
+		Manual:       orchestrator.NewManualSessionService(nil, nil, nil, nil, nil, nil, registry, nil, nil),
+	}}
+	manual := domain.AgentSession{
+		ID:             "manual-waiting",
+		WorkItemID:     "wi-1",
+		WorkspaceID:    "ws-local",
+		Kind:           domain.AgentSessionKindManual,
+		SubPlanID:      "sp-1",
+		RepositoryName: "repo-a",
+		Status:         domain.AgentSessionWaitingForAnswer,
+		UpdatedAt:      time.Now(),
+	}
+	app.upsertSession(manual)
+	app.upsertQuestion(manual.ID, domain.Question{
+		ID:             "q-manual",
+		AgentSessionID: manual.ID,
+		Stage:          domain.AgentSessionKindManual,
+		Content:        "Which path?",
+		Status:         domain.QuestionPending,
+		CreatedAt:      time.Now(),
+	})
+	app.currentWorkItemID = "wi-1"
+
+	model, cmd := app.Update(SteerSessionMsg{SessionID: manual.ID, Message: "use the safe path"})
+	if cmd == nil {
+		t.Fatal("expected command to answer manual question")
+	}
+	_ = model.(*App)
+	msg := cmd()
+	if done, ok := msg.(ActionDoneMsg); !ok || done.Message != "Answer submitted" {
+		t.Fatalf("command msg = %#v, want answer ActionDoneMsg", msg)
+	}
+	if registry.sentMessage != "" {
+		t.Fatalf("manual waiting question sent prompt %q instead of answer", registry.sentMessage)
+	}
+	if router.questionID != "q-manual" || router.answer != "use the safe path" || router.answeredBy != "human" {
+		t.Fatalf("recorded answer = (%q, %q, %q)", router.questionID, router.answer, router.answeredBy)
+	}
+}
+
+func TestManualWaitingSessionLogShowsAnswerQuestionHint(t *testing.T) {
+	app := newSidebarDrilldownTestApp()
+	manual := domain.AgentSession{
+		ID:             "manual-waiting-log",
+		WorkItemID:     "wi-1",
+		WorkspaceID:    "ws-local",
+		Kind:           domain.AgentSessionKindManual,
+		SubPlanID:      "sp-1",
+		RepositoryName: "repo-a",
+		Status:         domain.AgentSessionWaitingForAnswer,
+		UpdatedAt:      time.Now(),
+	}
+	app.upsertSession(manual)
+	app.upsertQuestion(manual.ID, domain.Question{
+		ID:             "q-manual-log",
+		AgentSessionID: manual.ID,
+		Stage:          domain.AgentSessionKindManual,
+		Content:        "Which path?",
+		Status:         domain.QuestionPending,
+		CreatedAt:      time.Now(),
+	})
+	app.currentWorkItemID = "wi-1"
+	app.setSelectedTaskSessionID(manual.ID)
+	app.sidebarMode = sidebarPaneTasks
+	if cmd := app.updateContentFromState(); cmd != nil {
+		_ = cmd()
+	}
+
+	var found bool
+	for _, hint := range app.content.sessionLog.KeybindHints() {
+		if hint.Key == "p" && hint.Label == "Answer question" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("session log hints = %#v, want answer-question hint", app.content.sessionLog.KeybindHints())
+	}
+}
+
 func TestCompletedManualSessionPromptEmitsManualFollowUp(t *testing.T) {
 	app := newSidebarDrilldownTestApp()
 	completed := domain.AgentSession{
@@ -1424,6 +1531,102 @@ func TestCompletedManualSessionPromptEmitsManualFollowUp(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("submit did not emit FollowUpSessionMsg for completed manual session")
+	}
+}
+
+func TestFailedManualSessionOpenPromptEmitsManualFollowUp(t *testing.T) {
+	app := newSidebarDrilldownTestApp()
+	manual := domain.AgentSession{
+		ID:             "manual-failed",
+		WorkItemID:     "wi-1",
+		WorkspaceID:    "ws-local",
+		Kind:           domain.AgentSessionKindManual,
+		SubPlanID:      "sp-1",
+		RepositoryName: "repo-a",
+		HarnessName:    "omp",
+		Status:         domain.AgentSessionRunning,
+		UpdatedAt:      time.Now(),
+	}
+	app.upsertSession(manual)
+	app.currentWorkItemID = "wi-1"
+	app.setSelectedTaskSessionID(manual.ID)
+	app.sidebarMode = sidebarPaneTasks
+	if cmd := app.updateContentFromState(); cmd != nil {
+		_ = cmd()
+	}
+	app.content.sessionLog.steerActive = true
+	manual.Status = domain.AgentSessionFailed
+	manual.UpdatedAt = time.Now().Add(time.Second)
+	app.upsertSession(manual)
+	if cmd := app.updateContentFromState(); cmd != nil {
+		_ = cmd()
+	}
+
+	model := app.content.sessionLog
+	model.steerInput.SetValue("retry prompt")
+	model, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected submit command")
+	}
+
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("submit command did not return batch")
+	}
+	var found bool
+	for _, batched := range batch {
+		if msg, ok := batched().(FollowUpFailedSessionMsg); ok {
+			found = true
+			if msg.TaskID != manual.ID || msg.Feedback != "retry prompt" {
+				t.Fatalf("failed follow-up msg = %#v, want failed manual session and feedback", msg)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("submit did not emit FollowUpFailedSessionMsg for failed manual session")
+	}
+}
+
+func TestFollowUpFailedSessionMsgDispatchesManualFollowUp(t *testing.T) {
+	app := newSidebarDrilldownTestApp()
+	failed := domain.AgentSession{
+		ID:             "manual-failed",
+		WorkItemID:     "wi-1",
+		WorkspaceID:    "ws-local",
+		Kind:           domain.AgentSessionKindManual,
+		SubPlanID:      "sp-1",
+		RepositoryName: "repo-a",
+		HarnessName:    "omp",
+		Status:         domain.AgentSessionFailed,
+		UpdatedAt:      time.Now(),
+	}
+	app.upsertSession(failed)
+	app.currentWorkItemID = "wi-1"
+
+	_, cmd := app.Update(FollowUpFailedSessionMsg{TaskID: failed.ID, Feedback: "retry prompt"})
+	if cmd == nil {
+		t.Fatal("failed manual follow-up must dispatch a command without requiring graph implementation service")
+	}
+	switch msg := cmd().(type) {
+	case ErrMsg:
+		if !strings.Contains(msg.Err.Error(), "manual follow-up") {
+			t.Fatalf("error = %q, want manual follow-up path", msg.Err.Error())
+		}
+	case tea.BatchMsg:
+		var found bool
+		for _, batched := range msg {
+			if errMsg, ok := batched().(ErrMsg); ok {
+				found = true
+				if !strings.Contains(errMsg.Err.Error(), "manual follow-up") {
+					t.Fatalf("error = %q, want manual follow-up path", errMsg.Err.Error())
+				}
+			}
+		}
+		if !found {
+			t.Fatal("batch did not execute manual follow-up command")
+		}
+	default:
+		t.Fatalf("command msg = %#v, want manual follow-up ErrMsg", msg)
 	}
 }
 

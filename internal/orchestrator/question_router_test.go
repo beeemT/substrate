@@ -174,6 +174,51 @@ func TestRouteManual_WaitForAnswer(t *testing.T) {
 	}
 }
 
+func TestRouteImplementationHumanDirectedQuestionWaitsForHuman(t *testing.T) {
+	t.Parallel()
+
+	sessionSvc, sessionRepo := newMockSessionSvcWrapper()
+	sessionRepo.sessions["impl-session"] = domain.AgentSession{
+		ID:             "impl-session",
+		WorkItemID:     "wi-1",
+		WorkspaceID:    "ws-1",
+		Kind:           domain.AgentSessionKindImplementation,
+		HarnessName:    "mock",
+		Status:         domain.AgentSessionRunning,
+		RepositoryName: "repo1",
+		WorktreePath:   "/tmp/worktree",
+	}
+
+	questionSvc, _ := newServiceAndRepoForQuestions()
+	router := NewQuestionRouter(questionSvc, sessionSvc, NewSessionRegistry(), &mockPublisher{})
+	evt := adapter.AgentEvent{
+		Type:    "question",
+		Payload: "Which branch should I use?",
+		Question: &adapter.AgentQuestion{
+			Source:   adapter.AgentQuestionSourceAskUser,
+			FreeText: "Which branch should I use?",
+		},
+	}
+
+	if err := router.Route(context.Background(), domain.AgentSessionKindImplementation, evt, "impl-session"); err != nil {
+		t.Fatalf("Route: %v", err)
+	}
+	session, err := sessionSvc.Get(context.Background(), "impl-session")
+	if err != nil {
+		t.Fatalf("Get session: %v", err)
+	}
+	if session.Status != domain.AgentSessionWaitingForAnswer {
+		t.Fatalf("session status = %s, want %s", session.Status, domain.AgentSessionWaitingForAnswer)
+	}
+	questions, err := questionSvc.ListBySessionID(context.Background(), "impl-session")
+	if err != nil {
+		t.Fatalf("ListBySessionID: %v", err)
+	}
+	if len(questions) != 1 || questions[0].Source != domain.QuestionSourceAskUser {
+		t.Fatalf("questions = %#v, want one ask_user question", questions)
+	}
+}
+
 // newServiceAndRepoForQuestions creates a QuestionService with in-memory storage.
 func newServiceAndRepoForQuestions() (*service.QuestionService, *inMemQuestionRepo) {
 	repo := &inMemQuestionRepo{questions: make(map[string]domain.Question)}

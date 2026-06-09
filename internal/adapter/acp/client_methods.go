@@ -17,7 +17,10 @@ import (
 	"github.com/beeemT/substrate/internal/adapter"
 )
 
-const foremanSocketEnv = "SUBSTRATE_FOREMAN_SOCKET"
+const (
+	questionSocketEnv   = "SUBSTRATE_QUESTION_SOCKET"
+	questionToolModeEnv = "SUBSTRATE_QUESTION_TOOL_MODE"
+)
 
 type pendingQuestion struct {
 	id     string
@@ -310,47 +313,48 @@ func sliceLines(content string, line, limit int) string {
 	return strings.Join(parts[start:end], "")
 }
 
-type foremanSocket struct {
+type questionSocket struct {
 	path     string
 	listener net.Listener
 	broker   *questionBroker
+	source   adapter.AgentQuestionSource
 	done     chan struct{}
 	once     sync.Once
 }
 
-func startForemanSocket(broker *questionBroker) (*foremanSocket, error) {
-	dir, err := os.MkdirTemp("", "substrate-acp-foreman-*")
+func startQuestionSocket(broker *questionBroker, source adapter.AgentQuestionSource) (*questionSocket, error) {
+	dir, err := os.MkdirTemp("", "substrate-acp-question-*")
 	if err != nil {
-		return nil, fmt.Errorf("create foreman socket temp dir: %w", err)
+		return nil, fmt.Errorf("create question socket temp dir: %w", err)
 	}
-	path := filepath.Join(dir, "foreman.sock")
+	path := filepath.Join(dir, "question.sock")
 	ln, err := net.Listen("unix", path)
 	if err != nil {
 		if rmErr := os.RemoveAll(dir); rmErr != nil {
-			slog.Warn("acp: failed to remove foreman socket temp dir", "error", rmErr)
+			slog.Warn("acp: failed to remove question socket temp dir", "error", rmErr)
 		}
-		return nil, fmt.Errorf("listen foreman socket: %w", err)
+		return nil, fmt.Errorf("listen question socket: %w", err)
 	}
-	fs := &foremanSocket{path: path, listener: ln, broker: broker, done: make(chan struct{})}
-	go fs.serve()
-	return fs, nil
+	qs := &questionSocket{path: path, listener: ln, broker: broker, source: source, done: make(chan struct{})}
+	go qs.serve()
+	return qs, nil
 }
 
-func (s *foremanSocket) env() envVar { return envVar{Name: foremanSocketEnv, Value: s.path} }
+func (s *questionSocket) env() envVar { return envVar{Name: questionSocketEnv, Value: s.path} }
 
-func (s *foremanSocket) close() {
+func (s *questionSocket) close() {
 	s.once.Do(func() {
 		if err := s.listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-			slog.Warn("acp: failed to close foreman socket", "error", err)
+			slog.Warn("acp: failed to close question socket", "error", err)
 		}
 		<-s.done
 		if err := os.RemoveAll(filepath.Dir(s.path)); err != nil {
-			slog.Warn("acp: failed to remove foreman socket", "error", err)
+			slog.Warn("acp: failed to remove question socket", "error", err)
 		}
 	})
 }
 
-func (s *foremanSocket) serve() {
+func (s *questionSocket) serve() {
 	defer close(s.done)
 	for {
 		conn, err := s.listener.Accept()
@@ -358,18 +362,18 @@ func (s *foremanSocket) serve() {
 			if errors.Is(err, net.ErrClosed) {
 				return
 			}
-			slog.Warn("acp: foreman socket accept failed", "error", err)
+			slog.Warn("acp: question socket accept failed", "error", err)
 			continue
 		}
 		go s.handleConn(conn)
 	}
 }
 
-func (s *foremanSocket) handleConn(conn net.Conn) {
+func (s *questionSocket) handleConn(conn net.Conn) {
 	defer conn.Close()
 	line, err := bufio.NewReader(conn).ReadString('\n')
 	if err != nil {
-		slog.Warn("acp: read foreman question failed", "error", err)
+		slog.Warn("acp: read question request failed", "error", err)
 		return
 	}
 	var req struct {
@@ -378,7 +382,7 @@ func (s *foremanSocket) handleConn(conn net.Conn) {
 		Context  string `json:"context"`
 	}
 	if err := json.Unmarshal([]byte(line), &req); err != nil {
-		slog.Warn("acp: malformed foreman question", "error", err)
+		slog.Warn("acp: malformed question request", "error", err)
 		return
 	}
 	if req.Question == "" {
@@ -387,16 +391,18 @@ func (s *foremanSocket) handleConn(conn net.Conn) {
 	// Use a timeout to prevent indefinite blocking if the question is never answered.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	answer, err := s.broker.ask(ctx, adapter.AgentQuestionSourceAskForeman, req.Question, nil, map[string]any{"context": req.Context})
+	answer, err := s.broker.ask(ctx, s.source, req.Question, nil, map[string]any{"context": req.Context})
 	if err != nil {
-		slog.Warn("acp: foreman question failed", "error", err)
+		slog.Warn("acp: question request failed", "error", err)
 		return
 	}
 	resp := map[string]string{"type": "answer", "answer": answer, "confidence": "high"}
 	data, err := json.Marshal(resp)
 	if err != nil {
-		slog.Warn("acp: marshal foreman answer failed", "error", err)
+		slog.Warn("acp: marshal question answer failed", "error", err)
 		return
 	}
-	_, _ = conn.Write(append(data, '\n'))
+	if _, err := conn.Write(append(data, '\n')); err != nil {
+		slog.Warn("acp: write question answer failed", "error", err)
+	}
 }

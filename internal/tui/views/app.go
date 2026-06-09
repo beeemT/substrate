@@ -1149,9 +1149,12 @@ func (a App) manualAgentSessionTarget() (manualAgentSessionTarget, bool) {
 }
 
 func (a App) focusedWorkItemRepoSession() *domain.AgentSession {
-	if a.mainFocus == mainFocusContent && a.content.Mode() == ContentModeAgentSession {
-		if sessionID := a.content.sessionLog.SessionID(); sessionID != "" {
-			return a.workItemTaskSession(a.currentWorkItemID, sessionID)
+	if a.mainFocus == mainFocusContent {
+		switch a.content.Mode() {
+		case ContentModeAgentSession, ContentModeSessionInteraction:
+			if sessionID := a.content.sessionLog.SessionID(); sessionID != "" {
+				return a.workItemTaskSession(a.currentWorkItemID, sessionID)
+			}
 		}
 		return nil
 	}
@@ -2163,7 +2166,18 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case SteerSessionMsg:
 		if msg.SessionID != "" && msg.Message != "" {
 			if session := a.workItemTaskSession(a.currentWorkItemID, msg.SessionID); session != nil && session.Kind == domain.AgentSessionKindManual {
-				cmds = append(cmds, SendManualSessionMessageCmd(a.provider.Manual(), msg.SessionID, msg.Message))
+				switch session.Status {
+				case domain.AgentSessionCompleted, domain.AgentSessionFailed:
+					cmds = append(cmds, FollowUpManualSessionCmd(context.Background(), a.provider.Task(), a.provider.Manual(), msg.SessionID, msg.Message))
+				case domain.AgentSessionWaitingForAnswer:
+					if questionID := a.pendingQuestionIDForSession(msg.SessionID); questionID != "" {
+						cmds = append(cmds, AnswerQuestionCmd(a.provider.AnswerRouter(), questionID, msg.Message, "human"))
+					} else {
+						cmds = append(cmds, SendManualSessionMessageCmd(a.provider.Manual(), msg.SessionID, msg.Message))
+					}
+				case domain.AgentSessionPending, domain.AgentSessionRunning:
+					cmds = append(cmds, SendManualSessionMessageCmd(a.provider.Manual(), msg.SessionID, msg.Message))
+				}
 			} else if a.provider.SessionRegistry() != nil {
 				cmds = append(cmds, SteerSessionCmd(a.provider.SessionRegistry(), msg.SessionID, msg.Message))
 			}
@@ -2203,15 +2217,25 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case FollowUpFailedSessionMsg:
-		if a.provider.Task() != nil && a.provider.Implementation() != nil && msg.TaskID != "" && msg.Feedback != "" {
-			// Find workItemID for this task
-			workItemID := ""
-			for _, s := range a.sessions {
-				if s.ID == msg.TaskID {
-					workItemID = s.WorkItemID
-					break
-				}
+		if msg.TaskID == "" || msg.Feedback == "" {
+			return a, nil
+		}
+		var task *domain.AgentSession
+		for i := range a.sessions {
+			if a.sessions[i].ID == msg.TaskID {
+				task = &a.sessions[i]
+				break
 			}
+		}
+		if task == nil {
+			return a, nil
+		}
+		if task.Kind == domain.AgentSessionKindManual {
+			cmds = append(cmds, FollowUpManualSessionCmd(context.Background(), a.provider.Task(), a.provider.Manual(), msg.TaskID, msg.Feedback))
+			return a, tea.Batch(cmds...)
+		}
+		if a.provider.Task() != nil && a.provider.Implementation() != nil {
+			workItemID := task.WorkItemID
 			if workItemID != "" {
 				ctx := a.pipelineCtxForTask(msg.TaskID)
 				cmds = append(cmds, FollowUpFailedSessionCmd(ctx, a.provider.Task(), a.provider.Implementation(), a.sendAsyncMsg, msg.TaskID, msg.Feedback, a.runtimeCtx.InstanceID))
@@ -3470,12 +3494,18 @@ func (a *App) showTaskContent(wi *domain.Session, agentSession *domain.AgentSess
 	} else {
 		a.content.sessionLog.SetMessageInputLabel("")
 	}
+	answerQuestionID := ""
+	if agentSession.Kind == domain.AgentSessionKindManual &&
+		agentSession.Status == domain.AgentSessionWaitingForAnswer {
+		answerQuestionID = a.pendingQuestionIDForSession(agentSession.ID)
+	}
+	a.content.sessionLog.SetAnswerQuestion(answerQuestionID)
 	a.content.sessionLog.SetPlanID(agentSession.PlanID)
 	workItemSessions := a.sessionsForWorkItem(wi.ID)
 	switch agentSession.Status {
 	case domain.AgentSessionFailed:
 		a.content.sessionLog.ClearCompletedSession()
-		if graphManagedFailedFollowUpCandidate(*agentSession, workItemSessions) {
+		if agentSession.Kind == domain.AgentSessionKindManual || graphManagedFailedFollowUpCandidate(*agentSession, workItemSessions) {
 			a.content.sessionLog.SetFailedSession(agentSession.ID)
 		} else {
 			a.content.sessionLog.ClearFailedSession()
@@ -4946,6 +4976,29 @@ func formatOperationErrorToast(err error) string {
 
 	// Fallback: show the raw error.
 	return "Error: " + err.Error()
+}
+
+func (a App) pendingQuestionIDForSession(sessionID string) string {
+	sessionQuestions := a.questions[sessionID]
+	if len(sessionQuestions) == 0 {
+		return ""
+	}
+	pending := make([]domain.Question, 0, len(sessionQuestions))
+	for _, question := range sessionQuestions {
+		if question.Status == domain.QuestionPending || question.Status == domain.QuestionEscalated {
+			pending = append(pending, question)
+		}
+	}
+	if len(pending) == 0 {
+		return ""
+	}
+	sort.Slice(pending, func(i, j int) bool {
+		if pending[i].CreatedAt.Equal(pending[j].CreatedAt) {
+			return pending[i].ID < pending[j].ID
+		}
+		return pending[i].CreatedAt.Before(pending[j].CreatedAt)
+	})
+	return pending[0].ID
 }
 
 // upsertQuestion adds or updates a question in the nested map.

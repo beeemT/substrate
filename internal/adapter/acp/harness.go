@@ -51,7 +51,7 @@ func (h *Harness) Capabilities() adapter.HarnessCapabilities {
 }
 
 func acpSupportedTools(cfg config.ACPConfig) []string {
-	tools := []string{"mcp__substrate-foreman__ask_foreman"}
+	tools := []string{"mcp__substrate-foreman__ask_foreman", "mcp__substrate-user__ask_user"}
 	if boolPtrValue(cfg.ClientFS, true) {
 		tools = append(tools, "acp/fs.read_text_file", "acp/fs.write_text_file")
 	}
@@ -185,7 +185,7 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (a
 	h.lastInit = &initResp
 	h.compact = detectCompactStrategy(initResp, h.cfg, nil)
 	h.mu.Unlock()
-	mcpServers := s.buildMCPServers()
+	mcpServers := s.buildQuestionMCPServers(opts.QuestionToolPolicy)
 	setupResp, resumeMethod, err := s.setupACPSession(ctx, opts, mcpServers)
 	if err != nil {
 		s.Abort(ctx)
@@ -316,7 +316,7 @@ func authMethodIDs(methods []authMethod) string {
 	return strings.Join(ids, ", ")
 }
 
-func resolveForemanMCPBridge(configured string) (string, []string, error) {
+func resolveQuestionMCPBridge(configured string) (string, []string, error) {
 	execPath, err := os.Executable()
 	if err != nil {
 		return "", nil, fmt.Errorf("locate substrate executable: %w", err)
@@ -324,15 +324,15 @@ func resolveForemanMCPBridge(configured string) (string, []string, error) {
 	if resolved, err := filepath.EvalSymlinks(execPath); err == nil {
 		execPath = resolved
 	}
-	return resolveForemanMCPBridgeFrom(configured, execPath)
+	return resolveQuestionMCPBridgeFrom(configured, execPath)
 }
 
-func resolveForemanMCPBridgeFrom(configured, execPath string) (string, []string, error) {
-	candidates := bridge.BridgeCandidates(configured, execPath, "foreman-mcp")
+func resolveQuestionMCPBridgeFrom(configured, execPath string) (string, []string, error) {
+	candidates := bridge.BridgeCandidates(configured, execPath, "question-mcp")
 	if strings.TrimSpace(configured) == "" {
 		candidates = append(candidates,
-			filepath.Join(filepath.Dir(execPath), "bridge", "foreman-mcp", "index.ts"),
-			filepath.Join("bridge", "foreman-mcp", "index.ts"),
+			filepath.Join(filepath.Dir(execPath), "bridge", "question-mcp", "index.ts"),
+			filepath.Join("bridge", "question-mcp", "index.ts"),
 		)
 	}
 	checked := make([]string, 0, len(candidates))
@@ -344,7 +344,7 @@ func resolveForemanMCPBridgeFrom(configured, execPath string) (string, []string,
 		}
 		abs, err := filepath.Abs(c)
 		if err != nil {
-			return "", nil, fmt.Errorf("resolve foreman MCP bridge path %q: %w", c, err)
+			return "", nil, fmt.Errorf("resolve question MCP bridge path %q: %w", c, err)
 		}
 		if bridge.IsBridgeScript(abs) {
 			bun, err := bridge.ResolveBunExecutable("")
@@ -358,23 +358,37 @@ func resolveForemanMCPBridgeFrom(configured, execPath string) (string, []string,
 		}
 		return abs, nil, nil
 	}
-	return "", nil, fmt.Errorf("resolve foreman MCP bridge: no bridge binary or script found; checked %s", strings.Join(bridge.DedupePaths(checked), ", "))
+	return "", nil, fmt.Errorf("resolve question MCP bridge: no bridge binary or script found; checked %s", strings.Join(bridge.DedupePaths(checked), ", "))
 }
 
-func (s *Session) buildMCPServers() []mcpServer {
-	if s.mode == adapter.SessionModeForeman {
+func (s *Session) buildQuestionMCPServers(policy adapter.QuestionToolPolicy) []mcpServer {
+	target := policy.Target(adapter.QuestionToolTargetForeman)
+	if s.mode == adapter.SessionModeForeman || target == adapter.QuestionToolTargetNone {
 		return nil
 	}
-	cmd, args, err := resolveForemanMCPBridge(s.acpCfg.ForemanBridgePath)
+	toolMode := "foreman"
+	serverName := "substrate-foreman"
+	source := adapter.AgentQuestionSourceAskForeman
+	if !target.AllowsForemanQuestions() {
+		toolMode = "human"
+		serverName = "substrate-user"
+		source = adapter.AgentQuestionSourceAskUser
+	}
+	cmd, args, err := resolveQuestionMCPBridge(s.acpCfg.QuestionBridgePath)
 	if err != nil || cmd == "" {
-		slog.Warn("acp: foreman MCP bridge not found; ask_foreman unavailable", "error", err)
+		slog.Warn("acp: question MCP bridge not found; question tool unavailable", "error", err)
 		return nil
 	}
-	fs, err := startForemanSocket(s.questions)
+	qs, err := startQuestionSocket(s.questions, source)
 	if err != nil {
-		slog.Warn("acp: failed to start foreman MCP socket", "error", err)
+		slog.Warn("acp: failed to start question MCP socket", "error", err)
 		return nil
 	}
-	s.foremanSocket = fs
-	return []mcpServer{{Name: "substrate-foreman", Command: cmd, Args: args, Env: []envVar{fs.env()}}}
+	s.questionSocket = qs
+	return []mcpServer{{
+		Name:    serverName,
+		Command: cmd,
+		Args:    args,
+		Env:     []envVar{qs.env(), {Name: questionToolModeEnv, Value: toolMode}},
+	}}
 }

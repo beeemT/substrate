@@ -61,6 +61,31 @@ func TestBuildInitialPromptFoldsSystemAndUser(t *testing.T) {
 	}
 }
 
+func TestShouldRegisterQuestionMCPRespectsQuestionPolicy(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		mode   adapter.SessionMode
+		policy adapter.QuestionToolPolicy
+		want   bool
+	}{
+		{name: "default agent", mode: adapter.SessionModeAgent, policy: adapter.QuestionToolPolicyDefault, want: true},
+		{name: "foreman policy", mode: adapter.SessionModeAgent, policy: adapter.QuestionToolPolicyForeman, want: true},
+		{name: "human policy", mode: adapter.SessionModeAgent, policy: adapter.QuestionToolPolicyHuman, want: false},
+		{name: "none policy", mode: adapter.SessionModeAgent, policy: adapter.QuestionToolPolicyNone, want: false},
+		{name: "foreman session", mode: adapter.SessionModeForeman, policy: adapter.QuestionToolPolicyDefault, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := shouldRegisterQuestionMCP(tc.mode, tc.policy); got != tc.want {
+				t.Fatalf("shouldRegisterQuestionMCP = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestValidateReadiness_BinaryNotFound(t *testing.T) {
 	// Use a BinaryPath pointing to a binary that definitely doesn't exist.
 	err := ValidateReadiness(config.OpenCodeConfig{

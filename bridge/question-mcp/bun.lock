@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "foreman-mcp",
+      "name": "question-mcp",
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.12.0",
         "zod": "^3.25 || ^4.0",

@@ -454,21 +454,6 @@ func AnswerQuestionCmd(router orchestrator.AnswerRouter, questionID, answer, ans
 	}
 }
 
-func answerPlanningQuestion(ctx context.Context, svc *service.QuestionService, sessionSvc *service.AgentSessionService, bus *event.Bus, q domain.Question, answer, answeredBy string) error {
-	if err := svc.Answer(ctx, q.ID, answer, answeredBy); err != nil {
-		return err
-	}
-	if sessionSvc != nil && q.AgentSessionID != "" {
-		if err := sessionSvc.ResumeFromAnswer(ctx, q.AgentSessionID); err != nil {
-			return fmt.Errorf("resume planning session after answer: %w", err)
-		}
-	}
-	if err := orchestrator.PublishQuestionAnswered(ctx, bus, q.ID, q.AgentSessionID); err != nil {
-		return fmt.Errorf("publish planning question answered event: %w", err)
-	}
-	return nil
-}
-
 // HeartbeatCmd sends a heartbeat for the current instance.
 func HeartbeatCmd(svc *service.InstanceService, instanceID string) tea.Cmd {
 	return func() tea.Msg {
@@ -1402,7 +1387,7 @@ func SteerSessionCmd(registry orchestrator.SessionRegistry, sessionID, message s
 	}
 }
 
-// FollowUpManualSessionCmd dispatches a user follow-up for a completed manual session.
+// FollowUpManualSessionCmd dispatches a user follow-up for a terminal manual session.
 func FollowUpManualSessionCmd(ctx context.Context, svc *service.AgentSessionService, manualSvc *orchestrator.ManualSessionService, taskID, feedback string) tea.Cmd {
 	return func() tea.Msg {
 		if svc == nil {

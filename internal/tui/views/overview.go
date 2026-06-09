@@ -1696,6 +1696,15 @@ func (a *App) buildOverviewActions(wi *domain.Session, plan *domain.Plan, subPla
 }
 
 func buildInterruptedTasksActionCard(sessions []domain.AgentSession, canAct func(domain.AgentSession) bool, activeWorkItemIDs map[string]bool) OverviewActionCard {
+	sessions = append([]domain.AgentSession(nil), sessions...)
+	sort.SliceStable(sessions, func(i, j int) bool {
+		left := firstNonEmptyString(sessions[i].RepositoryName, taskSessionDisplayName(&sessions[i]))
+		right := firstNonEmptyString(sessions[j].RepositoryName, taskSessionDisplayName(&sessions[j]))
+		if left == right {
+			return sessions[i].ID < sessions[j].ID
+		}
+		return left < right
+	})
 	affected := make([]string, 0, len(sessions))
 	context := []string{
 		fmt.Sprintf("Interrupted tasks: %d", len(sessions)),

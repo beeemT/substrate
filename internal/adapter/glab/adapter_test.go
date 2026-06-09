@@ -482,6 +482,60 @@ func TestOnEvent_WorkItemCompleted_GlabFailure_ReturnsNil(t *testing.T) {
 	}
 }
 
+func TestOnWorkItemCompleted_ResolvesAmbiguousBranchWithAPI(t *testing.T) {
+	branch := "sub-SEN-110817448-fix-bug"
+	var calls []stubCall
+	glabViewCalls := 0
+	runner := func(_ context.Context, dir, name string, args ...string) ([]byte, error) {
+		calls = append(calls, stubCall{dir: dir, name: name, args: args})
+		joined := strings.Join(args, " ")
+		switch {
+		case name == "glab" && strings.Contains(joined, "mr view"):
+			glabViewCalls++
+			if glabViewCalls == 1 {
+				return []byte("ERROR\n\nYou must select a merge request: merge request ID number required."), errors.New("exit status 1")
+			}
+			return []byte(`{"iid":30,"state":"opened","web_url":"https://gitlab.com/group/project/-/merge_requests/30"}`), nil
+		case name == "git" && strings.Contains(joined, "remote get-url origin"):
+			return []byte("git@gitlab.com:group/project.git\n"), nil
+		case name == "glab" && strings.Contains(joined, "api /projects/group%2Fproject/merge_requests"):
+			return []byte(`[
+				{"iid":30,"state":"opened","web_url":"https://gitlab.com/group/project/-/merge_requests/30"},
+				{"iid":28,"state":"opened","web_url":"https://gitlab.com/group/project/-/merge_requests/28"}
+			]`), nil
+		case name == "glab" && strings.Contains(joined, "mr update"):
+			return []byte("updated"), nil
+		default:
+			t.Fatalf("unexpected command: %s %q", name, joined)
+			return nil, errors.New("unexpected command")
+		}
+	}
+	a := newWithRunner(config.GlabConfig{}, coreadapter.ReviewArtifactRepos{}, "", runner)
+	a.mu.Lock()
+	a.tracked[branch] = []branchEntry{{
+		repo:         "group/project",
+		worktreePath: "/tmp/wt",
+		ref:          "!28",
+		url:          "https://gitlab.com/group/project/-/merge_requests/28",
+	}}
+	a.mu.Unlock()
+
+	payload := mustJSON(completedPayload{Branch: branch})
+	if err := a.onWorkItemCompleted(context.Background(), payload); err != nil {
+		t.Fatalf("onWorkItemCompleted returned error: %v", err)
+	}
+	if len(calls) != 5 {
+		t.Fatalf("got %d glab/git calls, want 5", len(calls))
+	}
+	updateArgs := strings.Join(calls[3].args, " ")
+	if !strings.Contains(updateArgs, "mr update 30") {
+		t.Fatalf("update args %q must target newest MR IID from API", updateArgs)
+	}
+	if strings.Contains(updateArgs, branch) {
+		t.Fatalf("update args %q must not target the ambiguous branch name", updateArgs)
+	}
+}
+
 func TestOnEvent_SubPlanPRReady_GitHubProvider_IsIgnored(t *testing.T) {
 	// The glab adapter must not invoke the glab CLI when the
 	// EventSubPlanPRReady payload names a GitHub-hosted repo.
@@ -778,6 +832,123 @@ func TestOnEvent_WorktreeReused_UpdatesDescriptionByIID(t *testing.T) {
 	}
 	if !strings.Contains(updateArgs, "--description Updated implementation plan") {
 		t.Fatalf("update args %q missing description", updateArgs)
+	}
+}
+
+func TestOnEvent_WorktreeReused_UsesTrackedArtifactWhenBranchAmbiguous(t *testing.T) {
+	branch := "sub-SEN-110817448-fix-bug"
+	var calls []stubCall
+	runner := func(_ context.Context, dir, name string, args ...string) ([]byte, error) {
+		calls = append(calls, stubCall{dir: dir, name: name, args: args})
+		joined := strings.Join(args, " ")
+		switch {
+		case strings.Contains(joined, "mr view"):
+			t.Fatalf("must not inspect ambiguous source branch when tracked MR IID exists: %q", joined)
+			return nil, errors.New("unexpected mr view")
+		case strings.Contains(joined, "mr update"):
+			return []byte("updated"), nil
+		default:
+			t.Fatalf("unexpected glab call: %q %v", name, args)
+			return nil, errors.New("unexpected glab call")
+		}
+	}
+	mrRepo := &inMemGitlabMRRepo{data: map[string]domain.GitlabMergeRequest{
+		"mr-30": {
+			ID:           "mr-30",
+			ProjectPath:  "group/project",
+			IID:          30,
+			State:        "opened",
+			SourceBranch: branch,
+			WebURL:       "https://gitlab.com/group/project/-/merge_requests/30",
+			WorktreePath: "/tmp/wt",
+		},
+	}}
+	artifactRepo := &inMemArtifactLinkRepo{links: []domain.SessionReviewArtifact{{
+		ID:                 "link-30",
+		WorkspaceID:        "ws-1",
+		WorkItemID:         "wi-30",
+		Provider:           "gitlab",
+		ProviderArtifactID: "mr-30",
+	}}}
+	a := newWithRunner(config.GlabConfig{}, coreadapter.ReviewArtifactRepos{
+		GitlabMRs:        service.NewGitlabMRService(repository.NoopTransacter{Res: repository.Resources{GitlabMRs: mrRepo}}),
+		SessionArtifacts: service.NewSessionReviewArtifactService(repository.NoopTransacter{Res: repository.Resources{SessionReviewArtifacts: artifactRepo}}),
+	}, "", runner)
+	payload := mustJSON(worktreePayload{
+		WorkspaceID:   "ws-1",
+		WorkItemID:    "wi-30",
+		Repository:    "group/project",
+		Branch:        branch,
+		WorktreePath:  "/tmp/wt",
+		SubPlan:       "Updated implementation plan",
+		WorkItemTitle: "Fix bug",
+		Review: domain.ReviewRef{
+			BaseRepo: domain.RepoRef{Provider: "gitlab", Owner: "group", Repo: "project"},
+		},
+	})
+	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorktreeReused), Payload: payload}); err != nil {
+		t.Fatalf("OnEvent returned error: %v", err)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("got %d glab calls, want 1", len(calls))
+	}
+	updateArgs := strings.Join(calls[0].args, " ")
+	if !strings.Contains(updateArgs, "mr update 30") {
+		t.Fatalf("update args %q must target the tracked MR IID", updateArgs)
+	}
+	if strings.Contains(updateArgs, branch) {
+		t.Fatalf("update args %q must not target the ambiguous branch name", updateArgs)
+	}
+	if !strings.Contains(updateArgs, "--description Updated implementation plan") {
+		t.Fatalf("update args %q missing description", updateArgs)
+	}
+}
+
+func TestOnEvent_WorktreeReused_ResolvesAmbiguousBranchWithAPI(t *testing.T) {
+	branch := "sub-SEN-110817448-fix-bug"
+	var calls []stubCall
+	runner := func(_ context.Context, dir, name string, args ...string) ([]byte, error) {
+		calls = append(calls, stubCall{dir: dir, name: name, args: args})
+		joined := strings.Join(args, " ")
+		switch {
+		case name == "glab" && strings.Contains(joined, "mr view"):
+			return []byte("ERROR\n\nYou must select a merge request: merge request ID number required."), errors.New("exit status 1")
+		case name == "git" && strings.Contains(joined, "remote get-url origin"):
+			return []byte("git@gitlab.com:group/project.git\n"), nil
+		case name == "glab" && strings.Contains(joined, "api /projects/group%2Fproject/merge_requests"):
+			return []byte(`[
+				{"iid":30,"state":"opened","web_url":"https://gitlab.com/group/project/-/merge_requests/30"},
+				{"iid":28,"state":"opened","web_url":"https://gitlab.com/group/project/-/merge_requests/28"}
+			]`), nil
+		case name == "glab" && strings.Contains(joined, "mr update"):
+			return []byte("updated"), nil
+		default:
+			t.Fatalf("unexpected command: %s %q", name, joined)
+			return nil, errors.New("unexpected command")
+		}
+	}
+	a := newWithRunner(config.GlabConfig{}, emptyReviewArtifactRepos, "", runner)
+	payload := mustJSON(worktreePayload{
+		Branch:       branch,
+		WorktreePath: "/tmp/wt",
+		SubPlan:      "Updated implementation plan",
+	})
+	if err := a.OnEvent(context.Background(), domain.SystemEvent{EventType: string(domain.EventWorktreeReused), Payload: payload}); err != nil {
+		t.Fatalf("OnEvent returned error: %v", err)
+	}
+	if len(calls) != 4 {
+		t.Fatalf("got %d glab/git calls, want 4", len(calls))
+	}
+	apiArgs := strings.Join(calls[2].args, " ")
+	if !strings.Contains(apiArgs, "source_branch="+branch) || !strings.Contains(apiArgs, "state=opened") {
+		t.Fatalf("api args %q missing source branch lookup", apiArgs)
+	}
+	updateArgs := strings.Join(calls[3].args, " ")
+	if !strings.Contains(updateArgs, "mr update 30") {
+		t.Fatalf("update args %q must target newest MR IID from API", updateArgs)
+	}
+	if strings.Contains(updateArgs, branch) {
+		t.Fatalf("update args %q must not target the ambiguous branch name", updateArgs)
 	}
 }
 

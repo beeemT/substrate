@@ -349,6 +349,35 @@ func TestSessionService_RestartCompletedManualSessionClearsCompletedAtAndSetsOwn
 	}
 }
 
+func TestSessionService_RestartCompletedManualSessionClearsFailedExitState(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMockSessionRepository()
+	svc := NewAgentSessionService(repository.NoopTransacter{Res: repository.Resources{AgentSessions: repo}}, newTestBus())
+
+	now := time.Now()
+	exitCode := 1
+	session := implSession("session-1", "wi-1", "ws-1", "sp-1", domain.AgentSessionFailed)
+	session.Kind = domain.AgentSessionKindManual
+	session.CompletedAt = &now
+	session.ExitCode = &exitCode
+	repo.sessions["session-1"] = session
+
+	if err := svc.RestartCompletedManualSession(ctx, "session-1", nil); err != nil {
+		t.Fatalf("RestartCompletedManualSession failed: %v", err)
+	}
+
+	got, _ := svc.Get(ctx, "session-1")
+	if got.Status != domain.AgentSessionRunning {
+		t.Errorf("Status = %s, want running", got.Status)
+	}
+	if got.CompletedAt != nil {
+		t.Error("CompletedAt should be nil after RestartCompletedManualSession")
+	}
+	if got.ExitCode != nil {
+		t.Fatalf("ExitCode = %v, want nil", *got.ExitCode)
+	}
+}
+
 func TestSessionService_RestartCompletedManualSessionRejectsGraphManagedSession(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockSessionRepository()

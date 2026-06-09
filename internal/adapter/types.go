@@ -147,7 +147,7 @@ type SessionOpts struct {
 	AllowPush            bool              // Whether agent is allowed to push to remote
 	ResumeFromSessionID  string            // Substrate session ID; harness resumes if it can
 	ResumeInfo           map[string]string // Resolved resume data; harness reads its own keys
-	// AnswerTimeoutMs controls how long the bridge waits for a foreman answer before
+	// AnswerTimeoutMs controls how long a question tool waits for an answer before
 	// falling back to a placeholder. 0 means no timeout (wait indefinitely).
 	AnswerTimeoutMs int64
 	// Model is the model override for this session. When nil, the harness uses its
@@ -170,7 +170,7 @@ type CommitConfig struct {
 type QuestionToolPolicy string
 
 const (
-	// QuestionToolPolicyDefault routes questions per harness default (foreman in impl/review).
+	// QuestionToolPolicyDefault routes questions per each harness's configured default.
 	QuestionToolPolicyDefault QuestionToolPolicy = ""
 	// QuestionToolPolicyForeman routes questions to Foreman for answers.
 	QuestionToolPolicyForeman QuestionToolPolicy = "foreman"
@@ -179,6 +179,42 @@ const (
 	// QuestionToolPolicyNone disables question tools in the agent session.
 	QuestionToolPolicyNone QuestionToolPolicy = "none"
 )
+
+// QuestionToolTarget is the concrete question tool set a harness exposes after
+// applying its default behavior to QuestionToolPolicyDefault.
+type QuestionToolTarget string
+
+const (
+	QuestionToolTargetNone    QuestionToolTarget = "none"
+	QuestionToolTargetForeman QuestionToolTarget = "foreman"
+	QuestionToolTargetHuman   QuestionToolTarget = "human"
+	QuestionToolTargetBoth    QuestionToolTarget = "both"
+)
+
+// Target resolves policy into a concrete tool target using defaultTarget when
+// the policy is QuestionToolPolicyDefault.
+func (p QuestionToolPolicy) Target(defaultTarget QuestionToolTarget) QuestionToolTarget {
+	switch p {
+	case QuestionToolPolicyForeman:
+		return QuestionToolTargetForeman
+	case QuestionToolPolicyHuman:
+		return QuestionToolTargetHuman
+	case QuestionToolPolicyNone:
+		return QuestionToolTargetNone
+	default:
+		return defaultTarget
+	}
+}
+
+// AllowsForemanQuestions reports whether this concrete target exposes tools that ask the Foreman.
+func (t QuestionToolTarget) AllowsForemanQuestions() bool {
+	return t == QuestionToolTargetForeman || t == QuestionToolTargetBoth
+}
+
+// AllowsHumanQuestions reports whether this concrete target exposes tools that ask the operator.
+func (t QuestionToolTarget) AllowsHumanQuestions() bool {
+	return t == QuestionToolTargetHuman || t == QuestionToolTargetBoth
+}
 
 // AgentEvent represents an event from a running agent session.
 type AgentEvent struct {
@@ -196,6 +232,7 @@ type AgentQuestionSource string
 
 const (
 	AgentQuestionSourceAskForeman            AgentQuestionSource = "ask_foreman"
+	AgentQuestionSourceAskUser               AgentQuestionSource = "ask_user"
 	AgentQuestionSourceClaudeAsk             AgentQuestionSource = "claude_ask"
 	AgentQuestionSourceOMPAsk                AgentQuestionSource = "omp_ask"
 	AgentQuestionSourceOpenCodeQuestion      AgentQuestionSource = "opencode_question"

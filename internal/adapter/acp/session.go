@@ -59,12 +59,12 @@ type Session struct {
 	steerCancel             chan struct{} // closed to signal current prompt to abort for steering
 	steerDone               chan struct{} // closed when steer-aborter prompt has finished
 
-	questions     *questionBroker
-	terminals     *terminalManager
-	foremanSocket *foremanSocket
-	closeOnce     sync.Once
-	traceClose    func()           // closes the raw protocol-trace file, if any
-	acpCfg        config.ACPConfig // stored for compact detection in handleNotification
+	questions      *questionBroker
+	terminals      *terminalManager
+	questionSocket *questionSocket
+	closeOnce      sync.Once
+	traceClose     func()           // closes the raw protocol-trace file, if any
+	acpCfg         config.ACPConfig // stored for compact detection in handleNotification
 }
 
 // makeOpenSteerCancel returns a new open (never-closed) channel for the initial steerCancel.
@@ -134,7 +134,11 @@ func (s *Session) Steer(ctx context.Context, msg string) error {
 }
 
 func (s *Session) SendAnswer(_ context.Context, answer string) error {
-	return s.questions.answer(answer)
+	if err := s.questions.answer(answer); err != nil {
+		return err
+	}
+	s.writeCanonicalInputLog("answer", answer)
+	return nil
 }
 
 func (s *Session) Compact(ctx context.Context) error {
@@ -426,8 +430,8 @@ func (s *Session) cleanup() {
 		if s.terminals != nil {
 			s.terminals.cleanup()
 		}
-		if s.foremanSocket != nil {
-			s.foremanSocket.close()
+		if s.questionSocket != nil {
+			s.questionSocket.close()
 		}
 		if s.cmd != nil && s.cmd.Process != nil {
 			if err := s.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {

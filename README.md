@@ -206,7 +206,7 @@ adapters:
 
 ### Agent Client Protocol (`acp`)
 
-Uses any local Agent Client Protocol v1 stdio agent. Substrate is the ACP client: it starts the configured command directly, initializes ACP, creates/resumes sessions, serves ACP filesystem and terminal client methods inside the session worktree, and exposes `ask_foreman` through the bundled Foreman MCP bridge when available.
+Uses any local Agent Client Protocol v1 stdio agent. Substrate is the ACP client: it starts the configured command directly, initializes ACP, creates/resumes sessions, serves ACP filesystem and terminal client methods inside the session worktree, and exposes `ask_foreman` or `ask_user` through the bundled question MCP bridge when available.
 
 Compaction is conditional because ACP has no generic compact method. Substrate uses advertised `/compact` or `/compress` slash commands, with known profiles for Kilo Code (`kilo acp`, `/compact`) and Cursor (`agent acp`, `/compress`). Steering cancels the in-flight `session/prompt` via the local context and sends a replacement prompt.
 
@@ -223,7 +223,7 @@ adapters:
     model: ""
     mode: ""
     thought_level: ""
-    foreman_bridge_path: ""  # optional non-standard path to foreman-mcp binary or index.ts
+    question_bridge_path: ""  # optional non-standard path to question MCP bridge binary or index.ts
     client_fs: true
     client_terminal: true
 ```
@@ -278,7 +278,7 @@ adapters:
     # bun_path: /opt/homebrew/bin/bun
     # bridge_path: /custom/path/to/omp-bridge
   acp:
-    # foreman_bridge_path: /custom/path/to/foreman-mcp/index.ts
+    # question_bridge_path: /custom/path/to/question-mcp/index.ts
 
 foreman:
   question_timeout: "0"         # "0" = wait indefinitely

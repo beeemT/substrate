@@ -184,6 +184,58 @@ func TestSessionLogPromptInputResizesViewportPreservingBottom(t *testing.T) {
 	}
 }
 
+func TestSessionLogPendingQuestionInputEmitsAnswer(t *testing.T) {
+	t.Parallel()
+
+	m := NewSessionLogModel(styles.NewStyles(styles.DefaultTheme))
+	m.SetSize(48, 12)
+	m.SetLogPath("manual-1", "/tmp/manual-1.log")
+	m.SetAnswerQuestion("q-1")
+
+	var hasAnswerHint bool
+	for _, hint := range m.KeybindHints() {
+		if hint.Key == "p" && hint.Label == "Answer question" {
+			hasAnswerHint = true
+		}
+	}
+	if !hasAnswerHint {
+		t.Fatalf("keybind hints = %#v, want answer-question prompt", m.KeybindHints())
+	}
+
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	if cmd != nil {
+		_ = cmd()
+	}
+	if !m.steerActive {
+		t.Fatal("p should activate answer input for a pending question")
+	}
+	m.steerInput.SetValue("use the safe path")
+	m, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.steerActive {
+		t.Fatal("answer input should close after submit")
+	}
+	if cmd == nil {
+		t.Fatal("Enter submit must return a command")
+	}
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("expected BatchMsg, got %T", cmd())
+	}
+
+	var found bool
+	for _, batched := range batch {
+		if msg, ok := batched().(AnswerQuestionMsg); ok {
+			found = true
+			if msg.QuestionID != "q-1" || msg.Answer != "use the safe path" || msg.AnsweredBy != "human" {
+				t.Fatalf("answer msg = %#v", msg)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("submit did not emit AnswerQuestionMsg")
+	}
+}
+
 func TestSessionLogSteerInputPreservesLongFeedback(t *testing.T) {
 	t.Parallel()
 

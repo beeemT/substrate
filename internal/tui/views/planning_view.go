@@ -20,6 +20,7 @@ const (
 	sessionLogSilenceThreshold = 3 * time.Minute
 
 	sessionLogPlaceholderDefault   = "Send steering prompt to agent..."
+	sessionLogPlaceholderAnswer    = "Answer question..."
 	sessionLogPlaceholderFailed    = "Send retry feedback for this session..."
 	sessionLogPlaceholderCompleted = "Request code changes for this session..."
 
@@ -76,6 +77,7 @@ type SessionLogModel struct {
 	steerActive        bool
 	failedSessionID    string // non-empty when viewing a failed session's log
 	completedSessionID string // non-empty when viewing a completed session's log
+	answerQuestionID   string // non-empty when the prompt box answers a pending question
 
 	// Activity spinner: shown when an agent is actively running for this session.
 	agentActive        bool
@@ -192,6 +194,27 @@ func (m *SessionLogModel) SetMessageInputLabel(label string) {
 	m.doRebuildTranscript()
 }
 
+func (m *SessionLogModel) SetAnswerQuestion(questionID string) {
+	if m.answerQuestionID == questionID {
+		return
+	}
+	m.answerQuestionID = questionID
+	m.refreshSteerPlaceholder()
+}
+
+func (m *SessionLogModel) refreshSteerPlaceholder() {
+	switch {
+	case m.answerQuestionID != "":
+		m.steerInput.SetPlaceholder(sessionLogPlaceholderAnswer)
+	case m.failedSessionID != "":
+		m.steerInput.SetPlaceholder(sessionLogPlaceholderFailed)
+	case m.completedSessionID != "":
+		m.steerInput.SetPlaceholder(sessionLogPlaceholderCompleted)
+	default:
+		m.steerInput.SetPlaceholder(sessionLogPlaceholderDefault)
+	}
+}
+
 func (m *SessionLogModel) SetNotice(notice *sourceDetailsNotice) {
 	m.notice = notice
 	m.syncViewportSize()
@@ -210,6 +233,8 @@ func (m *SessionLogModel) SetLogPath(sessionID, logPath string) {
 	m.renderedRunningTools = false
 	m.renderedAnimationFrame = 0
 	m.toolAnimationFrame = 0
+	m.answerQuestionID = ""
+	m.refreshSteerPlaceholder()
 	m.viewport.SetContent("")
 	m.viewport.GotoTop()
 }
@@ -232,6 +257,8 @@ func (m *SessionLogModel) SetStaticContent(entries []sessionlog.Entry) {
 	m.toolAnimationFrame = 0
 	m.silenceNoticeActive = false
 	m.lastEventAt = time.Time{}
+	m.answerQuestionID = ""
+	m.refreshSteerPlaceholder()
 	m.entries = append([]sessionlog.Entry(nil), entries...)
 	m.doRebuildTranscript()
 	m.viewport.GotoBottom()
@@ -239,30 +266,22 @@ func (m *SessionLogModel) SetStaticContent(entries []sessionlog.Entry) {
 
 func (m *SessionLogModel) SetFailedSession(sessionID string) {
 	m.failedSessionID = sessionID
-	if sessionID != "" {
-		m.steerInput.SetPlaceholder(sessionLogPlaceholderFailed)
-	} else {
-		m.steerInput.SetPlaceholder(sessionLogPlaceholderDefault)
-	}
+	m.refreshSteerPlaceholder()
 }
 
 func (m *SessionLogModel) ClearFailedSession() {
 	m.failedSessionID = ""
-	m.steerInput.SetPlaceholder(sessionLogPlaceholderDefault)
+	m.refreshSteerPlaceholder()
 }
 
 func (m *SessionLogModel) SetCompletedSession(sessionID string) {
 	m.completedSessionID = sessionID
-	if sessionID != "" {
-		m.steerInput.SetPlaceholder(sessionLogPlaceholderCompleted)
-	} else {
-		m.steerInput.SetPlaceholder(sessionLogPlaceholderDefault)
-	}
+	m.refreshSteerPlaceholder()
 }
 
 func (m *SessionLogModel) ClearCompletedSession() {
 	m.completedSessionID = ""
-	m.steerInput.SetPlaceholder(sessionLogPlaceholderDefault)
+	m.refreshSteerPlaceholder()
 }
 
 // SetAgentActive controls the activity spinner. It should be set to true when
@@ -312,8 +331,12 @@ func (m SessionLogModel) InputCaptured() bool { return m.steerActive }
 
 func (m SessionLogModel) KeybindHints() []KeybindHint {
 	if m.steerActive {
+		label := "Send"
+		if m.answerQuestionID != "" {
+			label = "Answer"
+		}
 		return []KeybindHint{
-			{Key: "Enter", Label: "Send"},
+			{Key: "Enter", Label: label},
 			{Key: "Esc", Label: "Cancel"},
 		}
 	}
@@ -340,7 +363,11 @@ func (m SessionLogModel) KeybindHints() []KeybindHint {
 	} else if m.failedSessionID != "" {
 		hints = append(hints, KeybindHint{Key: "p", Label: "Retry with feedback"})
 	} else if m.live {
-		hints = append(hints, KeybindHint{Key: "p", Label: "Prompt agent"})
+		label := "Prompt agent"
+		if m.answerQuestionID != "" {
+			label = "Answer question"
+		}
+		hints = append(hints, KeybindHint{Key: "p", Label: label})
 	}
 	if m.planID != "" {
 		hints = append(hints, KeybindHint{Key: "i", Label: "Inspect plan"})
@@ -417,9 +444,19 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 				m.steerActive = false
 				m.syncViewportSize()
 				if text != "" {
+					if m.answerQuestionID != "" {
+						qid := m.answerQuestionID
+						return m, tea.Batch(
+							func() tea.Msg {
+								return AnswerQuestionMsg{QuestionID: qid, Answer: text, AnsweredBy: "human"}
+							},
+							resetCmd,
+						)
+					}
 					if m.failedSessionID != "" {
 						fid := m.failedSessionID
 						m.failedSessionID = ""
+						m.refreshSteerPlaceholder()
 						return m, tea.Batch(
 							func() tea.Msg {
 								return FollowUpFailedSessionMsg{TaskID: fid, Feedback: text}
@@ -430,6 +467,7 @@ func (m SessionLogModel) Update(msg tea.Msg) (SessionLogModel, tea.Cmd) {
 					if m.completedSessionID != "" {
 						cid := m.completedSessionID
 						m.completedSessionID = ""
+						m.refreshSteerPlaceholder()
 						return m, tea.Batch(
 							func() tea.Msg {
 								return FollowUpSessionMsg{TaskID: cid, Feedback: text}

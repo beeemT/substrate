@@ -730,7 +730,7 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 				{Section: "adapters.acp", Key: "model", Label: "Model", Type: SettingsFieldString, Value: cfg.Adapters.ACP.Model},
 				{Section: "adapters.acp", Key: "mode", Label: "Mode", Type: SettingsFieldString, Value: cfg.Adapters.ACP.Mode},
 				{Section: "adapters.acp", Key: "thought_level", Label: "Thought Level", Type: SettingsFieldString, Value: cfg.Adapters.ACP.ThoughtLevel},
-				{Section: "adapters.acp", Key: "foreman_bridge_path", Label: "Foreman Bridge Path", Type: SettingsFieldPath, Value: cfg.Adapters.ACP.ForemanBridgePath, Description: "Optional path to the substrate Foreman MCP bridge binary or index.ts script used to expose ask_foreman to ACP agents."},
+				{Section: "adapters.acp", Key: "question_bridge_path", Label: "Question Bridge Path", Type: SettingsFieldPath, Value: cfg.Adapters.ACP.QuestionBridgePath, Description: "Optional path to the substrate question MCP bridge binary or index.ts script used to expose question tools to ACP agents."},
 			},
 		},
 		{
@@ -1037,8 +1037,8 @@ func applyField(cfg *config.Config, field SettingsField) error {
 		cfg.Adapters.ACP.Mode = value
 	case "adapters.acp.thought_level":
 		cfg.Adapters.ACP.ThoughtLevel = value
-	case "adapters.acp.foreman_bridge_path":
-		cfg.Adapters.ACP.ForemanBridgePath = value
+	case "adapters.acp.question_bridge_path":
+		cfg.Adapters.ACP.QuestionBridgePath = value
 	case "adapters.linear.api_key_ref":
 		cfg.Adapters.Linear.APIKey, cfg.Adapters.Linear.APIKeyRef = applySecretField(value, "linear.api_key")
 	case "adapters.linear.team_id":
@@ -1224,8 +1224,8 @@ func fieldPresentation(section, key string) (description string, defaultValue st
 		return "Extended thinking mode: adaptive, enabled, or disabled. Empty uses Claude's default.", statusEmpty
 	case "adapters.claude_code.effort":
 		return "Reasoning effort level: low, medium, high, or max. Empty uses Claude's default.", statusEmpty
-	case "adapters.acp.foreman_bridge_path":
-		return "Optional path to the substrate Foreman MCP bridge binary or source index.ts for ACP ask_foreman; empty uses the packaged bridge or repo-root bridge/foreman-mcp/index.ts.", "auto-detect packaged bridge"
+	case "adapters.acp.question_bridge_path":
+		return "Optional path to the substrate question MCP bridge binary or source index.ts for ACP question tools; empty uses the packaged bridge or repo-root bridge/question-mcp/index.ts.", "auto-detect packaged bridge"
 	case "adapters.codex.binary_path":
 		return "Path to the Codex CLI binary.", statusEmpty
 	case "adapters.codex.model":

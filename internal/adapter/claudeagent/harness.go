@@ -52,7 +52,7 @@ func (h *Harness) Capabilities() adapter.HarnessCapabilities {
 		SupportsNativeResume: true,
 		SupportedTools: []string{
 			"Read", "Write", "Edit", "Bash", "Glob", "Grep",
-			"WebSearch", "WebFetch", "AskUserQuestion", "mcp__substrate__ask_foreman",
+			"WebSearch", "WebFetch", "AskUserQuestion", "mcp__substrate__ask_foreman", "mcp__substrate__ask_user",
 		},
 	}
 }
@@ -86,14 +86,15 @@ func resolveReadyBridgeRuntime(cfg config.ClaudeCodeConfig) (bridge.BridgeRuntim
 // bridgeInitMsg is sent first to configure the session.
 // All config is passed here rather than via env to avoid exposure in /proc/pid/environ.
 type bridgeInitMsg struct {
-	Type            string  `json:"type"`
-	Mode            string  `json:"mode"`
-	SystemPrompt    string  `json:"system_prompt,omitempty"`
-	ResumeSessionID string  `json:"resume_session_id,omitempty"`
-	Model           *string `json:"model,omitempty"` // nil omits from JSON (use harness default)
-	Thinking        *string `json:"thinking,omitempty"`
-	Effort          *string `json:"effort,omitempty"`
-	AnswerTimeoutMs int64   `json:"answer_timeout_ms"`
+	Type               string  `json:"type"`
+	Mode               string  `json:"mode"`
+	SystemPrompt       string  `json:"system_prompt,omitempty"`
+	ResumeSessionID    string  `json:"resume_session_id,omitempty"`
+	Model              *string `json:"model,omitempty"` // nil omits from JSON (use harness default)
+	Thinking           *string `json:"thinking,omitempty"`
+	Effort             *string `json:"effort,omitempty"`
+	AnswerTimeoutMs    int64   `json:"answer_timeout_ms"`
+	QuestionToolPolicy string  `json:"question_tool_policy,omitempty"`
 }
 
 // StartSession spawns a new agent session with the given options.
@@ -197,11 +198,12 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (_
 	bs.StartReaders()
 
 	initMsg := bridgeInitMsg{
-		Type:            "init",
-		Mode:            string(opts.Mode),
-		SystemPrompt:    opts.SystemPrompt,
-		ResumeSessionID: opts.ResumeInfo["claude_session_id"],
-		AnswerTimeoutMs: opts.AnswerTimeoutMs,
+		Type:               "init",
+		Mode:               string(opts.Mode),
+		SystemPrompt:       opts.SystemPrompt,
+		ResumeSessionID:    opts.ResumeInfo["claude_session_id"],
+		AnswerTimeoutMs:    opts.AnswerTimeoutMs,
+		QuestionToolPolicy: string(opts.QuestionToolPolicy),
 	}
 	// Only set optional fields when non-empty — nil omits from JSON (omitempty),
 	// letting the harness use its own default. Sending an empty string would be

@@ -169,7 +169,7 @@ func (s *BridgeSession) Steer(_ context.Context, msg string) error {
 	return s.SendBridgeMsg("steer", msg)
 }
 
-// SendAnswer sends an answer to resolve a pending ask_foreman tool call.
+// SendAnswer sends an answer to resolve a pending question tool call.
 func (s *BridgeSession) SendAnswer(_ context.Context, answer string) error {
 	return s.SendBridgeMsg("answer", answer)
 }

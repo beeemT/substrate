@@ -70,11 +70,11 @@ func (r *answerRouter) Answer(ctx context.Context, questionID, answer, answeredB
 
 	switch q.Stage {
 	case domain.AgentSessionKindPlanning:
-		return r.answerPlanningQuestion(ctx, q, answer, answeredBy)
+		return r.answerLiveHumanSession(ctx, q, answer, answeredBy)
 	case domain.AgentSessionKindImplementation, domain.AgentSessionKindReview, "":
 		return r.answerImplementationQuestion(ctx, q, answer, answeredBy)
 	case domain.AgentSessionKindManual:
-		return r.answerManualQuestion(ctx, q, answer, answeredBy)
+		return r.answerLiveHumanSession(ctx, q, answer, answeredBy)
 	case domain.AgentSessionKindForeman:
 		return fmt.Errorf("route answer: foreman sessions cannot receive answers (question %s)", questionID)
 	default:
@@ -82,21 +82,32 @@ func (r *answerRouter) Answer(ctx context.Context, questionID, answer, answeredB
 	}
 }
 
-func (r *answerRouter) answerPlanningQuestion(ctx context.Context, q domain.Question, answer, answeredBy string) error {
+// answerLiveHumanSession delivers an operator's answer to a live agent session
+// when registered, resumes the session from waiting-for-answer, persists the
+// answer, and publishes the answered event. Shared by manual and planning
+// questions, and by implementation/review questions whose source is explicitly
+// human-directed.
+func (r *answerRouter) answerLiveHumanSession(ctx context.Context, q domain.Question, answer, answeredBy string) error {
 	if err := r.registry.SendAnswer(ctx, q.AgentSessionID, answer); err != nil && !errors.Is(err, ErrSessionNotRunning) {
-		return fmt.Errorf("send planning answer: %w", err)
+		return fmt.Errorf("send answer to live session: %w", err)
 	}
 	if err := r.questionSvc.Answer(ctx, q.ID, answer, answeredBy); err != nil {
 		return fmt.Errorf("persist answer: %w", err)
 	}
 	if err := r.sessionSvc.ResumeFromAnswer(ctx, q.AgentSessionID); err != nil {
-		slog.Warn("failed to resume planning session", "error", err, "session_id", q.AgentSessionID)
+		slog.Warn("failed to resume session from answer", "error", err, "session_id", q.AgentSessionID)
 	}
 	return r.publishAnswered(ctx, q.ID, q.AgentSessionID)
 }
 
 func (r *answerRouter) answerImplementationQuestion(ctx context.Context, q domain.Question, answer, answeredBy string) error {
-	// Look up the foreman dynamically for this question's work item
+	// Human-directed questions bypass the Foreman escalation path and route the
+	// answer to the live session directly via the shared human-session helper.
+	if q.Source.IsHumanDirected() {
+		return r.answerLiveHumanSession(ctx, q, answer, answeredBy)
+	}
+
+	// ask_foreman: look up the foreman dynamically for this question's work item
 	foremanHandler, err := r.getForeman(ctx, q.ID)
 	if err != nil {
 		return fmt.Errorf("get foreman handler: %w", err)
@@ -114,24 +125,11 @@ func (r *answerRouter) answerImplementationQuestion(ctx context.Context, q domai
 		// Fall through to non-escalated path
 	}
 
-	// Non-escalated fallback: resume session and persist answer
+	// Non-escalated ask_foreman fallback: resume session and persist answer
 	if q.AgentSessionID != "" {
 		if err := r.sessionSvc.ResumeFromAnswer(ctx, q.AgentSessionID); err != nil {
 			slog.Warn("failed to resume impl session", "error", err, "session_id", q.AgentSessionID)
 		}
-	}
-	if err := r.questionSvc.Answer(ctx, q.ID, answer, answeredBy); err != nil {
-		return fmt.Errorf("persist answer: %w", err)
-	}
-	return r.publishAnswered(ctx, q.ID, q.AgentSessionID)
-}
-
-func (r *answerRouter) answerManualQuestion(ctx context.Context, q domain.Question, answer, answeredBy string) error {
-	if err := r.registry.SendAnswer(ctx, q.AgentSessionID, answer); err != nil && !errors.Is(err, ErrSessionNotRunning) {
-		return fmt.Errorf("send manual answer: %w", err)
-	}
-	if err := r.sessionSvc.ResumeFromAnswer(ctx, q.AgentSessionID); err != nil {
-		slog.Warn("failed to resume manual session", "error", err, "session_id", q.AgentSessionID)
 	}
 	if err := r.questionSvc.Answer(ctx, q.ID, answer, answeredBy); err != nil {
 		return fmt.Errorf("persist answer: %w", err)

@@ -32,11 +32,13 @@ func TestHarnessNameAndCapabilities(t *testing.T) {
 	if !slices.Contains(caps.SupportedTools, "mcp__substrate__ask_foreman") {
 		t.Errorf("SupportedTools does not contain mcp__substrate__ask_foreman; got %v", caps.SupportedTools)
 	}
+	if !slices.Contains(caps.SupportedTools, "mcp__substrate__ask_user") {
+		t.Errorf("SupportedTools does not contain mcp__substrate__ask_user; got %v", caps.SupportedTools)
+	}
 	if !slices.Contains(caps.SupportedTools, "AskUserQuestion") {
 		t.Errorf("SupportedTools does not contain AskUserQuestion; got %v", caps.SupportedTools)
 	}
 }
-
 
 func ptrS(s string) *string { return &s }
 

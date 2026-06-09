@@ -229,18 +229,18 @@ type GlabConfig struct {
 
 // ACPConfig configures a generic Agent Client Protocol stdio harness.
 type ACPConfig struct {
-	Agent             string            `yaml:"agent"`
-	Command           string            `yaml:"command"`
-	Args              []string          `yaml:"args"`
-	Env               map[string]string `yaml:"env"`
-	RegistryID        string            `yaml:"registry_id"`
-	Model             string            `yaml:"model"`
-	Mode              string            `yaml:"mode"`
-	ThoughtLevel      string            `yaml:"thought_level"`
-	ForemanBridgePath string            `yaml:"foreman_bridge_path"`
-	ClientFS          *bool             `yaml:"client_fs"`
-	ClientTerminal    *bool             `yaml:"client_terminal"`
-	AuthTerminal      *bool             `yaml:"auth_terminal"`
+	Agent              string            `yaml:"agent"`
+	Command            string            `yaml:"command"`
+	Args               []string          `yaml:"args"`
+	Env                map[string]string `yaml:"env"`
+	RegistryID         string            `yaml:"registry_id"`
+	Model              string            `yaml:"model"`
+	Mode               string            `yaml:"mode"`
+	ThoughtLevel       string            `yaml:"thought_level"`
+	QuestionBridgePath string            `yaml:"question_bridge_path"`
+	ClientFS           *bool             `yaml:"client_fs"`
+	ClientTerminal     *bool             `yaml:"client_terminal"`
+	AuthTerminal       *bool             `yaml:"auth_terminal"`
 }
 
 // ValidThinkingLevels lists the accepted values for OhMyPiConfig.ThinkingLevel.

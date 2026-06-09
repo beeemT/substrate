@@ -43,10 +43,10 @@ const (
 // serverURLPattern matches the "Server running on http://..." line from stdout.
 var serverURLPattern = regexp.MustCompile(`Server running on (http://[^\s]+)`)
 
-// foremanMCPBridgeName is the filename stem used to locate the generic foreman MCP bridge.
-const foremanMCPBridgeName = "foreman-mcp"
+// questionMCPBridgeName is the filename stem used to locate the generic question MCP bridge.
+const questionMCPBridgeName = "question-mcp"
 
-// resolveMCPBridgePath locates the foreman MCP bridge script relative to
+// resolveMCPBridgePath locates the question MCP bridge script relative to
 // the substrate executable, using the same candidate resolution as other bridges.
 // Returns empty string if not found.
 func resolveMCPBridgePath() string {
@@ -57,7 +57,7 @@ func resolveMCPBridgePath() string {
 	if resolved, err := filepath.EvalSymlinks(execPath); err == nil {
 		execPath = resolved
 	}
-	candidates := bridge.BridgeCandidates("", execPath, foremanMCPBridgeName)
+	candidates := bridge.BridgeCandidates("", execPath, questionMCPBridgeName)
 	for _, c := range candidates {
 		if c == "" {
 			continue
@@ -181,6 +181,11 @@ func (h *Harness) RunAction(ctx context.Context, req adapter.HarnessActionReques
 	default:
 		return adapter.HarnessActionResult{}, fmt.Errorf("unsupported opencode action %q", req.Action)
 	}
+}
+
+func shouldRegisterQuestionMCP(mode adapter.SessionMode, policy adapter.QuestionToolPolicy) bool {
+	target := policy.Target(adapter.QuestionToolTargetForeman)
+	return mode != adapter.SessionModeForeman && target.AllowsForemanQuestions()
 }
 
 // StartSession creates a new agent session by launching the opencode serve
@@ -335,35 +340,37 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (_
 		}
 	}
 
-	// Register the foreman MCP bridge server so the agent can invoke ask_foreman.
-	mcpPath := resolveMCPBridgePath()
-	if mcpPath != "" {
-		mcpReq := ConnectMCPRequest{
-			Transport: "stdio",
-			Name:      "substrate-foreman",
-			Command:   mcpPath,
-		}
-		mcpData, mcpErr := json.Marshal(mcpReq)
-		if mcpErr == nil {
-			mcpCtx, mcpCancel := context.WithTimeout(ctx, 10*time.Second)
-			defer mcpCancel()
-			mcpHTTPReq, mcpReqErr := http.NewRequestWithContext(mcpCtx, http.MethodPost, serverURL+"/mcp", bytes.NewReader(mcpData))
-			if mcpReqErr == nil {
-				mcpHTTPReq.Header.Set("Content-Type", "application/json")
-				mcpResp, mcpErr := httpClient.Do(mcpHTTPReq)
-				if mcpErr != nil {
-					slog.Warn("opencode: failed to register foreman MCP server", "error", mcpErr)
-				} else {
-					mcpResp.Body.Close()
-					if mcpResp.StatusCode < 200 || mcpResp.StatusCode >= 300 {
-						slog.Warn("opencode: MCP registration returned non-success status", "status", mcpResp.StatusCode)
+	if shouldRegisterQuestionMCP(opts.Mode, opts.QuestionToolPolicy) {
+		// Register the question MCP bridge server so the agent can invoke ask_foreman.
+		mcpPath := resolveMCPBridgePath()
+		if mcpPath != "" {
+			mcpReq := ConnectMCPRequest{
+				Transport: "stdio",
+				Name:      "substrate-foreman",
+				Command:   mcpPath,
+			}
+			mcpData, mcpErr := json.Marshal(mcpReq)
+			if mcpErr == nil {
+				mcpCtx, mcpCancel := context.WithTimeout(ctx, 10*time.Second)
+				defer mcpCancel()
+				mcpHTTPReq, mcpReqErr := http.NewRequestWithContext(mcpCtx, http.MethodPost, serverURL+"/mcp", bytes.NewReader(mcpData))
+				if mcpReqErr == nil {
+					mcpHTTPReq.Header.Set("Content-Type", "application/json")
+					mcpResp, mcpErr := httpClient.Do(mcpHTTPReq)
+					if mcpErr != nil {
+						slog.Warn("opencode: failed to register question MCP server", "error", mcpErr)
+					} else {
+						mcpResp.Body.Close()
+						if mcpResp.StatusCode < 200 || mcpResp.StatusCode >= 300 {
+							slog.Warn("opencode: MCP registration returned non-success status", "status", mcpResp.StatusCode)
+						}
 					}
+				} else {
+					slog.Warn("opencode: failed to create MCP registration request", "error", mcpReqErr)
 				}
 			} else {
-				slog.Warn("opencode: failed to create MCP registration request", "error", mcpReqErr)
+				slog.Warn("opencode: failed to marshal MCP request", "error", mcpErr)
 			}
-		} else {
-			slog.Warn("opencode: failed to marshal MCP request", "error", mcpErr)
 		}
 	}
 
