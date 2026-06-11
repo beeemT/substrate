@@ -16,8 +16,6 @@ type RepoPointer struct {
 	Framework string
 	// AgentsMdPath is the absolute path to AGENTS.md if present in the main worktree. Empty if absent.
 	AgentsMdPath string
-	// DocPaths are configured documentation paths from repo config. Nil if none.
-	DocPaths []string
 }
 
 // WorkItemSnapshot is a projection of WorkItem for planning context.
@@ -39,6 +37,8 @@ type PlanningContext struct {
 	WorkspaceAgentsMd string
 	// Repos is the list of discovered git-work repositories.
 	Repos []RepoPointer
+	// RepoDocPaths are absolute paths to workspace-level documentation repositories or folders.
+	RepoDocPaths []string
 	// SessionID is the ULID for this planning session.
 	SessionID string
 	// SessionDraftPath is the absolute path to plan-draft.md for this session.

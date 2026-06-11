@@ -31,12 +31,13 @@ func TestSettingsSerialize_RoundTripsCriticalFields(t *testing.T) {
 	cfg.Adapters.Sentry.Organization = "acme"
 	cfg.Adapters.Sentry.Projects = []string{"web", "api"}
 	cfg.Adapters.Sentry.PollInterval = "9m"
+	cfg.RepoDocs.Paths = []string{"docs/reference", "/var/tmp/shared-docs"}
 
 	raw, rebuilt, err := svc.Serialize(buildSettingsSections(cfg))
 	if err != nil {
 		t.Fatalf("Serialize: %v", err)
 	}
-	for _, want := range []string{"api_key_ref: keychain:linear.api_key", "token_ref: keychain:github.token", "token_ref: keychain:sentry.token", "organization: acme", "poll_interval: 9m", "- web", "- api"} {
+	for _, want := range []string{"api_key_ref: keychain:linear.api_key", "token_ref: keychain:github.token", "token_ref: keychain:sentry.token", "organization: acme", "poll_interval: 9m", "repo_docs:", "- docs/reference", "- /var/tmp/shared-docs", "- web", "- api"} {
 		if !strings.Contains(raw, want) {
 			t.Fatalf("serialized YAML missing %q\n%s", want, raw)
 		}
@@ -52,6 +53,9 @@ func TestSettingsSerialize_RoundTripsCriticalFields(t *testing.T) {
 	}
 	if rebuilt.Adapters.Sentry.PollInterval != "9m" {
 		t.Fatalf("rebuilt sentry poll_interval = %q, want %q", rebuilt.Adapters.Sentry.PollInterval, "9m")
+	}
+	if got := rebuilt.RepoDocs.Paths; len(got) != 2 || got[0] != "docs/reference" || got[1] != "/var/tmp/shared-docs" {
+		t.Fatalf("rebuilt repo docs paths = %#v, want %#v", got, []string{"docs/reference", "/var/tmp/shared-docs"})
 	}
 }
 

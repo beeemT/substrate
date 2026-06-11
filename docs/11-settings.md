@@ -1,6 +1,6 @@
 # Settings System
 
-<!-- docs:last-integrated-commit 10e50295fb75f72c67233e191ae34fb8fc091f1e -->
+<!-- docs:last-integrated-commit 1410a27c20a6fe30dc8ae17c85e9bf3115b876b3 -->
 
 Full-screen configuration covering commit strategy, planning, review, Foreman, harness routing, provider auth, and repository lifecycle.
 
@@ -9,11 +9,11 @@ Full-screen configuration covering commit strategy, planning, review, Foreman, h
 ┌─ Settings ───────────────┬─────────────────────────────────────────┐
 │ ▼ Home View               │ Home View                                │
 │ ▼ Commit                  │ ────────────────────────────────────────│
-│ ▼ Planning                │ Documentation files the planning agent   │
-│ ▼ Review                  │ reads before writing a plan.           │
+│ ▼ Repo Documentation      │ Docs repos/folders read before planning. │
+│ ▼ Review                  │ Relative paths resolve against workspace.│
 │ ▼ Harness Routing         │                                          │
-│ ▼ Provider · GitHub       │ Default: ./docs, ./SPEC.md               │
-│ ▼ Provider · Linear       │ Current: ./docs, ./ARCHITECTURE.md       │
+│ ▼ Provider · GitHub       │ Current: docs/reference, /srv/eng-docs  │
+│ ▼ Provider · Linear       │                                          │
 │ ▼ Provider · GitLab       │                                          │
 ├───────────────────────────┴─────────────────────────────────────────┤
 │ [↑↓] navigate  [→] expand  [←] collapse  [enter] focus  [esc] close  [t] test  [r] reveal │

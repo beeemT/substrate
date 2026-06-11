@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/gitwork"
 	"github.com/beeemT/substrate/internal/workerpool"
@@ -19,7 +18,6 @@ import (
 // Discoverer handles workspace scanning and repo discovery.
 type Discoverer struct {
 	gitClient *gitwork.Client
-	cfg       *config.Config
 	// pullCooldown is the minimum time between consecutive PullMainWorktrees calls.
 	// Sessions started in rapid succession share the same pull, avoiding redundant network I/O.
 	pullCooldown time.Duration
@@ -28,10 +26,9 @@ type Discoverer struct {
 }
 
 // NewDiscoverer creates a new Discoverer.
-func NewDiscoverer(gitClient *gitwork.Client, cfg *config.Config) *Discoverer {
+func NewDiscoverer(gitClient *gitwork.Client) *Discoverer {
 	return &Discoverer{
 		gitClient:    gitClient,
-		cfg:          cfg,
 		pullCooldown: 5 * time.Minute,
 	}
 }
@@ -204,15 +201,6 @@ func (d *Discoverer) buildRepoPointer(ctx context.Context, repoPath string) (dom
 	agentsMdPath := filepath.Join(mainDir, "AGENTS.md")
 	if _, err := os.Stat(agentsMdPath); err == nil {
 		pointer.AgentsMdPath = agentsMdPath
-	}
-
-	// Populate doc paths from repo config if available
-	if d.cfg != nil {
-		if repoConfig, ok := d.cfg.Repos[repoName]; ok {
-			if len(repoConfig.DocPaths) > 0 {
-				pointer.DocPaths = repoConfig.DocPaths
-			}
-		}
 	}
 
 	return pointer, nil

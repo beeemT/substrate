@@ -94,6 +94,7 @@ type Config struct {
 	Harness  HarnessConfig         `yaml:"harness"`
 	Adapters AdaptersConfig        `yaml:"adapters"`
 	Foreman  ForemanConfig         `yaml:"foreman"`
+	RepoDocs RepoDocsConfig        `yaml:"repo_docs"`
 	Repos    map[string]RepoConfig `yaml:"repos"`
 	UI       UIConfig              `yaml:"ui"`
 }
@@ -383,10 +384,14 @@ type ForemanConfig struct {
 	QuestionTimeout string `yaml:"question_timeout"`
 }
 
+// RepoDocsConfig contains workspace-level documentation paths used during planning.
+type RepoDocsConfig struct {
+	// Paths are documentation repositories or folders outside implementation repos.
+	Paths []string `yaml:"paths"`
+}
+
 // RepoConfig contains per-repo overrides.
 type RepoConfig struct {
-	// DocPaths are documentation paths to include in planning context.
-	DocPaths []string `yaml:"doc_paths"`
 	// IssueActionScope controls whether plan-approval actions are applied.
 	// Valid values: "all" (default), "mine", "none".
 	IssueActionScope IssueActionScope `yaml:"issue_comment_scope"`

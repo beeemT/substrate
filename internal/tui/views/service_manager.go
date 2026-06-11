@@ -290,7 +290,7 @@ func (sm *ServiceManager) buildServicesWithOptions(ctx context.Context, cfg *con
 	}
 
 	// Build orchestrators
-	discoverer := orchestrator.NewDiscoverer(gitClient, cfg)
+	discoverer := orchestrator.NewDiscoverer(gitClient)
 	harnesses, err := app.BuildAgentHarnesses(cfg, current.WorkspaceDir)
 	if err != nil {
 		return nil, fmt.Errorf("building agent harnesses: %w", err)

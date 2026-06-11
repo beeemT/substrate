@@ -509,6 +509,7 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 		},
 		WorkspaceAgentsMd: workspaceAgentsMd,
 		Repos:             repos,
+		RepoDocPaths:      resolveRepoDocPaths(s.globalCfg, workspace.RootPath),
 		SessionID:         sessionID,
 		SessionDraftPath:  sessionDir.DraftPath,
 		MaxParseRetries:   s.cfg.MaxParseRetries,
@@ -952,6 +953,32 @@ func (s *PlanningService) renderPlanRunFeedback(req planRunRequest, draftPath st
 	return buf.String()
 }
 
+func resolveRepoDocPaths(cfg *config.Config, workspaceRoot string) []string {
+	if cfg == nil || len(cfg.RepoDocs.Paths) == 0 {
+		return nil
+	}
+	paths := cfg.RepoDocs.Paths
+	var resolved []string
+	for i, p := range paths {
+		if p != "" && workspaceRoot != "" && !filepath.IsAbs(p) {
+			if resolved == nil {
+				resolved = make([]string, len(paths))
+				copy(resolved, paths[:i])
+			}
+			resolved[i] = filepath.Join(workspaceRoot, p)
+			continue
+		}
+		if resolved != nil {
+			resolved[i] = p
+		}
+	}
+	if resolved != nil {
+		return resolved
+	}
+
+	return paths
+}
+
 // renderPlanningPrompt renders the planning prompt.
 // When ctx.RevisionFeedback is set, it renders the in-review revision prompt instead.
 func (s *PlanningService) renderPlanningPrompt(ctx *domain.PlanningContext) (string, error) {
@@ -1081,10 +1108,13 @@ Description:
 ## Additional Context
 {{.WorkItem.ExtraContext}}
 {{end}}
-## Repos
+{{if .RepoDocPaths}}## Repo Documentation
+The following documentation repositories or folders live outside the implementation repos. Read them before finalising the plan:
+{{range .RepoDocPaths}}- {{.}}
+{{end}}
+{{end}}## Repos
 {{range .Repos}}- {{.Name}} ({{.Language}}{{if .Framework}}/{{.Framework}}{{end}}) — {{.MainDir}}{{if .AgentsMdPath}}
-  guidance: {{.AgentsMdPath}}{{end}}{{if .DocPaths}}
-  docs: {{range .DocPaths}}{{.}} {{end}}{{end}}
+  guidance: {{.AgentsMdPath}}{{end}}
 {{end}}## Instructions
 Your role in this session is to plan this change. Exploration, analysis, and writing
 the plan to {{.SessionDraftPath}} are your only work. You are not implementing anything.

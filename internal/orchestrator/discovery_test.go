@@ -17,7 +17,7 @@ func brokenClient() *gitwork.Client {
 }
 
 func TestDiscoverer_PullMainWorktrees_FirstCallPulls(t *testing.T) {
-	d := NewDiscoverer(brokenClient(), nil)
+	d := NewDiscoverer(brokenClient())
 	d.pullCooldown = time.Hour
 
 	// lastPullAt is zero — no previous pull, so this call must proceed.
@@ -35,7 +35,7 @@ func TestDiscoverer_PullMainWorktrees_FirstCallPulls(t *testing.T) {
 }
 
 func TestDiscoverer_PullMainWorktrees_SkipsWithinCooldown(t *testing.T) {
-	d := NewDiscoverer(brokenClient(), nil)
+	d := NewDiscoverer(brokenClient())
 	d.pullCooldown = time.Hour
 	d.lastPullAt = time.Now() // simulate a very recent pull
 
@@ -48,7 +48,7 @@ func TestDiscoverer_PullMainWorktrees_SkipsWithinCooldown(t *testing.T) {
 }
 
 func TestDiscoverer_PullMainWorktrees_PullsAfterCooldownExpires(t *testing.T) {
-	d := NewDiscoverer(brokenClient(), nil)
+	d := NewDiscoverer(brokenClient())
 	d.pullCooldown = time.Hour
 	d.lastPullAt = time.Now().Add(-2 * time.Hour) // simulate a stale pull
 
@@ -61,7 +61,7 @@ func TestDiscoverer_PullMainWorktrees_PullsAfterCooldownExpires(t *testing.T) {
 }
 
 func TestDiscoverer_PullMainWorktrees_EmptyReposDoesNotSkipNextCall(t *testing.T) {
-	d := NewDiscoverer(brokenClient(), nil)
+	d := NewDiscoverer(brokenClient())
 	d.pullCooldown = time.Hour
 
 	// Call with no repos — still stamps lastPullAt, applying the cooldown.
@@ -80,7 +80,7 @@ func TestDiscoverer_PullMainWorktrees_EmptyReposDoesNotSkipNextCall(t *testing.T
 }
 
 func TestDiscoverer_PullMainWorktrees_MultipleReposAllAttempted(t *testing.T) {
-	d := NewDiscoverer(brokenClient(), nil)
+	d := NewDiscoverer(brokenClient())
 	d.pullCooldown = time.Hour // no previous pull
 
 	repoPaths := []string{"/repo-a", "/repo-b", "/repo-c"}
@@ -94,7 +94,7 @@ func TestDiscoverer_PullMainWorktrees_MultipleReposAllAttempted(t *testing.T) {
 }
 
 func TestDiscoverer_PullMainWorktrees_SyncRunsEvenIfPullFailed(t *testing.T) {
-	d := NewDiscoverer(brokenClient(), nil)
+	d := NewDiscoverer(brokenClient())
 	d.pullCooldown = time.Hour
 
 	// Pull fails (broken binary). Sync must still be attempted for every repo,
@@ -108,7 +108,7 @@ func TestDiscoverer_PullMainWorktrees_SyncRunsEvenIfPullFailed(t *testing.T) {
 }
 
 func TestDiscoverer_PullMainWorktrees_SyncSkippedWithinCooldown(t *testing.T) {
-	d := NewDiscoverer(brokenClient(), nil)
+	d := NewDiscoverer(brokenClient())
 	d.pullCooldown = time.Hour
 	d.lastPullAt = time.Now() // within cooldown
 

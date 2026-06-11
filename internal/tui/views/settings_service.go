@@ -803,10 +803,10 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 			},
 		},
 		{
-			ID:          "repos",
-			Title:       "Repo Overrides",
-			Description: "Documentation files the planning agent reads before writing a plan for each repository",
-			Fields:      []SettingsField{{Section: "repos", Key: "doc_paths", Label: "Repo Doc Paths", Type: SettingsFieldKeyValue, Value: formatRepos(cfg.Repos)}},
+			ID:          "repo_docs",
+			Title:       "Repo Documentation",
+			Description: "Workspace-level documentation repositories or folders the planning agent reads before writing a plan",
+			Fields:      []SettingsField{{Section: "repo_docs", Key: "paths", Label: "Paths", Type: SettingsFieldStringList, Value: strings.Join(cfg.RepoDocs.Paths, ",")}},
 		},
 	}
 	for i := range sections {
@@ -1102,8 +1102,8 @@ func applyField(cfg *config.Config, field SettingsField) error {
 		cfg.Adapters.Glab.Reviewers = parseList(value)
 	case "adapters.glab.labels":
 		cfg.Adapters.Glab.Labels = parseList(value)
-	case "repos.doc_paths":
-		cfg.Repos = parseRepos(value)
+	case "repo_docs.paths":
+		cfg.RepoDocs.Paths = parseList(value)
 	case "ui.default_filter":
 		cfg.UI.DefaultFilter = value
 	case "ui.default_group":
@@ -1316,8 +1316,8 @@ func fieldPresentation(section, key string) (description string, defaultValue st
 		return "Default GitLab merge request reviewers added by the glab lifecycle adapter.", statusEmpty
 	case "adapters.glab.labels":
 		return "Default GitLab merge request labels added by the glab lifecycle adapter.", statusEmpty
-	case "repos.doc_paths":
-		return "File paths to project documentation the planning agent reads before writing a plan for this repository. Use this to surface architecture guides, conventions, or other reference material the agent should consult during planning.", statusEmpty
+	case "repo_docs.paths":
+		return "Workspace-relative or absolute paths to documentation repositories or folders outside implementation repos. Relative paths are resolved against the substrate workspace root before planning.", statusEmpty
 	case "ui.default_filter":
 		return "Default filter applied to the sessions list when the app starts.", "all"
 	case "ui.default_group":
@@ -1488,43 +1488,4 @@ func secretStatus(ref, value string) string {
 	}
 
 	return statusUnset
-}
-
-func parseRepos(v string) map[string]config.RepoConfig {
-	result := map[string]config.RepoConfig{}
-	for entry := range strings.SplitSeq(strings.TrimSpace(v), ";") {
-		entry = strings.TrimSpace(entry)
-		if entry == "" {
-			continue
-		}
-		parts := strings.SplitN(entry, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		repo := strings.TrimSpace(parts[0])
-		paths := parseList(strings.ReplaceAll(parts[1], "|", ","))
-		result[repo] = config.RepoConfig{DocPaths: paths}
-	}
-	if len(result) == 0 {
-		return nil
-	}
-
-	return result
-}
-
-func formatRepos(repos map[string]config.RepoConfig) string {
-	if len(repos) == 0 {
-		return ""
-	}
-	keys := make([]string, 0, len(repos))
-	for k := range repos {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		parts = append(parts, k+"="+strings.Join(repos[k].DocPaths, "|"))
-	}
-
-	return strings.Join(parts, ";")
 }

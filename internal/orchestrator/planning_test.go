@@ -51,6 +51,76 @@ func TestRenderPlanningPromptIncludesSessionDraftPath(t *testing.T) {
 	}
 }
 
+func TestResolveRepoDocPathsMakesRelativePathsWorkspaceAbsolute(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	absoluteDocPath := filepath.Join(t.TempDir(), "external-docs")
+	cfg := &config.Config{
+		RepoDocs: config.RepoDocsConfig{
+			Paths: []string{"docs/reference", absoluteDocPath, ""},
+		},
+	}
+
+	got := resolveRepoDocPaths(cfg, workspaceRoot)
+	wantRelative := filepath.Join(workspaceRoot, "docs/reference")
+	if len(got) != 3 {
+		t.Fatalf("resolved paths = %#v, want 3 entries", got)
+	}
+	if got[0] != wantRelative {
+		t.Fatalf("relative doc path = %q, want %q", got[0], wantRelative)
+	}
+	if got[1] != absoluteDocPath {
+		t.Fatalf("absolute doc path = %q, want unchanged %q", got[1], absoluteDocPath)
+	}
+	if got[2] != "" {
+		t.Fatalf("empty doc path = %q, want unchanged empty path", got[2])
+	}
+	if cfg.RepoDocs.Paths[0] != "docs/reference" {
+		t.Fatalf("config path mutated to %q", cfg.RepoDocs.Paths[0])
+	}
+}
+
+func TestRenderPlanningPromptIncludesRepoDocPathsOutsideRepos(t *testing.T) {
+	templates, err := NewPlanningTemplates()
+	if err != nil {
+		t.Fatalf("NewPlanningTemplates(): %v", err)
+	}
+
+	svc := &PlanningService{templates: templates}
+	repoDocPath := filepath.Join(t.TempDir(), "shared-docs")
+	prompt, err := svc.renderPlanningPrompt(&domain.PlanningContext{
+		WorkItem: domain.WorkItemSnapshot{
+			Title:       "Use shared docs",
+			ExternalID:  "ISSUE-456",
+			Description: "Plan using workspace-level documentation.",
+		},
+		RepoDocPaths: []string{repoDocPath},
+		Repos: []domain.RepoPointer{{
+			Name:     "repo-a",
+			Language: "go",
+			MainDir:  filepath.Join(t.TempDir(), "repo-a", "main"),
+		}},
+		SessionDraftPath: filepath.Join(t.TempDir(), "plan-draft.md"),
+	})
+	if err != nil {
+		t.Fatalf("renderPlanningPrompt(): %v", err)
+	}
+
+	docSection := strings.Index(prompt, "## Repo Documentation")
+	repoSection := strings.Index(prompt, "## Repos")
+	if docSection < 0 {
+		t.Fatalf("planning prompt missing repo documentation section\nprompt:\n%s", prompt)
+	}
+	if repoSection < 0 || docSection > repoSection {
+		t.Fatalf("repo documentation section must appear before repos\nprompt:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "- "+repoDocPath) {
+		t.Fatalf("planning prompt missing repo doc path %q\nprompt:\n%s", repoDocPath, prompt)
+	}
+	if strings.Contains(prompt, "docs:") {
+		t.Fatalf("repo doc paths must not render inside discovered repo entries\nprompt:\n%s", prompt)
+	}
+}
+
 func TestBuildCorrectionMessageIncludesSpecificPlanExamples(t *testing.T) {
 	templates, err := NewPlanningTemplates()
 	if err != nil {
@@ -1295,7 +1365,7 @@ func TestPlan_ReplacesExistingRejectedPlanOnRestart(t *testing.T) {
 	gitClient := gitwork.NewClient(fakeGitWork)
 	globalCfg := &config.Config{}
 	globalCfg.Plan.MaxParseRetries = ptrInt(0)
-	discoverer := NewDiscoverer(gitClient, globalCfg)
+	discoverer := NewDiscoverer(gitClient)
 	bus := &mockPublisher{}
 
 	// Harness writes a valid plan referencing repoName.
@@ -1419,7 +1489,7 @@ func TestPlan_ReplacesExistingApprovedPlanFromCompleted(t *testing.T) {
 	gitClient := gitwork.NewClient(fakeGitWork)
 	globalCfg := &config.Config{}
 	globalCfg.Plan.MaxParseRetries = ptrInt(0)
-	discoverer := NewDiscoverer(gitClient, globalCfg)
+	discoverer := NewDiscoverer(gitClient)
 	bus := &mockPublisher{}
 
 	planText := validPlanningPlanWithRepo(repoName, "Re-plan after completion.", "Implement the next iteration.")
@@ -1499,7 +1569,7 @@ func TestPlanFailureEventIncludesPersistenceError(t *testing.T) {
 	globalCfg := &config.Config{}
 	globalCfg.Plan.MaxParseRetries = ptrInt(0)
 	registry := NewSessionRegistry()
-	svc, err := NewPlanningService(&PlanningConfig{MaxParseRetries: 0}, NewDiscoverer(gitwork.NewClient(fakeGitWork), globalCfg), gitwork.NewClient(fakeGitWork), harness, planSvc, workItemSvc, sessionSvc, bus, workspaceSvc, registry, nil, globalCfg)
+	svc, err := NewPlanningService(&PlanningConfig{MaxParseRetries: 0}, NewDiscoverer(gitwork.NewClient(fakeGitWork)), gitwork.NewClient(fakeGitWork), harness, planSvc, workItemSvc, sessionSvc, bus, workspaceSvc, registry, nil, globalCfg)
 	if err != nil {
 		t.Fatalf("NewPlanningService: %v", err)
 	}
@@ -1587,7 +1657,7 @@ func TestPlan_EmitsPlanGeneratedEventOnSuccess(t *testing.T) {
 	globalCfg := &config.Config{}
 	globalCfg.Plan.MaxParseRetries = ptrInt(0)
 	registry := NewSessionRegistry()
-	svc, err := NewPlanningService(&PlanningConfig{MaxParseRetries: 0}, NewDiscoverer(gitwork.NewClient(fakeGitWork), globalCfg), gitwork.NewClient(fakeGitWork), harness, planSvc, workItemSvc, sessionSvc, bus, workspaceSvc, registry, nil, globalCfg)
+	svc, err := NewPlanningService(&PlanningConfig{MaxParseRetries: 0}, NewDiscoverer(gitwork.NewClient(fakeGitWork)), gitwork.NewClient(fakeGitWork), harness, planSvc, workItemSvc, sessionSvc, bus, workspaceSvc, registry, nil, globalCfg)
 	if err != nil {
 		t.Fatalf("NewPlanningService: %v", err)
 	}

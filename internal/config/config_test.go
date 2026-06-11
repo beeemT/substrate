@@ -275,6 +275,25 @@ repos:
 	}
 }
 
+func TestLoadWithRepoDocs(t *testing.T) {
+	path := writeTestConfig(t, `
+repo_docs:
+  paths:
+    - docs/reference
+    - /var/tmp/shared-docs
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if len(cfg.RepoDocs.Paths) != 2 {
+		t.Fatalf("repo_docs.paths = %#v, want 2 entries", cfg.RepoDocs.Paths)
+	}
+	if cfg.RepoDocs.Paths[0] != "docs/reference" || cfg.RepoDocs.Paths[1] != "/var/tmp/shared-docs" {
+		t.Fatalf("repo_docs.paths = %#v", cfg.RepoDocs.Paths)
+	}
+}
+
 func TestLoadHarnessConfig(t *testing.T) {
 	path := writeTestConfig(t, `
 harness:

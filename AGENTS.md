@@ -56,6 +56,10 @@ A sub-plan (one repo's work) goes through multiple agent sessions. `EventAgentSe
 - When a user corrects runtime behavior, re-check the full action path against the user expectation. Convert any warning-only or report-only path into the required state-changing behavior if that is what the product promises.
 - Trust the user's explicit correction over prior implementation, docs, or your own assumptions about intended behavior.
 
+## Repo Documentation Paths
+- Repo documentation paths are workspace-level documentation repositories or folders outside implementation repos. They are not per-repo metadata and must not be attached during repo discovery.
+- Relative repo documentation paths resolve against the substrate workspace root before being passed to planning agents.
+
 ## Agent Orchestration
 - When an agent is instructed to update a file progressively, finalize only on the agent turn's explicit completion signal. Treat intermediate file writes as provisional state unless the protocol says otherwise.
 - Artifact existence is not a completion signal for interactive agent flows.

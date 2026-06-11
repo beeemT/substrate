@@ -177,7 +177,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	gitClient := gitwork.NewClient("")
 
 	// --- Discoverer ---
-	discoverer := orchestrator.NewDiscoverer(gitClient, cfg)
+	discoverer := orchestrator.NewDiscoverer(gitClient)
 
 	// --- Planning service ---
 	plannerSvc, err := orchestrator.NewPlanningService(
