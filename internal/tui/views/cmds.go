@@ -1841,10 +1841,15 @@ func SettingsDiagnosticsStartCmd() tea.Cmd {
 }
 
 // SettingsDiagnosticsCmd runs harness diagnostics asynchronously and delivers a completion message.
-func SettingsDiagnosticsCmd(settings SettingsService, cfg *config.Config) tea.Cmd {
+func SettingsDiagnosticsCmd(settings SettingsService, cfg *config.Config, send func(tea.Msg)) tea.Cmd {
 	return func() tea.Msg {
-		err := settings.RefreshWithDiagnostics(context.Background(), cfg)
-		return SettingsDiagnosticsReadyMsg{Err: err}
+		go func() {
+			err := settings.RefreshWithDiagnostics(context.Background(), cfg)
+			if send != nil {
+				send(SettingsDiagnosticsReadyMsg{Err: err})
+			}
+		}()
+		return nil
 	}
 }
 

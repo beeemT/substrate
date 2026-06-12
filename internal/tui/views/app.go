@@ -1450,7 +1450,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case SettingsDiagnosticsStartMsg:
 		snapshot := a.provider.Settings().Snapshot()
 		if snapshot.DiagnosticsState == SettingsDiagnosticsPending {
-			cmds = append(cmds, SettingsDiagnosticsCmd(a.provider.Settings(), a.runtimeCtx.Cfg))
+			cmds = append(cmds, SettingsDiagnosticsCmd(a.provider.Settings(), a.runtimeCtx.Cfg, a.sendAsyncMsg))
 		}
 		return a, tea.Batch(cmds...)
 

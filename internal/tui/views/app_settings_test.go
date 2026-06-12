@@ -284,20 +284,27 @@ func TestSettingsDiagnosticsCmd_DoesNotBlockUpdateLoop(t *testing.T) {
 	}
 
 	// SettingsDiagnosticsCmd must not block — it launches a goroutine and returns.
-	diagCmd := SettingsDiagnosticsCmd(svc, cfg)
-	// The command runs RefreshWithDiagnostics synchronously in the test, but the
-	// contract is that the Bubble Tea command path is non-blocking.
-	// We verify the command completes quickly (within 1 second).
+	ready := make(chan SettingsDiagnosticsReadyMsg, 1)
+	diagCmd := SettingsDiagnosticsCmd(svc, cfg, func(msg tea.Msg) {
+		if readyMsg, ok := msg.(SettingsDiagnosticsReadyMsg); ok {
+			ready <- readyMsg
+		}
+	})
 	startTime := time.Now()
 	diagResult := diagCmd()
 	elapsed := time.Since(startTime)
 	if elapsed > time.Second {
 		t.Fatalf("SettingsDiagnosticsCmd took %v (> 1s), want non-blocking execution", elapsed)
 	}
+	if diagResult != nil {
+		t.Fatalf("diagCmd result = %T, want nil", diagResult)
+	}
 
-	msg, ok := diagResult.(SettingsDiagnosticsReadyMsg)
-	if !ok {
-		t.Fatalf("diagCmd result = %T, want SettingsDiagnosticsReadyMsg", diagResult)
+	var msg SettingsDiagnosticsReadyMsg
+	select {
+	case msg = <-ready:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for SettingsDiagnosticsReadyMsg")
 	}
 	if msg.Err != nil {
 		t.Fatalf("SettingsDiagnosticsReadyMsg.Err = %v, want nil", msg.Err)
