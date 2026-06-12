@@ -193,11 +193,20 @@ func (s *Session) ResumeInfo() map[string]string {
 	return info
 }
 
+func newSessionCreateParams(root string, mcpServers []mcpServer, cfg config.ACPConfig) sessionCreateParams {
+	params := sessionCreateParams{CWD: root, MCPServers: mcpServers}
+	if !isKiroACPCommand(cfg) {
+		params.Agent = cfg.Agent
+		params.RegistryID = cfg.RegistryID
+	}
+	return params
+}
+
 func (s *Session) setupACPSession(ctx context.Context, opts adapter.SessionOpts, mcpServers []mcpServer) (sessionResponse, string, error) {
 	if mcpServers == nil {
 		mcpServers = []mcpServer{}
 	}
-	params := sessionCreateParams{CWD: s.root, MCPServers: mcpServers, Agent: s.acpCfg.Agent, RegistryID: s.acpCfg.RegistryID}
+	params := newSessionCreateParams(s.root, mcpServers, s.acpCfg)
 	if existing := opts.ResumeInfo["acp_agent_session_id"]; existing != "" {
 		params.SessionID = existing
 		if s.init.AgentCapabilities.SessionCapabilities.supportsResume() {

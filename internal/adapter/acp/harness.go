@@ -139,7 +139,8 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (a
 	if err != nil {
 		return nil, fmt.Errorf("open acp session log: %w", err)
 	}
-	cmd := exec.CommandContext(ctx, h.cfg.Command, h.cfg.Args...)
+	cmdName, cmdArgs := acpCommand(cfgWithSessionAgent(h.cfg))
+	cmd := exec.CommandContext(ctx, cmdName, cmdArgs...)
 	cmd.Dir = absRoot
 	cmd.Env = mergeEnv(os.Environ(), h.cfg.Env)
 	stdin, err := cmd.StdinPipe()
@@ -232,7 +233,8 @@ func (h *Harness) initializeOnly(ctx context.Context) (initializeResponse, error
 	if err := ValidateReadiness(h.cfg); err != nil {
 		return initializeResponse{}, err
 	}
-	cmd := exec.CommandContext(ctx, h.cfg.Command, h.cfg.Args...)
+	cmdName, cmdArgs := acpCommand(cfgWithSessionAgent(h.cfg))
+	cmd := exec.CommandContext(ctx, cmdName, cmdArgs...)
 	cmd.Env = mergeEnv(os.Environ(), h.cfg.Env)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -291,6 +293,40 @@ func (h *Harness) authenticate(ctx context.Context, method string) error {
 	}
 	_ = cmd.Wait()
 	return err
+}
+
+func cfgWithSessionAgent(cfg config.ACPConfig) config.ACPConfig {
+	if !isKiroACPCommand(cfg) || strings.TrimSpace(cfg.Agent) == "" || hasAgentArg(cfg.Args) {
+		return cfg
+	}
+	cfg.Args = append(append([]string{}, cfg.Args...), "--agent", cfg.Agent)
+	return cfg
+}
+
+func acpCommand(cfg config.ACPConfig) (string, []string) {
+	return cfg.Command, append([]string{}, cfg.Args...)
+}
+
+func isKiroACPCommand(cfg config.ACPConfig) bool {
+	name := strings.TrimSuffix(strings.ToLower(filepath.Base(cfg.Command)), ".exe")
+	if name != "kiro-cli" && name != "kiro" {
+		return false
+	}
+	for _, arg := range cfg.Args {
+		if arg == "acp" {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAgentArg(args []string) bool {
+	for _, arg := range args {
+		if arg == "--agent" || strings.HasPrefix(arg, "--agent=") {
+			return true
+		}
+	}
+	return false
 }
 
 func boolPtrValue(v *bool, fallback bool) bool {

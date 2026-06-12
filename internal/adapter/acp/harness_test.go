@@ -153,6 +153,44 @@ func helperACPConfig(t *testing.T) config.ACPConfig {
 	return config.ACPConfig{Command: os.Args[0], Args: []string{"-test.run=TestHelperACPProcess", "--"}, Env: map[string]string{"GO_WANT_ACP_HELPER": "1", "ACP_AGENT_NAME": "Kilo", "ACP_AUTH_ID": "kilo-login"}, ClientFS: boolPtr(true), ClientTerminal: boolPtr(true)}
 }
 
+func TestKiroACPAgentConfigUsesCommandArg(t *testing.T) {
+	cfg := config.ACPConfig{Command: "kiro-cli", Args: []string{"acp"}, Agent: "my-agent", RegistryID: "ignored"}
+	command, args := acpCommand(cfgWithSessionAgent(cfg))
+	if command != "kiro-cli" {
+		t.Fatalf("command = %q, want kiro-cli", command)
+	}
+	if !slices.Equal(args, []string{"acp", "--agent", "my-agent"}) {
+		t.Fatalf("args = %#v, want --agent appended", args)
+	}
+	params := newSessionCreateParams("/workspace", []mcpServer{}, cfg)
+	data, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("marshal params: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal params: %v", err)
+	}
+	if _, ok := raw["agent"]; ok {
+		t.Fatalf("kiro session params include non-standard agent field: %s", data)
+	}
+	if _, ok := raw["registryId"]; ok {
+		t.Fatalf("kiro session params include non-standard registryId field: %s", data)
+	}
+}
+
+func TestNonKiroACPAgentConfigUsesSessionParams(t *testing.T) {
+	cfg := config.ACPConfig{Command: "agent", Args: []string{"acp"}, Agent: "cursor", RegistryID: "cursor"}
+	command, args := acpCommand(cfgWithSessionAgent(cfg))
+	if command != "agent" || !slices.Equal(args, []string{"acp"}) {
+		t.Fatalf("command,args = %q,%#v, want unchanged", command, args)
+	}
+	params := newSessionCreateParams("/workspace", []mcpServer{}, cfg)
+	if params.Agent != "cursor" || params.RegistryID != "cursor" {
+		t.Fatalf("params agent,registry = %q,%q, want cursor,cursor", params.Agent, params.RegistryID)
+	}
+}
+
 func TestStartSessionLifecycleMapsACPEvents(t *testing.T) {
 	cfg := helperACPConfig(t)
 	cfg.Agent = "kiro-coder"
