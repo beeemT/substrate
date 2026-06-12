@@ -203,6 +203,14 @@ func TestOverviewUsesDurableSourceSummariesWhenAvailable(t *testing.T) {
 			t.Fatalf("content view = %q, want %q", view, want)
 		}
 	}
+	urlIndex := strings.Index(view, "URL: https://github.com/acme/rocket/issues/42")
+	excerptIndex := strings.Index(view, "Excerpt")
+	if urlIndex == -1 || excerptIndex == -1 {
+		t.Fatalf("content view = %q, want first source URL and excerpt heading", view)
+	}
+	if urlIndex > excerptIndex {
+		t.Fatalf("source URL appears after excerpt heading in content view = %q", view)
+	}
 }
 
 type overviewEventRepo struct {

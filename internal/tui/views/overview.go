@@ -956,11 +956,11 @@ func renderOverviewSourceItem(st styles.Styles, width int, item OverviewSourceIt
 	if strings.TrimSpace(item.Title) != "" {
 		lines = append(lines, renderKeyValueLine(st, innerWidth, "Title", item.Title))
 	}
-	if strings.TrimSpace(item.Excerpt) != "" {
-		lines = append(lines, "", st.Subtitle.Render("Excerpt"), item.Excerpt)
-	}
 	if strings.TrimSpace(item.URL) != "" {
 		lines = append(lines, renderKeyValueLine(st, innerWidth, "URL", item.URL))
+	}
+	if strings.TrimSpace(item.Excerpt) != "" {
+		lines = append(lines, "", st.Subtitle.Render("Excerpt"), item.Excerpt)
 	}
 
 	return components.RenderCallout(st, components.CalloutSpec{Body: strings.Join(lines, "\n"), Width: width, Variant: components.CalloutCard})
