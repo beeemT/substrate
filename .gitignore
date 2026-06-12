@@ -34,3 +34,4 @@ go.work.sum
 # Build output
 /substrate
 **/node_modules
+bridge/question-mcp/dist/
