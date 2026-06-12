@@ -17,6 +17,7 @@
     "compact-helpers.ts",
     "compact-helpers.test.ts",
     "agent-end-watchdog.ts",
-    "agent-end-watchdog.test.ts"
+    "agent-end-watchdog.test.ts",
+    "types.d.ts"
   ]
 }

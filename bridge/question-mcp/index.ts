@@ -124,6 +124,11 @@ function askQuestion(question: string, context = ""): Promise<QuestionAnswer> {
 // the question over the substrate socket — the destination lives in Go.
 type QuestionToolTarget = "foreman" | "human";
 
+type QuestionToolInput = {
+  question: string;
+  context?: string;
+};
+
 function questionToolTarget(): QuestionToolTarget {
   return process.env[TOOL_MODE_ENV] === "human" ? "human" : "foreman";
 }
@@ -138,6 +143,11 @@ const questionDescription =
   questionTarget === "human"
     ? "The question to ask the operator"
     : "The question to ask the foreman";
+const questionToolInputSchema = {
+  question: z.string().describe(questionDescription),
+  context: z.string().optional().describe("Surrounding context (optional)"),
+};
+
 // Server name is part of the harness contract: the Go orchestrator references
 // these exact strings when registering the MCP server with the agent runtime.
 const serverName = questionTarget === "human" ? "substrate-user" : "substrate-foreman";
@@ -150,14 +160,22 @@ const server = new McpServer(
   },
 );
 
-server.tool(
+const registerQuestionTool = server.registerTool.bind(server) as (
+  name: string,
+  config: { description: string; inputSchema: typeof questionToolInputSchema },
+  handler: (input: QuestionToolInput) => Promise<{
+    content: { type: "text"; text: string }[];
+    isError?: true;
+  }>,
+) => void;
+
+registerQuestionTool(
   toolName,
-  toolDescription,
   {
-    question: z.string().describe(questionDescription),
-    context: z.string().optional().describe("Surrounding context (optional)"),
+    description: toolDescription,
+    inputSchema: questionToolInputSchema,
   },
-  async ({ question, context }) => {
+  async ({ question, context }: QuestionToolInput) => {
     try {
       const result = await askQuestion(question, context ?? "");
       return {
