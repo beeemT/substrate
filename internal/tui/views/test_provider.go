@@ -8,6 +8,7 @@ import (
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/event"
 	"github.com/beeemT/substrate/internal/gitwork"
+	"github.com/beeemT/substrate/internal/logic"
 	"github.com/beeemT/substrate/internal/orchestrator"
 	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/service"
@@ -19,6 +20,11 @@ type testProvider struct {
 }
 
 func (tp *testProvider) GetServices() *Services             { return &tp.svcs }
+func (tp *testProvider) Logic() logic.Client                { return tp.svcs.Logic }
+func (tp *testProvider) EventClient() EventStreamClient     { return nil }
+func (tp *testProvider) LogClient() SessionLogClient        { return nil }
+func (tp *testProvider) AutonomousClient() AutonomousClient { return nil }
+func (tp *testProvider) WorkspaceClient() WorkspaceClient   { return nil }
 func (tp *testProvider) Session() *service.SessionService   { return tp.svcs.Session }
 func (tp *testProvider) Plan() *service.PlanService         { return tp.svcs.Plan }
 func (tp *testProvider) Task() *service.AgentSessionService { return tp.svcs.Task }
@@ -52,7 +58,15 @@ func (tp *testProvider) NewSessionFilters() *service.SessionFilterService {
 func (tp *testProvider) NewSessionFilterLocks() *service.SessionFilterLockService {
 	return tp.svcs.NewSessionFilterLocks
 }
-func (tp *testProvider) Settings() SettingsService               { return tp.svcs.Settings }
+func (tp *testProvider) Settings() SettingsService {
+	if tp.svcs.Settings == nil {
+		return nil
+	}
+	if ss, ok := tp.svcs.Settings.(SettingsService); ok {
+		return ss
+	}
+	return nil
+}
 func (tp *testProvider) Planning() *orchestrator.PlanningService { return tp.svcs.Planning }
 func (tp *testProvider) Implementation() *orchestrator.ImplementationService {
 	return tp.svcs.Implementation

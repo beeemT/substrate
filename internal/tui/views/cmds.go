@@ -25,9 +25,11 @@ import (
 
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/config"
+	daemonapi "github.com/beeemT/substrate/internal/daemon/api"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/event"
 	"github.com/beeemT/substrate/internal/gitwork"
+	"github.com/beeemT/substrate/internal/logic"
 	"github.com/beeemT/substrate/internal/orchestrator"
 	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/service"
@@ -40,6 +42,74 @@ const (
 	pollInterval      = 2 * time.Second
 	heartbeatInterval = 5 * time.Second
 )
+
+// SubscribeEventsWithClientCmd subscribes to the daemon event stream.
+// When send is provided, receives run in a goroutine so Bubble Tea is not
+// blocked waiting for future events. Without send, it preserves the original
+// one-batch synchronous behavior for focused command tests.
+func SubscribeEventsWithClientCmd(client EventStreamClient, workspaceID string, afterSequence uint64, includeSnapshotMarker bool, generation uint64, send ...func(tea.Msg)) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return nil
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		stream, err := client.SubscribeEvents(ctx, daemonapi.SubscribeEventsRequest{
+			WorkspaceID:           workspaceID,
+			AfterSequence:         afterSequence,
+			ReplayWindow:          500,
+			EventTypes:            eventSubscriptionTopics(),
+			IncludeSnapshotMarker: includeSnapshotMarker,
+		})
+		if err != nil {
+			cancel()
+			msg := RemoteEventBatchMsg{WorkspaceID: workspaceID, Generation: generation, LatestSequence: afterSequence, Err: fmt.Errorf("subscribe daemon events: %w", err)}
+			if len(send) > 0 && send[0] != nil {
+				send[0](msg)
+			}
+			return msg
+		}
+		if len(send) > 0 && send[0] != nil {
+			sender := send[0]
+			go func() {
+				defer cancel()
+				for {
+					var batch daemonapi.EventBatch
+					if err := stream.RecvMsg(&batch); err != nil {
+						sender(RemoteEventBatchMsg{WorkspaceID: workspaceID, Generation: generation, LatestSequence: afterSequence, Err: fmt.Errorf("receive daemon events: %w", err)})
+						return
+					}
+					sender(remoteEventBatchFromDaemon(workspaceID, generation, afterSequence, batch))
+				}
+			}()
+			return nil
+		}
+		defer cancel()
+		var batch daemonapi.EventBatch
+		if err := stream.RecvMsg(&batch); err != nil {
+			return RemoteEventBatchMsg{WorkspaceID: workspaceID, Generation: generation, LatestSequence: afterSequence, Err: fmt.Errorf("receive daemon events: %w", err)}
+		}
+		return remoteEventBatchFromDaemon(workspaceID, generation, afterSequence, batch)
+	}
+}
+
+func remoteEventBatchFromDaemon(workspaceID string, generation, afterSequence uint64, batch daemonapi.EventBatch) RemoteEventBatchMsg {
+	events := make([]domain.SystemEvent, 0, len(batch.Events))
+	for _, envelope := range batch.Events {
+		events = append(events, domain.SystemEvent{
+			ID:          envelope.ID,
+			WorkspaceID: envelope.WorkspaceID,
+			EventType:   envelope.Type,
+			Payload:     envelope.PayloadJSON,
+			CreatedAt:   envelope.CreatedAt,
+			Sequence:    envelope.Sequence,
+		})
+	}
+	latest := batch.LatestSequence
+	if latest < afterSequence {
+		latest = afterSequence
+	}
+	return RemoteEventBatchMsg{Events: events, LatestSequence: latest, WorkspaceID: workspaceID, Generation: generation}
+}
 
 // PollTickCmd returns a Cmd that fires after pollInterval to refresh DB state.
 func PollTickCmd() tea.Cmd {
@@ -65,6 +135,21 @@ func LoadSessionsCmd(svc *service.SessionService, workspaceID string) tea.Cmd {
 		}
 
 		return SessionsLoadedMsg{WorkspaceID: workspaceID, Items: items}
+	}
+}
+
+// LoadSessionsWithClientCmd fetches sessions through the product logic boundary.
+func LoadSessionsWithClientCmd(client logic.Client, workspaceID string) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return ErrMsg{Err: errors.New("logic client is unavailable")}
+		}
+		snapshot, err := client.GetInitialSnapshot(context.Background(), workspaceID)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+
+		return InitialSnapshotLoadedMsg{WorkspaceID: workspaceID, Snapshot: snapshot}
 	}
 }
 
@@ -235,6 +320,42 @@ func StartNewSessionAutonomousModeCmd(
 	}
 }
 
+func StartRemoteNewSessionAutonomousModeCmd(client AutonomousClient, workspaceID, instanceID string, selectedFilterIDs []string) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return ErrMsg{Err: errors.New("autonomous mode daemon client is unavailable")}
+		}
+		if len(selectedFilterIDs) == 0 {
+			return ErrMsg{Err: errors.New("at least one Filter must be selected")}
+		}
+		run, err := client.StartAutonomousMode(context.Background(), daemonapi.StartAutonomousModeRequest{
+			WorkspaceID:       workspaceID,
+			InstanceID:        instanceID,
+			SelectedFilterIDs: selectedFilterIDs,
+			IdempotencyKey:    fmt.Sprintf("start-autonomous:%s:%s:%s", workspaceID, instanceID, strings.Join(selectedFilterIDs, ",")),
+		})
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		return RemoteNewSessionAutonomousStartedMsg{Run: run, Message: "New Session autonomous mode started"}
+	}
+}
+
+func StopRemoteNewSessionAutonomousModeCmd(client AutonomousClient, instanceID string) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return ErrMsg{Err: errors.New("autonomous mode daemon client is unavailable")}
+		}
+		if _, err := client.StopAutonomousMode(context.Background(), daemonapi.StopAutonomousModeRequest{
+			InstanceID:     instanceID,
+			IdempotencyKey: "stop-autonomous:" + instanceID,
+		}); err != nil {
+			return ErrMsg{Err: err}
+		}
+		return NewSessionAutonomousStoppedMsg{Message: "New Session autonomous mode stopped"}
+	}
+}
+
 // StopNewSessionAutonomousModeCmd stops a running autonomous mode runtime.
 func StopNewSessionAutonomousModeCmd(runtime *NewSessionAutonomousRuntime) tea.Cmd {
 	return func() tea.Msg {
@@ -259,6 +380,19 @@ func WaitForNewSessionAutonomousEventCmd(ch <-chan tea.Msg) tea.Cmd {
 			return NewSessionAutonomousStoppedMsg{Message: "New Session autonomous mode stopped"}
 		}
 		return msg
+	}
+}
+
+func SearchSessionHistoryWithClientCmd(client logic.Client, filter domain.SessionHistoryFilter) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return ErrMsg{Err: fmt.Errorf("logic client is required")}
+		}
+		entries, err := client.SearchSessionHistory(context.Background(), filter)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		return SessionHistoryLoadedMsg{Filter: filter, Entries: entries}
 	}
 }
 
@@ -407,6 +541,19 @@ func ApprovePlanCmd(
 	}
 }
 
+// ApprovePlanWithClientCmd transitions a work item through the product logic boundary.
+func ApprovePlanWithClientCmd(client logic.Client, planID, workItemID string) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return ErrMsg{Err: errors.New("logic client is unavailable")}
+		}
+		if _, err := client.ApprovePlan(context.Background(), planID, workItemID); err != nil {
+			return ErrMsg{Err: err}
+		}
+		return PlanApprovedMsg{PlanID: planID, WorkItemID: workItemID}
+	}
+}
+
 // buildPlanApprovalEventContext builds adapter-specific context for plan approval events.
 func buildPlanApprovalEventContext(ctx context.Context, planSvc *service.PlanService, workItemSvc *service.SessionService, cfg *config.Config, planID, workItemID string) service.PlanApprovalEventContext {
 	approvalCtx := service.PlanApprovalEventContext{}
@@ -448,6 +595,19 @@ func AnswerQuestionCmd(router orchestrator.AnswerRouter, questionID, answer, ans
 	return func() tea.Msg {
 		ctx := context.Background()
 		if err := router.Answer(ctx, questionID, answer, answeredBy); err != nil {
+			return ErrMsg{Err: fmt.Errorf("answer question %s: %w", questionID, err)}
+		}
+		return ActionDoneMsg{Message: "Answer submitted"}
+	}
+}
+
+// AnswerQuestionWithClientCmd delivers a human answer through the product logic boundary.
+func AnswerQuestionWithClientCmd(client logic.Client, questionID, answer, answeredBy string) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return ErrMsg{Err: errors.New("logic client is unavailable")}
+		}
+		if _, err := client.AnswerQuestion(context.Background(), questionID, answer, answeredBy); err != nil {
 			return ErrMsg{Err: fmt.Errorf("answer question %s: %w", questionID, err)}
 		}
 		return ActionDoneMsg{Message: "Answer submitted"}
@@ -726,8 +886,77 @@ func tailSessionLogCmd(logPath string, sessionID string, since int64, includePar
 		return SessionLogLinesMsg{SessionID: sessionID, Entries: entries, NextOffset: newOffset}
 	}
 }
+func TailSessionLogFinalWithClientCmd(client SessionLogClient, sessionID string, since int64) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return SessionLogLinesMsg{SessionID: sessionID, NextOffset: since}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		snapshot, err := client.SnapshotAgentSessionLog(ctx, sessionID)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		entries, err := decodeSessionLogEntries(snapshot.EntriesJSON)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		return SessionLogLinesMsg{SessionID: sessionID, Entries: entries, NextOffset: snapshot.NextOffset, Reload: true}
+	}
+}
+
+func TailSessionLogWithClientCmd(client SessionLogClient, sessionID string, since int64) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return SessionLogLinesMsg{SessionID: sessionID, NextOffset: since}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
+		defer cancel()
+		stream, err := client.TailAgentSessionLog(ctx, daemonapi.TailAgentSessionLogRequest{AgentSessionID: sessionID, Since: since})
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		var batch daemonapi.SessionLogBatch
+		if err := stream.RecvMsg(&batch); err != nil {
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return SessionLogLinesMsg{SessionID: sessionID, NextOffset: since}
+			}
+			return ErrMsg{Err: err}
+		}
+		entries, err := decodeSessionLogEntries(batch.EntriesJSON)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		return SessionLogLinesMsg{SessionID: sessionID, Entries: entries, NextOffset: batch.NextOffset}
+	}
+}
+
+func decodeSessionLogEntries(raw []string) ([]sessionlog.Entry, error) {
+	entries := make([]sessionlog.Entry, 0, len(raw))
+	for _, item := range raw {
+		var entry sessionlog.Entry
+		if err := json.Unmarshal([]byte(item), &entry); err != nil {
+			return nil, fmt.Errorf("decode session log entry: %w", err)
+		}
+		entries = append(entries, entry)
+	}
+	return entries, nil
+}
 
 // SaveReviewedPlanCmd validates and persists a full reviewed plan document after $EDITOR edits.
+
+func SaveReviewedPlanWithClientCmd(client logic.Client, planID, content string) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return ErrMsg{Err: errors.New("logic client is unavailable")}
+		}
+		plan, subPlans, err := client.SaveReviewedPlan(context.Background(), planID, content)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		return PlanSavedMsg{WorkItemID: plan.WorkItemID, Plan: plan, SubPlans: subPlans, Message: "Plan updated"}
+	}
+}
 func SaveReviewedPlanCmd(planningSvc *orchestrator.PlanningService, planID, content string) tea.Cmd {
 	return func() tea.Msg {
 		if planningSvc == nil {
@@ -765,6 +994,22 @@ func LoadLiveInstancesCmd(svc *service.InstanceService, workspaceID string) tea.
 		}
 
 		return LiveInstancesLoadedMsg{AliveIDs: alive}
+	}
+}
+
+// StartPlanningWithClientCmd dispatches planning for a work item through the
+// daemon logic boundary. Completion is reported through durable events.
+func StartPlanningWithClientCmd(ctx context.Context, client logic.Client, workItemID string) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return ErrMsg{Err: fmt.Errorf("logic client is required")}
+		}
+		go func() {
+			if _, err := client.StartPlanning(ctx, workItemID); err != nil {
+				slog.Error("daemon planning failed", "error", err, "work_item_id", workItemID)
+			}
+		}()
+		return ActionDoneMsg{Message: "Planning dispatched"}
 	}
 }
 
@@ -831,6 +1076,19 @@ func ReconcileOrphanedTasksCmd(
 		}
 
 		return nil
+	}
+}
+
+func RestartPlanningWithClientCmd(ctx context.Context, client logic.Client, workItemID, prompt string) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return ErrMsg{Err: fmt.Errorf("logic client is required")}
+		}
+		result, err := client.RestartPlanning(ctx, workItemID, prompt)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		return PlanningRestartedMsg{WorkItemID: workItemID, Message: result.Message}
 	}
 }
 
@@ -910,6 +1168,20 @@ func PlanWithFeedbackCmd(ctx context.Context, svc *orchestrator.PlanningService,
 	}
 }
 
+func PlanWithFeedbackWithClientCmd(ctx context.Context, client logic.Client, workItemID, planID, feedback string) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return ErrMsg{Err: errors.New("logic client is unavailable")}
+		}
+		go func() {
+			if _, err := client.RequestPlanChanges(ctx, workItemID, planID, feedback); err != nil {
+				slog.Error("daemon plan revision failed", "error", err, "work_item_id", workItemID, "plan_id", planID)
+			}
+		}()
+		return ActionDoneMsg{Message: "Plan revision dispatched"}
+	}
+}
+
 // RunImplementationCmd dispatches the implementation pipeline for an approved plan.
 // It runs asynchronously - completion is signaled via EventWorkItemCompleted.
 func RunImplementationCmd(ctx context.Context, svc *orchestrator.ImplementationService, planID string) tea.Cmd {
@@ -922,6 +1194,45 @@ func RunImplementationCmd(ctx context.Context, svc *orchestrator.ImplementationS
 			// On success, EventWorkItemCompleted is emitted by the service.
 		}()
 		return nil // Don't block - let TUI continue processing events
+	}
+}
+
+// RunImplementationWithClientCmd dispatches implementation through the product logic boundary.
+func RunImplementationWithClientCmd(ctx context.Context, client logic.Client, planID string) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return ErrMsg{Err: errors.New("logic client is unavailable")}
+		}
+		go func() {
+			if _, err := client.RunImplementation(ctx, planID); err != nil {
+				slog.Error("implementation failed", "error", err, "plan_id", planID)
+			}
+		}()
+		return nil
+	}
+}
+func FinalizeWorkItemWithClientCmd(ctx context.Context, client logic.Client, workItemID string) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return ErrMsg{Err: fmt.Errorf("logic client is required")}
+		}
+		if _, err := client.FinalizeWorkItem(ctx, workItemID); err != nil {
+			return ErrMsg{Err: err}
+		}
+		return nil
+	}
+}
+
+func ResumeAllSessionsForWorkItemWithClientCmd(ctx context.Context, client logic.Client, workItemID, instanceID string) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return ErrMsg{Err: fmt.Errorf("logic client is required")}
+		}
+		result, err := client.ResumeAllSessionsForWorkItem(ctx, workItemID, instanceID)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		return SessionResumedMsg{WorkItemID: workItemID, Message: result.Message}
 	}
 }
 
@@ -1042,6 +1353,44 @@ func ResumeAllSessionsForWorkItemCmd(
 	}
 }
 
+func OverrideAcceptWithClientCmd(client logic.Client, workItemID string) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return ErrMsg{Err: fmt.Errorf("logic client is required")}
+		}
+		result, err := client.OverrideAccept(context.Background(), workItemID)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		return ActionDoneMsg{Message: result.Message}
+	}
+}
+
+func FailReviewWithClientCmd(client logic.Client, workItemID string) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return ErrMsg{Err: fmt.Errorf("logic client is required")}
+		}
+		result, err := client.FailReview(context.Background(), workItemID)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		return ActionDoneMsg{Message: result.Message}
+	}
+}
+
+func RetryFailedWithClientCmd(ctx context.Context, client logic.Client, planID, workItemID string) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return ErrMsg{Err: fmt.Errorf("logic client is required")}
+		}
+		if _, err := client.RetryFailedWorkItem(ctx, planID, workItemID); err != nil {
+			return ErrMsg{Err: err}
+		}
+		return nil
+	}
+}
+
 // OverrideAcceptCmd marks a work item completed despite outstanding critiques.
 // EventWorkItemCompleted is emitted by CompleteWorkItem → Transition → emitStateChange.
 func OverrideAcceptCmd(
@@ -1093,6 +1442,50 @@ func RetryFailedCmd(ctx context.Context, workItemSvc *service.SessionService, im
 			// On success, EventWorkItemCompleted is emitted by the service.
 		}()
 		return nil // Don't block
+	}
+}
+
+func deleteSessionWithClientCmd(client logic.Client, workItemID string) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return ErrMsg{Err: fmt.Errorf("logic client is required")}
+		}
+		result, err := client.DeleteSession(context.Background(), workItemID)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		return SessionDeletedMsg{SessionID: workItemID, Message: result.Message}
+	}
+}
+
+func archiveSessionWithClientCmd(client logic.Client, workItemID string, focusAfterArchive bool, focusWorkItemID string) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return ErrMsg{Err: fmt.Errorf("logic client is required")}
+		}
+		result, err := client.ArchiveSession(context.Background(), workItemID)
+		if err != nil {
+			return ErrMsg{Err: fmt.Errorf("archive session: %w", err)}
+		}
+		return SessionArchivedMsg{
+			WorkItemID:        workItemID,
+			Message:           result.Message,
+			FocusAfterArchive: focusAfterArchive,
+			FocusWorkItemID:   focusWorkItemID,
+		}
+	}
+}
+
+func unarchiveSessionWithClientCmd(client logic.Client, workItemID string) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return ErrMsg{Err: fmt.Errorf("logic client is required")}
+		}
+		result, err := client.UnarchiveSession(context.Background(), workItemID)
+		if err != nil {
+			return ErrMsg{Err: fmt.Errorf("unarchive session: %w", err)}
+		}
+		return SessionUnarchivedMsg{WorkItemID: workItemID, Message: result.Message}
 	}
 }
 
@@ -1216,6 +1609,19 @@ func publishSystemEvent(ctx context.Context, bus *event.Bus, eventType domain.Ev
 }
 
 // SkipQuestionCmd marks a question as skipped through AnswerRouter.
+
+func SkipQuestionWithClientCmd(client logic.Client, questionID string) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return ErrMsg{Err: errors.New("logic client is unavailable")}
+		}
+		result, err := client.SkipQuestion(context.Background(), questionID)
+		if err != nil {
+			return ErrMsg{Err: fmt.Errorf("skip question %s: %w", questionID, err)}
+		}
+		return ActionDoneMsg{Message: result.Message}
+	}
+}
 func SkipQuestionCmd(router orchestrator.AnswerRouter, questionID string) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
@@ -1377,6 +1783,22 @@ func SendManualSessionMessageCmd(svc *orchestrator.ManualSessionService, session
 }
 
 // SteerSessionCmd sends a steering/follow-up message to a running agent session.
+
+func SteerSessionWithClientCmd(client logic.Client, sessionID, message string) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return ErrMsg{Err: errors.New("logic client is unavailable")}
+		}
+		result, err := client.SteerSession(context.Background(), sessionID, message)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		if strings.TrimSpace(result.Message) == "" {
+			return SteerSessionSentMsg{SessionID: sessionID}
+		}
+		return ActionDoneMsg{Message: result.Message}
+	}
+}
 func SteerSessionCmd(registry orchestrator.SessionRegistry, sessionID, message string) tea.Cmd {
 	return func() tea.Msg {
 		if err := registry.Steer(context.Background(), sessionID, message); err != nil {
@@ -1445,6 +1867,19 @@ func FollowUpSessionCmd(ctx context.Context, svc *service.AgentSessionService, i
 	}
 }
 
+func FollowUpSessionWithClientCmd(ctx context.Context, client logic.Client, taskID, feedback, instanceID string) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return ErrMsg{Err: errors.New("logic client is unavailable")}
+		}
+		result, err := client.FollowUpAgentSession(ctx, taskID, feedback, instanceID)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		return ActionDoneMsg{Message: result.Message}
+	}
+}
+
 // FollowUpFailedSessionCmd dispatches a graph retry/follow-up from a failed
 // implementation or review leaf. The long-running work continues asynchronously.
 func FollowUpFailedSessionCmd(ctx context.Context, svc *service.AgentSessionService, implSvc *orchestrator.ImplementationService, send func(tea.Msg), taskID, feedback, instanceID string) tea.Cmd {
@@ -1480,6 +1915,19 @@ func FollowUpFailedSessionCmd(ctx context.Context, svc *service.AgentSessionServ
 			}
 		}()
 		return ActionDoneMsg{Message: "Failed follow-up dispatched"}
+	}
+}
+
+func RetryAgentSessionWithClientCmd(ctx context.Context, client logic.Client, sessionID, instanceID string) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return ErrMsg{Err: fmt.Errorf("logic client is required for retry")}
+		}
+		result, err := client.RetryAgentSession(context.WithoutCancel(ctx), sessionID, instanceID)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		return ActionDoneMsg{Message: result.Message}
 	}
 }
 
@@ -1556,6 +2004,20 @@ func completedImplementationAncestorID(ctx context.Context, svc *service.AgentSe
 }
 
 // FollowUpPlanCmd starts a follow-up re-planning cycle for a completed work item.
+
+func FollowUpPlanWithClientCmd(ctx context.Context, client logic.Client, workItemID, feedback string) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return FollowUpPlanResultMsg{WorkItemID: workItemID, Err: errors.New("logic client is unavailable")}
+		}
+		go func() {
+			if _, err := client.FollowUpPlan(ctx, workItemID, feedback); err != nil {
+				slog.Error("daemon plan follow-up failed", "error", err, "work_item_id", workItemID)
+			}
+		}()
+		return FollowUpPlanResultMsg{WorkItemID: workItemID}
+	}
+}
 func FollowUpPlanCmd(ctx context.Context, svc *orchestrator.PlanningService, workItemID, feedback string) tea.Cmd {
 	return func() tea.Msg {
 		_, err := svc.FollowUpPlan(ctx, workItemID, feedback)
@@ -1935,6 +2397,19 @@ func CloneRepoCmd(gitClient *gitwork.Client, workspaceDir, cloneURL string) tea.
 	}
 }
 
+// CloneRepoWithClientCmd asks the daemon to clone a repository and returns the result.
+func CloneRepoWithClientCmd(client WorkspaceClient, workspaceDir, cloneURL string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		defer cancel()
+		res, err := client.CloneRepo(ctx, workspaceDir, cloneURL)
+		if err != nil {
+			return RepoClonedMsg{Err: err}
+		}
+		return RepoClonedMsg{RepoPath: res.RepoPath}
+	}
+}
+
 // gitConfigPath returns the path to the git config file for the given repo kind.
 // Returns "" for unrecognized kinds.
 func gitConfigPath(repoPath string, kind repoKind) string {
@@ -2094,7 +2569,10 @@ func InitRepoCmd(client *gitwork.Client, repoPath string) tea.Cmd {
 // initNewReposCmd converts all given plain-git repos to the git-work layout.
 // It runs sequentially so failures are attributed to individual repos.
 // Emits RepoInitProgressMsg after each repo and NewReposInitDoneMsg on full success.
-func initNewReposCmd(client *gitwork.Client, repos []string) tea.Cmd {
+func initNewReposCmd(client *gitwork.Client, repos []string, workspaceClient ...WorkspaceClient) tea.Cmd {
+	if len(workspaceClient) > 0 && workspaceClient[0] != nil {
+		return initNewReposWithClientCmd(workspaceClient[0], repos)
+	}
 	if client == nil {
 		client = gitwork.NewClient("")
 	}
@@ -2116,5 +2594,27 @@ func initNewReposCmd(client *gitwork.Client, repos []string) tea.Cmd {
 		return NewReposInitDoneMsg{Count: total}
 	})
 
+	return tea.Sequence(cmds...)
+}
+
+func initNewReposWithClientCmd(client WorkspaceClient, repos []string) tea.Cmd {
+	total := len(repos)
+	cmds := make([]tea.Cmd, 0, total+1)
+	for i, repoPath := range repos {
+		repoPath := repoPath
+		i := i
+		cmds = append(cmds, func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if _, err := client.InitRepo(ctx, repoPath); err != nil {
+				slog.Error("failed to initialize new git-work repo via daemon", "path", repoPath, "error", err)
+				return ErrMsg{Err: fmt.Errorf("initialize git-work repo %s: %w", filepath.Base(repoPath), err)}
+			}
+			return RepoInitProgressMsg{Initialized: i + 1, Total: total}
+		})
+	}
+	cmds = append(cmds, func() tea.Msg {
+		return NewReposInitDoneMsg{Count: total}
+	})
 	return tea.Sequence(cmds...)
 }

@@ -1,0 +1,14 @@
+version: v2
+plugins:
+  - remote: buf.build/protocolbuffers/go
+    out: internal/gen
+    opt: paths=source_relative
+
+# The grpc-go plugin is intentionally not configured. Substrate's daemon
+# server in internal/daemon/server/register.go hand-rolls the gRPC service
+# descriptors against custom JSON DTOs in internal/daemon/api/types.go; the
+# code does not implement the generated gRPC service interfaces, so
+# generating them would produce dead code under internal/gen/substrate/v1.
+# The api/substrate/v1/*.proto files remain as a schema-only contract for
+# the wire shape. Re-enable the plugin and run `buf generate` only if a
+# consumer starts implementing the generated service interfaces.

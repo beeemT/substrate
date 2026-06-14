@@ -12,13 +12,23 @@ import (
 
 type noopEventRepo struct{}
 
-func (r *noopEventRepo) Create(_ context.Context, _ domain.SystemEvent) error { return nil }
+func (r *noopEventRepo) Create(_ context.Context, event domain.SystemEvent) (domain.SystemEvent, error) {
+	return event, nil
+}
 func (r *noopEventRepo) ListByType(_ context.Context, _ string, _ int) ([]domain.SystemEvent, error) {
 	return nil, nil
 }
 
 func (r *noopEventRepo) ListByWorkspaceID(_ context.Context, _ string, _ int) ([]domain.SystemEvent, error) {
 	return nil, nil
+}
+
+func (r *noopEventRepo) ListByWorkspaceIDAfterSequence(_ context.Context, _ string, _ uint64, _ int) ([]domain.SystemEvent, error) {
+	return nil, nil
+}
+
+func (r *noopEventRepo) LatestSequence(_ context.Context, _ string) (uint64, error) {
+	return 0, nil
 }
 func (r *noopEventRepo) DeleteByID(_ context.Context, _ string) error         { return nil }
 func (r *noopEventRepo) DeleteByWorkItemID(_ context.Context, _ string) error { return nil }

@@ -1345,8 +1345,12 @@ func TestEventCRUD(t *testing.T) {
 		Payload:     `{"name":"test"}`,
 		CreatedAt:   now(),
 	}
-	if err := repo.Create(ctx, ev); err != nil {
+	created, err := repo.Create(ctx, ev)
+	if err != nil {
 		t.Fatalf("create: %v", err)
+	}
+	if created.Sequence == 0 {
+		t.Fatalf("created sequence = 0, want assigned sequence")
 	}
 
 	byType, err := repo.ListByType(ctx, "workspace_created", 10)
@@ -1363,6 +1367,114 @@ func TestEventCRUD(t *testing.T) {
 	}
 	if len(byWs) != 1 {
 		t.Errorf("len = %d, want 1", len(byWs))
+	}
+
+	ev2 := ev
+	ev2.ID = domain.NewID()
+	ev2.EventType = "workspace_updated"
+	created2, err := repo.Create(ctx, ev2)
+	if err != nil {
+		t.Fatalf("create second: %v", err)
+	}
+	if created2.Sequence <= created.Sequence {
+		t.Fatalf("second sequence = %d, want > %d", created2.Sequence, created.Sequence)
+	}
+	replayed, err := repo.ListByWorkspaceIDAfterSequence(ctx, ws.ID, created.Sequence, 10)
+	if err != nil {
+		t.Fatalf("list after sequence: %v", err)
+	}
+	if len(replayed) != 1 || replayed[0].ID != created2.ID {
+		t.Fatalf("replayed = %#v, want second event", replayed)
+	}
+	latest, err := repo.LatestSequence(ctx, ws.ID)
+	if err != nil {
+		t.Fatalf("latest sequence: %v", err)
+	}
+	if latest != created2.Sequence {
+		t.Fatalf("latest = %d, want %d", latest, created2.Sequence)
+	}
+}
+
+func TestEventCreateIsIdempotentByID(t *testing.T) {
+	db := setupDB(t)
+	tx := beginTx(t, db)
+	ctx := context.Background()
+
+	ws := makeWorkspace(t, tx)
+	repo := reposqlite.NewEventRepo(tx)
+
+	ev := domain.SystemEvent{
+		ID:          domain.NewID(),
+		EventType:   "workspace_created",
+		WorkspaceID: ws.ID,
+		Payload:     `{"name":"idempotent"}`,
+		CreatedAt:   now(),
+	}
+
+	first, err := repo.Create(ctx, ev)
+	if err != nil {
+		t.Fatalf("first create: %v", err)
+	}
+	if first.Sequence == 0 {
+		t.Fatalf("first sequence = 0, want assigned sequence")
+	}
+
+	// Re-create the same event ID with different field values; the row
+	// must be unchanged and the original sequence must be returned.
+	duplicate := ev
+	duplicate.EventType = "workspace_updated"
+	duplicate.Payload = `{"name":"different"}`
+	second, err := repo.Create(ctx, duplicate)
+	if err != nil {
+		t.Fatalf("duplicate create: %v", err)
+	}
+	if second.ID != first.ID {
+		t.Errorf("id = %q, want %q", second.ID, first.ID)
+	}
+	if second.Sequence != first.Sequence {
+		t.Errorf("sequence = %d, want %d (existing row's sequence)", second.Sequence, first.Sequence)
+	}
+	if second.EventType != first.EventType {
+		t.Errorf("event_type changed: %q -> %q", first.EventType, second.EventType)
+	}
+	if second.Payload != first.Payload {
+		t.Errorf("payload changed: %q -> %q", first.Payload, second.Payload)
+	}
+
+	// Only one row must exist.
+	byType, err := repo.ListByType(ctx, "workspace_created", 10)
+	if err != nil {
+		t.Fatalf("list by type: %v", err)
+	}
+	if len(byType) != 1 {
+		t.Errorf("list by type len = %d, want 1", len(byType))
+	}
+	byTypeDup, err := repo.ListByType(ctx, "workspace_updated", 10)
+	if err != nil {
+		t.Fatalf("list by type dup: %v", err)
+	}
+	if len(byTypeDup) != 0 {
+		t.Errorf("list by type 'workspace_updated' len = %d, want 0 (idempotent upsert must not write new event_type)", len(byTypeDup))
+	}
+
+	latest, err := repo.LatestSequence(ctx, ws.ID)
+	if err != nil {
+		t.Fatalf("latest sequence: %v", err)
+	}
+	if latest != first.Sequence {
+		t.Errorf("latest = %d, want %d (no sequence consumed by duplicate)", latest, first.Sequence)
+	}
+
+	// A subsequent distinct event must still get a fresh, higher sequence.
+	follow := ev
+	follow.ID = domain.NewID()
+	follow.EventType = "workspace_updated"
+	third, err := repo.Create(ctx, follow)
+	if err != nil {
+		t.Fatalf("follow create: %v", err)
+	}
+	if third.Sequence <= first.Sequence {
+		t.Errorf("follow sequence = %d, want > %d", third.Sequence, first.Sequence)
 	}
 }
 

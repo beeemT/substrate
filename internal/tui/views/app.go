@@ -22,6 +22,7 @@ import (
 
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/config"
+	daemonapi "github.com/beeemT/substrate/internal/daemon/api"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/event"
 	"github.com/beeemT/substrate/internal/orchestrator"
@@ -48,6 +49,7 @@ const (
 	overlayLogs
 	overlayAddRepo
 	overlayRepoManager
+	overlayManageDaemons
 	overlayOverviewLinks
 	overlayReviewFollowup
 	overlayWorktreePicker
@@ -107,8 +109,20 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 	runtimeCtx RuntimeContext
 
 	// Bus subscription for event-driven updates
-	busSub        *event.Subscriber
-	eventConsumer *EventConsumer
+	eventCursor uint64
+	// eventGeneration is bumped on every workspace/daemon reload. Remote
+	// event batches stamped with a different generation must be dropped
+	// because they were produced against state the App no longer reflects.
+	eventGeneration      uint64
+	snapshotLoaded       bool
+	bufferedRemoteEvents []domain.SystemEvent
+	busSub               *event.Subscriber
+	eventConsumer        *EventConsumer
+	// deferRemoteSubscribe is set during Init when the daemon snapshot has
+	// not yet been loaded; InitialSnapshotLoadedMsg triggers the subscribe so
+	// we can pass the snapshot cursor as afterSequence and avoid replaying the
+	// full event log (which can exceed the 500-event replay window).
+	deferRemoteSubscribe bool
 
 	// Layout sub-models
 	sidebar   SidebarModel
@@ -131,6 +145,7 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 	logsOverlay                 LogsOverlay
 	addRepo                     AddRepoOverlay
 	repoManager                 RepoManagerOverlay
+	manageDaemons               ManageDaemonsOverlay
 	worktreePicker              WorktreePickerOverlay
 	hasWorkspace                bool
 	styles                      styles.Styles
@@ -143,16 +158,18 @@ type App struct { //nolint:recvcheck // Bubble Tea convention
 	inputBlocked                       bool
 
 	// State cache (refreshed by DB poll)
-	workItems []domain.Session
-	sessions  []domain.AgentSession
-	subPlans  map[string][]domain.TaskPlan          // keyed by planID
-	plans     map[string]*domain.Plan               // keyed by workItemID
-	questions map[string]map[string]domain.Question // sessionID → questionID → Question
-	reviews   map[string]ReviewsLoadedMsg           // keyed by sessionID
+	artifactItems map[string][]ArtifactItem
+	workItems     []domain.Session
+	sessions      []domain.AgentSession
+	subPlans      map[string][]domain.TaskPlan          // keyed by planID
+	plans         map[string]*domain.Plan               // keyed by workItemID
+	questions     map[string]map[string]domain.Question // sessionID → questionID → Question
+	reviews       map[string]ReviewsLoadedMsg           // keyed by sessionID
 
-	savedNewSessionFilters   []domain.NewSessionFilter
-	newSessionAutonomous     *NewSessionAutonomousRuntime
-	newSessionAutonomousChan <-chan tea.Msg
+	savedNewSessionFilters        []domain.NewSessionFilter
+	remoteNewSessionAutonomousRun *daemonapi.AutonomousModeRun
+	newSessionAutonomous          *NewSessionAutonomousRuntime
+	newSessionAutonomousChan      <-chan tea.Msg
 
 	// Log tailing deduplication
 	tailingSessionIDs map[string]bool
@@ -245,10 +262,12 @@ func NewApp(provider ServiceProvider, runtimeCtx RuntimeContext) *App {
 		logsOverlay:                    NewLogsOverlay(runtimeCtx.LogStore, st),
 		addRepo:                        NewAddRepoOverlay(provider.RepoSources(), runtimeCtx.WorkspaceDir, provider.GitClient(), st),
 		repoManager:                    NewRepoManagerOverlay(runtimeCtx.WorkspaceDir, provider.GitClient(), st),
+		manageDaemons:                  NewManageDaemonsOverlay(runtimeCtx.Cfg, st, nil),
 		worktreePicker:                 NewWorktreePickerOverlay(runtimeCtx.WorkspaceDir, provider.GitClient(), st),
 		toasts:                         components.NewToastModel(st),
 		startupIntegrationsInProgress:  runtimeCtx.StartupIntegrationsInProgress,
 		startupIntegrationSpinner:      components.NewSpinner(st),
+		artifactItems:                  make(map[string][]ArtifactItem),
 		subPlans:                       make(map[string][]domain.TaskPlan),
 		plans:                          make(map[string]*domain.Plan),
 		questions:                      make(map[string]map[string]domain.Question),
@@ -277,6 +296,7 @@ func NewApp(provider ServiceProvider, runtimeCtx RuntimeContext) *App {
 	if !app.hasWorkspace {
 		app.workspaceModal = NewWorkspaceInitModal(cwd, st, provider.Workspace())
 		app.activeOverlay = overlayWorkspaceInit
+		app.workspaceModal.SetWorkspaceClient(provider.WorkspaceClient())
 	}
 	return &app
 }
@@ -321,25 +341,38 @@ func (a *App) Init() tea.Cmd {
 	}
 
 	if a.runtimeCtx.WorkspaceID != "" {
-		cmds = append(cmds,
-			LoadSessionsCmd(a.provider.Session(), a.runtimeCtx.WorkspaceID),
-			LoadTasksCmd(a.provider.Task(), a.runtimeCtx.WorkspaceID),
-			LoadLiveInstancesCmd(a.provider.Instance(), a.runtimeCtx.WorkspaceID),
-			LoadNewSessionFiltersCmd(a.provider.NewSessionFilters(), a.runtimeCtx.WorkspaceID),
-			ReconcileOrphanedTasksCmd(a.provider.Task(), a.provider.Instance(), a.runtimeCtx.WorkspaceID, a.runtimeCtx.InstanceID),
-		)
-
-		// Subscribe to event bus for event-driven updates
+		// Subscribe before loading the snapshot so remote clients can replay
+		// events with sequence greater than the snapshot cursor without a
+		// lost-update window.
 		if a.provider.Bus() != nil {
 			var err error
 			a.busSub, err = a.provider.Bus().Subscribe("tui:"+a.runtimeCtx.WorkspaceID, eventSubscriptionTopics()...)
 			if err != nil {
 				slog.Error("failed to subscribe TUI to event bus", "error", err)
 			} else {
-				// Bridge: forward events from subscriber channel to the update loop via EventConsumer.
 				a.eventConsumer = NewEventConsumer(a, a.busSub)
 				cmds = append(cmds, a.eventConsumer.BridgeCmd())
 			}
+		} else if a.provider.EventClient() != nil {
+			// Defer the remote subscribe until after the snapshot loads so we can
+			// request afterSequence = snapshot.LatestEventSequence and avoid a
+			// >500-event replay hitting ResourceExhausted on long-running daemons.
+			a.deferRemoteSubscribe = true
+		}
+		if a.provider.Logic() != nil {
+			cmds = append(cmds, LoadSessionsWithClientCmd(a.provider.Logic(), a.runtimeCtx.WorkspaceID))
+		} else {
+			cmds = append(cmds,
+				LoadSessionsCmd(a.provider.Session(), a.runtimeCtx.WorkspaceID),
+				LoadTasksCmd(a.provider.Task(), a.runtimeCtx.WorkspaceID),
+				LoadLiveInstancesCmd(a.provider.Instance(), a.runtimeCtx.WorkspaceID),
+				LoadNewSessionFiltersCmd(a.provider.NewSessionFilters(), a.runtimeCtx.WorkspaceID),
+			)
+		}
+		// Orphan reconciliation runs whenever local services are present,
+		// including ServiceManager (in-process) startup where Logic() is non-nil.
+		if a.provider.Task() != nil && a.provider.Instance() != nil {
+			cmds = append(cmds, ReconcileOrphanedTasksCmd(a.provider.Task(), a.provider.Instance(), a.runtimeCtx.WorkspaceID, a.runtimeCtx.InstanceID))
 		}
 	}
 
@@ -367,6 +400,8 @@ func (a *App) applyServicesReload(reload viewsServicesReload) {
 	a.addRepo.SetSize(a.windowWidth, a.windowHeight)
 	a.addRepo.SetPresentSlugs(a.managedRepoSlugs)
 	a.repoManager = NewRepoManagerOverlay(a.runtimeCtx.WorkspaceDir, reload.Services.GitClient, a.statusBar.styles)
+	a.manageDaemons = NewManageDaemonsOverlay(a.runtimeCtx.Cfg, a.statusBar.styles, a.sendAsyncMsg)
+	a.manageDaemons.SetSize(a.windowWidth, a.windowHeight)
 	a.repoManager.SetSize(a.windowWidth, a.windowHeight)
 	a.worktreePicker = NewWorktreePickerOverlay(a.runtimeCtx.WorkspaceDir, reload.Services.GitClient, a.statusBar.styles)
 	a.worktreePicker.SetSize(a.windowWidth, a.windowHeight)
@@ -378,9 +413,14 @@ func (a *App) applyServicesReload(reload viewsServicesReload) {
 	// Update log level filter.
 	tuilog.SetDefaultLevel(logLevelFromConfig(reload.Cfg))
 }
-
 func (a *App) commandsAfterServiceReload(oldWorkspaceID string) []tea.Cmd {
 	cmds := make([]tea.Cmd, 0, 6)
+	a.snapshotLoaded = false
+	a.bufferedRemoteEvents = nil
+	if oldWorkspaceID != a.runtimeCtx.WorkspaceID {
+		a.eventGeneration++
+		a.eventCursor = 0
+	}
 	if a.provider.Bus() != nil {
 		if a.busSub != nil {
 			a.provider.Bus().Unsubscribe("tui:" + oldWorkspaceID)
@@ -393,15 +433,25 @@ func (a *App) commandsAfterServiceReload(oldWorkspaceID string) []tea.Cmd {
 			a.eventConsumer = NewEventConsumer(a, a.busSub)
 			cmds = append(cmds, a.eventConsumer.BridgeCmd())
 		}
+	} else if a.provider.EventClient() != nil {
+		a.eventCursor = 0
+		a.eventConsumer = NewEventConsumer(a, nil)
+		cmds = append(cmds, SubscribeEventsWithClientCmd(a.provider.EventClient(), a.runtimeCtx.WorkspaceID, a.eventCursor, true, a.eventGeneration, a.sendAsyncMsg))
 	}
 	if a.runtimeCtx.WorkspaceID != "" {
-		cmds = append(cmds,
-			LoadSessionsCmd(a.provider.Session(), a.runtimeCtx.WorkspaceID),
-			LoadTasksCmd(a.provider.Task(), a.runtimeCtx.WorkspaceID),
-			LoadLiveInstancesCmd(a.provider.Instance(), a.runtimeCtx.WorkspaceID),
-			LoadNewSessionFiltersCmd(a.provider.NewSessionFilters(), a.runtimeCtx.WorkspaceID),
-			ReconcileOrphanedTasksCmd(a.provider.Task(), a.provider.Instance(), a.runtimeCtx.WorkspaceID, a.runtimeCtx.InstanceID),
-		)
+		if a.provider.Logic() != nil {
+			cmds = append(cmds, LoadSessionsWithClientCmd(a.provider.Logic(), a.runtimeCtx.WorkspaceID))
+		} else {
+			cmds = append(cmds,
+				LoadSessionsCmd(a.provider.Session(), a.runtimeCtx.WorkspaceID),
+				LoadTasksCmd(a.provider.Task(), a.runtimeCtx.WorkspaceID),
+				LoadLiveInstancesCmd(a.provider.Instance(), a.runtimeCtx.WorkspaceID),
+				LoadNewSessionFiltersCmd(a.provider.NewSessionFilters(), a.runtimeCtx.WorkspaceID),
+			)
+		}
+		if a.provider.Task() != nil && a.provider.Instance() != nil {
+			cmds = append(cmds, ReconcileOrphanedTasksCmd(a.provider.Task(), a.provider.Instance(), a.runtimeCtx.WorkspaceID, a.runtimeCtx.InstanceID))
+		}
 	}
 	return cmds
 }
@@ -642,12 +692,28 @@ func (a *App) runSessionSearch(showLoading bool) tea.Cmd {
 		return nil
 	}
 	filter := a.sessionSearchFilter()
+	a.sessionSearch.SetEntries(mergeSessionHistoryEntries(a.localSessionSearchEntries(filter), a.sessionSearch.entries))
 	var spinnerCmd tea.Cmd
 	if showLoading {
 		spinnerCmd = a.sessionSearch.SetLoading(true)
 	}
-	a.sessionSearch.SetEntries(a.localSessionSearchEntries(filter))
+	if a.provider.Logic() != nil {
+		return tea.Batch(spinnerCmd, SearchSessionHistoryWithClientCmd(a.provider.Logic(), filter))
+	}
 	return tea.Batch(spinnerCmd, SearchSessionHistoryCmd(a.provider.Task(), filter))
+}
+
+func (a *App) openNewSession() tea.Cmd {
+	if a.provider != nil && a.provider.EventClient() != nil && len(a.provider.Adapters()) == 0 {
+		// Remote daemon mode does not yet expose a new-session API; surface
+		// the gap explicitly rather than opening an overlay that will fail on
+		// submit. This is the only path in the new-session flow that remains
+		// unsupported in remote mode.
+		a.toasts.AddToast("New session creation is not yet supported over a remote daemon", components.ToastWarning)
+		return nil
+	}
+	a.activeOverlay = overlayNewSession
+	return a.newSession.Open()
 }
 
 func (a *App) openSessionSearch() tea.Cmd {
@@ -656,19 +722,17 @@ func (a *App) openSessionSearch() tea.Cmd {
 	return a.runSessionSearch(true)
 }
 
-func (a *App) openNewSession() tea.Cmd {
-	a.activeOverlay = overlayNewSession
-	return a.newSession.Open()
-}
-
 func (a *App) syncNewSessionFilterOverlays() {
 	a.newSession.SetSavedNewSessionFilters(a.savedNewSessionFilters)
 	activeFilterIDs := []string(nil)
+	running := a.newSessionAutonomous != nil || (a.remoteNewSessionAutonomousRun != nil && a.remoteNewSessionAutonomousRun.Running)
 	if a.newSessionAutonomous != nil {
 		activeFilterIDs = a.newSessionAutonomous.activeFilterIDsSnapshot()
+	} else if a.remoteNewSessionAutonomousRun != nil {
+		activeFilterIDs = append(activeFilterIDs, a.remoteNewSessionAutonomousRun.ActiveFilterIDs...)
 	}
 	a.newSessionAutonomousOverlay.SetSavedFilters(a.savedNewSessionFilters)
-	a.newSessionAutonomousOverlay.SetRuntimeState(a.newSessionAutonomous != nil, activeFilterIDs)
+	a.newSessionAutonomousOverlay.SetRuntimeState(running, activeFilterIDs)
 }
 
 func (a *App) openNewSessionAutonomousOverlay() tea.Cmd {
@@ -676,6 +740,23 @@ func (a *App) openNewSessionAutonomousOverlay() tea.Cmd {
 	a.newSessionAutonomousOverlay.Open()
 	a.activeOverlay = overlayNewSessionAutonomous
 	return nil
+}
+
+func (a App) reloadSessionCmds(workItemID string, includePlan bool) []tea.Cmd {
+	if strings.TrimSpace(workItemID) == "" {
+		return nil
+	}
+	if a.provider.Logic() != nil {
+		return []tea.Cmd{LoadSessionsWithClientCmd(a.provider.Logic(), a.runtimeCtx.WorkspaceID)}
+	}
+	cmds := []tea.Cmd{
+		LoadSessionCmd(a.provider.Session(), workItemID),
+		LoadTasksForSessionCmd(a.provider.Task(), workItemID),
+	}
+	if includePlan {
+		cmds = append(cmds, LoadPlanForSessionCmd(a.provider.Plan(), workItemID))
+	}
+	return cmds
 }
 
 func (a *App) openAddRepo() tea.Cmd {
@@ -692,6 +773,13 @@ func (a *App) openAddRepo() tea.Cmd {
 func (a *App) openRepoManager() tea.Cmd {
 	a.activeOverlay = overlayRepoManager
 	return a.repoManager.Open()
+}
+
+func (a *App) openManageDaemons() tea.Cmd {
+	a.manageDaemons.SetConfig(a.runtimeCtx.Cfg)
+	a.manageDaemons.send = a.sendAsyncMsg
+	a.activeOverlay = overlayManageDaemons
+	return a.manageDaemons.Open()
 }
 
 func (a *App) openActionMenu() tea.Cmd {
@@ -1384,6 +1472,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.toasts.SetWidth(msg.Width)
 		sbHeight := a.statusBar.RequiredHeight(a.currentHints(), a.statusBarText(), msg.Width)
 		a.sbHeight = sbHeight
+		a.manageDaemons.SetSize(msg.Width, msg.Height)
 		layout := styles.ComputeMainPageLayout(msg.Width, msg.Height, SidebarWidth, a.statusBar.styles.Chrome, sbHeight)
 		a.sidebar.SetWidth(layout.SidebarInnerWidth)
 		a.sidebar.SetHeight(layout.PaneInnerHeight)
@@ -1425,6 +1514,31 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case WorkspaceInitDoneMsg:
+		// Bump the event generation so any in-flight remote batches from the
+		// pre-init workspace are dropped when they arrive.
+		a.eventGeneration++
+		a.eventCursor = 0
+		a.snapshotLoaded = false
+		a.bufferedRemoteEvents = nil
+		// Remote daemon mode: the workspace was already adopted by the daemon.
+		// The local ServiceManager assertion in initializeWorkspaceServicesCmd
+		// cannot succeed against DaemonProvider, so adopt the workspace in
+		// place and let the logic client drive the reload. In-process mode also
+		// exposes a logic client, but still needs a local service graph rebuild.
+		if a.provider.EventClient() != nil && a.provider.Logic() != nil {
+			a.runtimeCtx.WorkspaceID = msg.WorkspaceID
+			a.runtimeCtx.WorkspaceName = msg.WorkspaceName
+			a.runtimeCtx.WorkspaceDir = msg.WorkspaceDir
+			a.hasWorkspace = msg.WorkspaceID != ""
+			a.activeOverlay = overlayNone
+			a.toasts.AddToast("Workspace initialized", components.ToastSuccess)
+			cmds = append(cmds, LoadSessionsWithClientCmd(a.provider.Logic(), a.runtimeCtx.WorkspaceID))
+			if a.provider.EventClient() != nil && a.runtimeCtx.WorkspaceID != "" {
+				cmds = append(cmds, SubscribeEventsWithClientCmd(a.provider.EventClient(), a.runtimeCtx.WorkspaceID, a.eventCursor, true, a.eventGeneration, a.sendAsyncMsg))
+			}
+			cmds = append(cmds, WorkspaceHealthCheckCmd(a.runtimeCtx.WorkspaceDir))
+			return a, tea.Batch(cmds...)
+		}
 		cmds = append(cmds, initializeWorkspaceServicesCmd(
 			a.provider,
 			a.runtimeCtx,
@@ -1528,6 +1642,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.sourceItemsOverlay.Close()
 		a.addRepo.Close()
 		a.repoManager.Close()
+		a.manageDaemons.Close()
 		a.worktreePicker.Close()
 		a.overviewLinksOverlay.Close()
 		a.overviewLinksReturnOverlay = overlayNone
@@ -1536,13 +1651,35 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case PollTickMsg:
 		a.toasts.Prune()
-		if a.runtimeCtx.InstanceID != "" {
+		if a.runtimeCtx.InstanceID != "" && a.provider.Instance() != nil {
 			cmds = append(cmds, HeartbeatCmd(a.provider.Instance(), a.runtimeCtx.InstanceID))
 		}
-		if a.activeOverlay == overlaySessionSearch {
-			cmds = append(cmds, a.runSessionSearch(false))
-		}
 		cmds = append(cmds, PollTickCmd())
+		return a, tea.Batch(cmds...)
+	case RemoteEventBatchMsg:
+		// Drop batches produced before a workspace switch or daemon reload: their
+		// payload was generated against state the App no longer reflects and
+		// must not mutate the new workspace's UI.
+		if msg.WorkspaceID != "" && msg.WorkspaceID != a.runtimeCtx.WorkspaceID {
+			return a, nil
+		}
+		if msg.Generation != 0 && msg.Generation != a.eventGeneration {
+			return a, nil
+		}
+		if msg.Err != nil {
+			slog.Warn("daemon event stream failed", "error", msg.Err)
+			a.toasts.AddToast("Daemon event stream failed; reconnect from the action menu", components.ToastError)
+			return a, nil
+		}
+		a.eventCursor = msg.LatestSequence
+		if !a.snapshotLoaded {
+			a.bufferedRemoteEvents = append(a.bufferedRemoteEvents, msg.Events...)
+		} else {
+			for _, evt := range msg.Events {
+				evt := evt
+				cmds = append(cmds, func() tea.Msg { return DomainEventMsg{Event: evt} })
+			}
+		}
 		return a, tea.Batch(cmds...)
 
 	case DomainEventMsg:
@@ -1577,11 +1714,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			domain.EventWorkItemArchived:
 			workItemID := extractWorkItemID(msg.Event.Payload)
 			if workItemID != "" {
-				cmds = append(cmds,
-					LoadSessionCmd(a.provider.Session(), workItemID),
-					LoadTasksForSessionCmd(a.provider.Task(), workItemID),
-					LoadPlanForSessionCmd(a.provider.Plan(), workItemID),
-				)
+				cmds = append(cmds, a.reloadSessionCmds(workItemID, true)...)
 			}
 			if a.currentWorkItemID != "" {
 				cmds = append(cmds, a.updateContentFromState())
@@ -1592,10 +1725,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case domain.EventAgentSessionStarted:
 			workItemID := extractWorkItemID(msg.Event.Payload)
 			if workItemID != "" {
-				cmds = append(cmds,
-					LoadSessionCmd(a.provider.Session(), workItemID),
-					LoadTasksForSessionCmd(a.provider.Task(), workItemID),
-				)
+				cmds = append(cmds, a.reloadSessionCmds(workItemID, false)...)
 			}
 			if a.currentWorkItemID != "" {
 				cmds = append(cmds, a.updateContentFromState())
@@ -1610,7 +1740,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			domain.EventAgentSessionWaitingForAnswer:
 			workItemID := extractWorkItemID(msg.Event.Payload)
 			if workItemID != "" {
-				cmds = append(cmds, LoadTasksForSessionCmd(a.provider.Task(), workItemID))
+				cmds = append(cmds, a.reloadSessionCmds(workItemID, false)...)
 			}
 			if a.currentWorkItemID != "" {
 				cmds = append(cmds, a.updateContentFromState())
@@ -1641,7 +1771,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case HeartbeatTickMsg:
-		if a.runtimeCtx.InstanceID != "" {
+		if a.runtimeCtx.InstanceID != "" && a.provider.Instance() != nil {
 			cmds = append(cmds, HeartbeatCmd(a.provider.Instance(), a.runtimeCtx.InstanceID))
 		}
 		cmds = append(cmds, HeartbeatTickCmd())
@@ -1659,6 +1789,75 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.startupIntegrationSpinner, cmd = a.startupIntegrationSpinner.Update(msg.Tick)
 		a.startupIntegrationSpinnerFrameOnly = true
 		return a, wrapStartupIntegrationsSpinnerTickCmd(cmd)
+
+	case InitialSnapshotLoadedMsg:
+		if msg.WorkspaceID != a.runtimeCtx.WorkspaceID {
+			return a, nil
+		}
+		snapshot := msg.Snapshot
+		a.snapshotLoaded = true
+		a.eventCursor = snapshot.LatestEventSequence
+		a.workItems = snapshot.Sessions
+		a.sessions = snapshot.AgentSessions
+		a.plans = make(map[string]*domain.Plan, len(snapshot.Plans))
+		a.subPlans = make(map[string][]domain.TaskPlan, len(snapshot.SubPlans))
+		for workItemID, plan := range snapshot.Plans {
+			planCopy := plan
+			a.plans[workItemID] = &planCopy
+			if children, ok := snapshot.SubPlans[workItemID]; ok {
+				a.subPlans[plan.ID] = children
+			}
+		}
+		a.questions = make(map[string]map[string]domain.Question, len(snapshot.Questions))
+		for sessionID, questions := range snapshot.Questions {
+			byID := make(map[string]domain.Question, len(questions))
+			for _, question := range questions {
+				byID[question.ID] = question
+			}
+			a.questions[sessionID] = byID
+		}
+		a.reviews = make(map[string]ReviewsLoadedMsg, len(snapshot.Reviews))
+		for sessionID, cycles := range snapshot.Reviews {
+			critiques := map[string][]domain.Critique{}
+			for _, cycle := range cycles {
+				if existing, ok := snapshot.Critiques[cycle.ID]; ok && len(existing) > 0 {
+					critiques[cycle.ID] = append([]domain.Critique(nil), existing...)
+				}
+			}
+			a.reviews[sessionID] = ReviewsLoadedMsg{SessionID: sessionID, Cycles: cycles, Critiques: critiques}
+		}
+		a.artifactItems = make(map[string][]ArtifactItem, len(snapshot.Artifacts))
+		for workItemID, items := range snapshot.Artifacts {
+			converted := make([]ArtifactItem, 0, len(items))
+			for _, item := range items {
+				converted = append(converted, artifactItemFromLogic(item))
+			}
+			a.artifactItems[workItemID] = converted
+		}
+		a.savedNewSessionFilters = snapshot.Filters
+		a.liveInstanceIDs = make(map[string]bool, len(snapshot.LiveInstances))
+		for _, instance := range snapshot.LiveInstances {
+			a.liveInstanceIDs[instance.ID] = true
+		}
+		a.rebuildSidebar()
+		a.refreshSessionSearchEntriesFromLocalState()
+		for _, evt := range a.bufferedRemoteEvents {
+			if evt.Sequence > snapshot.LatestEventSequence {
+				evt := evt
+				cmds = append(cmds, func() tea.Msg { return DomainEventMsg{Event: evt} })
+			}
+			if evt.Sequence > a.eventCursor {
+				a.eventCursor = evt.Sequence
+			}
+		}
+		a.bufferedRemoteEvents = nil
+		if a.deferRemoteSubscribe && a.provider.EventClient() != nil {
+			a.deferRemoteSubscribe = false
+			a.eventConsumer = NewEventConsumer(a, nil)
+			cmds = append(cmds, SubscribeEventsWithClientCmd(a.provider.EventClient(), a.runtimeCtx.WorkspaceID, a.eventCursor, true, a.eventGeneration, a.sendAsyncMsg))
+		}
+		cmds = append(cmds, a.updateContentFromState())
+		return a, tea.Batch(cmds...)
 
 	case SessionsLoadedMsg:
 		if msg.WorkspaceID != a.runtimeCtx.WorkspaceID {
@@ -1930,11 +2129,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case SubPlanPRReadyMsg:
-		// Refresh session and plan data when a PR/MR becomes ready.
+		// Refresh session, plan, tasks, and daemon artifact snapshots when a PR/MR becomes ready.
 		if msg.WorkItemID != "" {
-			cmds = append(cmds, LoadSessionCmd(a.provider.Session(), msg.WorkItemID))
-			cmds = append(cmds, LoadPlanForSessionCmd(a.provider.Plan(), msg.WorkItemID))
-			cmds = append(cmds, LoadTasksForSessionCmd(a.provider.Task(), msg.WorkItemID))
+			cmds = append(cmds, a.reloadSessionCmds(msg.WorkItemID, true)...)
 		}
 		a.rebuildSidebar()
 		a.refreshSessionSearchEntriesFromLocalState()
@@ -1963,15 +2160,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case QuestionAnsweredMsg:
 		a.removeQuestion(msg.SessionID, msg.QuestionID)
-		a.rebuildSidebar()
-		if a.currentWorkItemID != "" {
-			cmds = append(cmds, a.updateContentFromState())
-		}
-		return a, tea.Batch(cmds...)
-
 	case ReviewStartedMsg, ReviewCompletedMsg, CritiquesFoundMsg, ReimplementationStartedMsg:
 		sessionID := extractReviewSessionID(msg)
-		cmds = append(cmds, LoadReviewsCmd(a.provider.Review(), sessionID))
+		if a.provider.Review() != nil {
+			cmds = append(cmds, LoadReviewsCmd(a.provider.Review(), sessionID))
+		} else if a.provider.Logic() != nil {
+			// In remote (daemon) mode the Review service is nil; fall back to
+			// reloading via the logic client snapshot to avoid a nil deref.
+			cmds = append(cmds, LoadSessionsWithClientCmd(a.provider.Logic(), a.runtimeCtx.WorkspaceID))
+		}
 		if a.currentWorkItemID != "" {
 			cmds = append(cmds, a.updateContentFromState())
 		}
@@ -1985,7 +2182,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case PRReviewStateChangedMsg:
 		if msg.WorkItemID != "" {
-			cmds = append(cmds, LoadSessionCmd(a.provider.Session(), msg.WorkItemID))
+			cmds = append(cmds, a.reloadSessionCmds(msg.WorkItemID, false)...)
 		}
 		if a.currentWorkItemID != "" {
 			cmds = append(cmds, a.updateContentFromState())
@@ -1994,10 +2191,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case PRMergedMsg:
 		if msg.WorkItemID != "" {
-			cmds = append(cmds,
-				LoadSessionCmd(a.provider.Session(), msg.WorkItemID),
-				LoadTasksForSessionCmd(a.provider.Task(), msg.WorkItemID),
-			)
+			cmds = append(cmds, a.reloadSessionCmds(msg.WorkItemID, false)...)
 		}
 		if a.currentWorkItemID != "" {
 			cmds = append(cmds, a.updateContentFromState())
@@ -2012,7 +2206,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case PlanEditedMsg:
-		cmds = append(cmds, SaveReviewedPlanCmd(a.provider.Planning(), msg.PlanID, msg.NewContent))
+		if a.provider.Logic() != nil {
+			cmds = append(cmds, SaveReviewedPlanWithClientCmd(a.provider.Logic(), msg.PlanID, msg.NewContent))
+		} else {
+			cmds = append(cmds, SaveReviewedPlanCmd(a.provider.Planning(), msg.PlanID, msg.NewContent))
+		}
 		return a, tea.Batch(cmds...)
 
 	case PlanSavedMsg:
@@ -2124,7 +2322,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case StartPlanMsg:
-		if a.provider.Planning() != nil {
+		if a.provider.Logic() != nil {
+			cmds = append(cmds, StartPlanningWithClientCmd(a.registerPipelineCancel(msg.WorkItemID), a.provider.Logic(), msg.WorkItemID))
+		} else if a.provider.Planning() != nil {
 			cmds = append(cmds, StartPlanningCmd(a.registerPipelineCancel(msg.WorkItemID), a.provider.Planning(), msg.WorkItemID))
 		} else {
 			a.toasts.AddToast("Planning service not configured", components.ToastError)
@@ -2132,7 +2332,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case RestartPlanMsg:
-		if a.provider.Planning() != nil && a.provider.Session() != nil {
+		if a.provider.Logic() != nil {
+			cmds = append(cmds, RestartPlanningWithClientCmd(a.registerPipelineCancel(msg.WorkItemID), a.provider.Logic(), msg.WorkItemID, msg.Prompt))
+		} else if a.provider.Planning() != nil && a.provider.Session() != nil {
 			cmds = append(cmds, RestartPlanningCmd(a.registerPipelineCancel(msg.WorkItemID), a.provider.Session(), a.provider.Planning(), a.provider.Task(), a.sendAsyncMsg, msg.WorkItemID, msg.Prompt))
 		} else {
 			a.toasts.AddToast("Planning service not configured", components.ToastError)
@@ -2140,19 +2342,27 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case PlanApproveMsg:
-		cmds = append(cmds, ApprovePlanCmd(a.provider.Session(), a.provider.Plan(), a.runtimeCtx.Cfg, a.provider.Bus(), msg.PlanID, msg.WorkItemID))
+		if a.provider.Logic() != nil {
+			cmds = append(cmds, ApprovePlanWithClientCmd(a.provider.Logic(), msg.PlanID, msg.WorkItemID))
+		} else if a.provider.Session() != nil && a.provider.Plan() != nil {
+			cmds = append(cmds, ApprovePlanCmd(a.provider.Session(), a.provider.Plan(), a.runtimeCtx.Cfg, a.provider.Bus(), msg.PlanID, msg.WorkItemID))
+		}
 		return a, tea.Batch(cmds...)
 
 	case PlanApprovedMsg:
-		if a.provider.Implementation() != nil {
+		if a.provider.Logic() != nil {
+			cmds = append(cmds, RunImplementationWithClientCmd(a.registerPipelineCancel(msg.WorkItemID), a.provider.Logic(), msg.PlanID))
+		} else if a.provider.Implementation() != nil {
 			cmds = append(cmds, RunImplementationCmd(a.registerPipelineCancel(msg.WorkItemID), a.provider.Implementation(), msg.PlanID))
+			// Start foreman for the work item
+			cmds = append(cmds, BeginForemanOrchestratedCmd(a.provider.Implementation(), msg.WorkItemID, msg.PlanID))
 		}
-		// Start foreman for the work item
-		cmds = append(cmds, BeginForemanOrchestratedCmd(a.provider.Implementation(), msg.WorkItemID, msg.PlanID))
 		return a, tea.Batch(cmds...)
 
 	case PlanRequestChangesMsg:
-		if a.provider.Planning() != nil {
+		if a.provider.Logic() != nil {
+			cmds = append(cmds, PlanWithFeedbackWithClientCmd(a.registerPipelineCancel(a.currentWorkItemID), a.provider.Logic(), a.currentWorkItemID, msg.PlanID, msg.Feedback))
+		} else if a.provider.Planning() != nil {
 			cmds = append(cmds, PlanWithFeedbackCmd(a.registerPipelineCancel(a.currentWorkItemID), a.provider.Planning(), a.currentWorkItemID, msg.PlanID, msg.Feedback))
 		} else {
 			a.toasts.AddToast("Plan revision requested (no planning service)", components.ToastInfo)
@@ -2160,7 +2370,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case AnswerQuestionMsg:
-		cmds = append(cmds, AnswerQuestionCmd(a.provider.AnswerRouter(), msg.QuestionID, msg.Answer, msg.AnsweredBy))
+		if a.provider.Logic() != nil {
+			cmds = append(cmds, AnswerQuestionWithClientCmd(a.provider.Logic(), msg.QuestionID, msg.Answer, msg.AnsweredBy))
+		} else {
+			cmds = append(cmds, AnswerQuestionCmd(a.provider.AnswerRouter(), msg.QuestionID, msg.Answer, msg.AnsweredBy))
+		}
 		return a, tea.Batch(cmds...)
 
 	case SteerSessionMsg:
@@ -2168,16 +2382,32 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if session := a.workItemTaskSession(a.currentWorkItemID, msg.SessionID); session != nil && session.Kind == domain.AgentSessionKindManual {
 				switch session.Status {
 				case domain.AgentSessionCompleted, domain.AgentSessionFailed:
-					cmds = append(cmds, FollowUpManualSessionCmd(context.Background(), a.provider.Task(), a.provider.Manual(), msg.SessionID, msg.Message))
+					if a.provider.Logic() != nil {
+						cmds = append(cmds, FollowUpSessionWithClientCmd(context.Background(), a.provider.Logic(), msg.SessionID, msg.Message, a.runtimeCtx.InstanceID))
+					} else {
+						cmds = append(cmds, FollowUpManualSessionCmd(context.Background(), a.provider.Task(), a.provider.Manual(), msg.SessionID, msg.Message))
+					}
 				case domain.AgentSessionWaitingForAnswer:
 					if questionID := a.pendingQuestionIDForSession(msg.SessionID); questionID != "" {
-						cmds = append(cmds, AnswerQuestionCmd(a.provider.AnswerRouter(), questionID, msg.Message, "human"))
+						if a.provider.Logic() != nil {
+							cmds = append(cmds, AnswerQuestionWithClientCmd(a.provider.Logic(), questionID, msg.Message, "human"))
+						} else {
+							cmds = append(cmds, AnswerQuestionCmd(a.provider.AnswerRouter(), questionID, msg.Message, "human"))
+						}
+					} else if a.provider.Logic() != nil {
+						cmds = append(cmds, SteerSessionWithClientCmd(a.provider.Logic(), msg.SessionID, msg.Message))
 					} else {
 						cmds = append(cmds, SendManualSessionMessageCmd(a.provider.Manual(), msg.SessionID, msg.Message))
 					}
 				case domain.AgentSessionPending, domain.AgentSessionRunning:
-					cmds = append(cmds, SendManualSessionMessageCmd(a.provider.Manual(), msg.SessionID, msg.Message))
+					if a.provider.Logic() != nil {
+						cmds = append(cmds, SteerSessionWithClientCmd(a.provider.Logic(), msg.SessionID, msg.Message))
+					} else {
+						cmds = append(cmds, SendManualSessionMessageCmd(a.provider.Manual(), msg.SessionID, msg.Message))
+					}
 				}
+			} else if a.provider.Logic() != nil {
+				cmds = append(cmds, SteerSessionWithClientCmd(a.provider.Logic(), msg.SessionID, msg.Message))
 			} else if a.provider.SessionRegistry() != nil {
 				cmds = append(cmds, SteerSessionCmd(a.provider.SessionRegistry(), msg.SessionID, msg.Message))
 			}
@@ -2203,10 +2433,18 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		if task.Kind == domain.AgentSessionKindManual {
-			cmds = append(cmds, FollowUpManualSessionCmd(context.Background(), a.provider.Task(), a.provider.Manual(), msg.TaskID, msg.Feedback))
+			if a.provider.Logic() != nil {
+				cmds = append(cmds, FollowUpSessionWithClientCmd(context.Background(), a.provider.Logic(), msg.TaskID, msg.Feedback, a.runtimeCtx.InstanceID))
+			} else {
+				cmds = append(cmds, FollowUpManualSessionCmd(context.Background(), a.provider.Task(), a.provider.Manual(), msg.TaskID, msg.Feedback))
+			}
 			return a, tea.Batch(cmds...)
 		}
-		if a.provider.Task() != nil && a.provider.Implementation() != nil {
+		if a.provider.Logic() != nil {
+			ctx := a.pipelineCtxForTask(msg.TaskID)
+			cmds = append(cmds, FollowUpSessionWithClientCmd(ctx, a.provider.Logic(), msg.TaskID, msg.Feedback, a.runtimeCtx.InstanceID))
+			a.toasts.AddToast("Follow-up session started", components.ToastSuccess)
+		} else if a.provider.Task() != nil && a.provider.Implementation() != nil {
 			ctx := a.pipelineCtxForTask(msg.TaskID)
 			cmds = append(cmds, FollowUpSessionCmd(ctx, a.provider.Task(), a.provider.Implementation(), a.sendAsyncMsg, msg.TaskID, msg.Feedback, a.runtimeCtx.InstanceID))
 			if task.WorkItemID != "" {
@@ -2231,10 +2469,18 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		if task.Kind == domain.AgentSessionKindManual {
-			cmds = append(cmds, FollowUpManualSessionCmd(context.Background(), a.provider.Task(), a.provider.Manual(), msg.TaskID, msg.Feedback))
+			if a.provider.Logic() != nil {
+				cmds = append(cmds, FollowUpSessionWithClientCmd(context.Background(), a.provider.Logic(), msg.TaskID, msg.Feedback, a.runtimeCtx.InstanceID))
+			} else {
+				cmds = append(cmds, FollowUpManualSessionCmd(context.Background(), a.provider.Task(), a.provider.Manual(), msg.TaskID, msg.Feedback))
+			}
 			return a, tea.Batch(cmds...)
 		}
-		if a.provider.Task() != nil && a.provider.Implementation() != nil {
+		if a.provider.Logic() != nil {
+			ctx := a.pipelineCtxForTask(msg.TaskID)
+			cmds = append(cmds, FollowUpSessionWithClientCmd(ctx, a.provider.Logic(), msg.TaskID, msg.Feedback, a.runtimeCtx.InstanceID))
+			a.toasts.AddToast("Follow-up session started for failed task", components.ToastSuccess)
+		} else if a.provider.Task() != nil && a.provider.Implementation() != nil {
 			workItemID := task.WorkItemID
 			if workItemID != "" {
 				ctx := a.pipelineCtxForTask(msg.TaskID)
@@ -2247,6 +2493,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case FollowUpPlanMsg:
+		if a.provider.Logic() != nil {
+			return a, FollowUpPlanWithClientCmd(a.registerPipelineCancel(msg.WorkItemID), a.provider.Logic(), msg.WorkItemID, msg.Feedback)
+		}
 		if a.provider.Planning() == nil {
 			return a, nil
 		}
@@ -2258,11 +2507,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		a.toasts.AddToast("Follow-up plan ready for review", components.ToastSuccess)
-		// Reload the session and plan for the work item
-		cmds = append(cmds,
-			LoadSessionCmd(a.provider.Session(), msg.WorkItemID),
-			LoadPlanForSessionCmd(a.provider.Plan(), msg.WorkItemID),
-		)
+		// Reload the session and plan for the work item. In daemon mode
+		// reloadSessionCmds routes through the logic client so we do not hit
+		// a local service that DaemonProvider does not implement.
+		cmds = append(cmds, a.reloadSessionCmds(msg.WorkItemID, true)...)
 		return a, tea.Batch(cmds...)
 
 	case FetchReviewCommentsMsg:
@@ -2350,14 +2598,25 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case FollowUpFromReviewReplanMsg:
 		a.activeOverlay = overlayNone
 		a.reviewFollowupOverlay.Close()
-		if a.provider.Planning() == nil || strings.TrimSpace(msg.Feedback) == "" {
-			a.toasts.AddToast("Re-plan not dispatched: missing planning service or feedback", components.ToastWarning)
+		if strings.TrimSpace(msg.Feedback) == "" {
+			a.toasts.AddToast("Re-plan not dispatched: missing feedback", components.ToastWarning)
+			return a, nil
+		}
+		if a.provider.Logic() != nil {
+			return a, FollowUpPlanWithClientCmd(a.registerPipelineCancel(msg.WorkItemID), a.provider.Logic(), msg.WorkItemID, msg.Feedback)
+		}
+		if a.provider.Planning() == nil {
+			a.toasts.AddToast("Re-plan not dispatched: missing planning service", components.ToastWarning)
 			return a, nil
 		}
 		return a, FollowUpPlanCmd(a.registerPipelineCancel(msg.WorkItemID), a.provider.Planning(), msg.WorkItemID, msg.Feedback)
 
 	case SkipQuestionMsg:
-		cmds = append(cmds, SkipQuestionCmd(a.provider.AnswerRouter(), msg.QuestionID))
+		if a.provider.Logic() != nil {
+			cmds = append(cmds, SkipQuestionWithClientCmd(a.provider.Logic(), msg.QuestionID))
+		} else {
+			cmds = append(cmds, SkipQuestionCmd(a.provider.AnswerRouter(), msg.QuestionID))
+		}
 		return a, tea.Batch(cmds...)
 
 	case ResumeSessionMsg:
@@ -2366,6 +2625,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.resumeInFlight[msg.WorkItemID] = true
 		cmds = append(cmds, a.updateContentFromState())
+		if a.provider.Logic() != nil {
+			cmds = append(cmds, ResumeAllSessionsForWorkItemWithClientCmd(
+				context.Background(),
+				a.provider.Logic(),
+				msg.WorkItemID,
+				a.runtimeCtx.InstanceID,
+			))
+			return a, tea.Batch(cmds...)
+		}
 		if a.provider.Implementation() == nil {
 			a.toasts.AddToast("Resume not available (no implementation service)", components.ToastError)
 			delete(a.resumeInFlight, msg.WorkItemID)
@@ -2380,15 +2648,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		))
 		return a, tea.Batch(cmds...)
 
-	case AbandonSessionMsg:
-		cmds = append(cmds, abandonSessionCmd(a.provider.Task(), msg.SessionID))
-		return a, tea.Batch(cmds...)
-
 	case DeleteSessionMsg:
-		// Cancel the orchestrator goroutine (implementation/planning) for this
-		// work item. This cascades through executeWave → executeSubPlan → Wait
-		// → Abort on every running agent session owned by the pipeline.
+		// Cancel any client-side pipeline handle before asking the product layer
+		// to delete the durable session graph.
 		a.cancelPipeline(msg.SessionID)
+		if a.provider.Logic() != nil {
+			cmds = append(cmds, deleteSessionWithClientCmd(a.provider.Logic(), msg.SessionID))
+			return a, tea.Batch(cmds...)
+		}
+		// Stop local in-process work before deleting the backing records.
 
 		// Stop the Foreman for this work item.
 		cmds = append(cmds, EndForemanOrchestratedCmd(a.provider.Implementation(), msg.SessionID))
@@ -2414,15 +2682,31 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if focusAfterArchive {
 			focusWorkItemID = a.workItemFocusTargetAfterRemoval(msg.WorkItemID)
 		}
-		cmds = append(cmds, archiveSessionCmd(a.provider.Session(), msg.WorkItemID, focusAfterArchive, focusWorkItemID))
+		if a.provider.Logic() != nil {
+			cmds = append(cmds, archiveSessionWithClientCmd(a.provider.Logic(), msg.WorkItemID, focusAfterArchive, focusWorkItemID))
+		} else {
+			cmds = append(cmds, archiveSessionCmd(a.provider.Session(), msg.WorkItemID, focusAfterArchive, focusWorkItemID))
+		}
 		return a, tea.Batch(cmds...)
 
 	case UnarchiveSessionMsg:
-		cmds = append(cmds, unarchiveSessionCmd(a.provider.Session(), msg.WorkItemID))
+		if a.provider.Logic() != nil {
+			cmds = append(cmds, unarchiveSessionWithClientCmd(a.provider.Logic(), msg.WorkItemID))
+		} else {
+			cmds = append(cmds, unarchiveSessionCmd(a.provider.Session(), msg.WorkItemID))
+		}
 		return a, tea.Batch(cmds...)
 
 	case SessionArchivedMsg:
-		updated, err := a.provider.Session().Get(context.Background(), msg.WorkItemID)
+		var (
+			updated domain.Session
+			err     error
+		)
+		if a.provider.Logic() != nil {
+			updated, err = a.provider.Logic().GetSession(context.Background(), msg.WorkItemID)
+		} else {
+			updated, err = a.provider.Session().Get(context.Background(), msg.WorkItemID)
+		}
 		if err != nil {
 			slog.Error("failed to fetch archived work item", "error", err, "work_item_id", msg.WorkItemID)
 		} else {
@@ -2444,7 +2728,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case SessionUnarchivedMsg:
-		updated, err := a.provider.Session().Get(context.Background(), msg.WorkItemID)
+		var (
+			updated domain.Session
+			err     error
+		)
+		if a.provider.Logic() != nil {
+			updated, err = a.provider.Logic().GetSession(context.Background(), msg.WorkItemID)
+		} else {
+			updated, err = a.provider.Session().Get(context.Background(), msg.WorkItemID)
+		}
 		if err != nil {
 			slog.Error("failed to fetch unarchived work item", "error", err, "work_item_id", msg.WorkItemID)
 		} else {
@@ -2459,45 +2751,63 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case ReimplementMsg:
-		if a.provider.Implementation() != nil {
-			if plan := a.plans[msg.WorkItemID]; plan != nil {
+		if plan := a.plans[msg.WorkItemID]; plan != nil {
+			if a.provider.Logic() != nil {
+				cmds = append(cmds, RunImplementationWithClientCmd(a.registerPipelineCancel(msg.WorkItemID), a.provider.Logic(), plan.ID))
+			} else if a.provider.Implementation() != nil {
 				cmds = append(cmds, RunImplementationCmd(a.registerPipelineCancel(msg.WorkItemID), a.provider.Implementation(), plan.ID))
 				// Restart foreman with new plan
 				cmds = append(cmds, RestartForemanWithPlanOrchestratedCmd(a.provider.Implementation(), msg.WorkItemID, plan.ID))
 			} else {
-				a.toasts.AddToast("Plan not found for re-implementation", components.ToastError)
+				a.toasts.AddToast("Implementation service not configured", components.ToastError)
 			}
 		} else {
-			a.toasts.AddToast("Implementation service not configured", components.ToastError)
+			a.toasts.AddToast("Plan not found for re-implementation", components.ToastError)
 		}
 		return a, tea.Batch(cmds...)
 
 	case RetryFailedMsg:
 		a.toasts.AddToast("Retrying failed or interrupted repos...", components.ToastInfo)
-		if a.provider.Implementation() != nil {
-			if plan := a.plans[msg.WorkItemID]; plan != nil {
+		if plan := a.plans[msg.WorkItemID]; plan != nil {
+			if a.provider.Logic() != nil {
+				cmds = append(cmds, RetryFailedWithClientCmd(a.registerPipelineCancel(msg.WorkItemID), a.provider.Logic(), plan.ID, msg.WorkItemID))
+			} else if a.provider.Implementation() != nil {
 				cmds = append(cmds, RetryFailedCmd(a.registerPipelineCancel(msg.WorkItemID), a.provider.Session(), a.provider.Implementation(), plan.ID, msg.WorkItemID))
 				// Restart foreman with new plan
 				cmds = append(cmds, RestartForemanWithPlanOrchestratedCmd(a.provider.Implementation(), msg.WorkItemID, plan.ID))
 			} else {
-				a.toasts.AddToast("Plan not found for retry", components.ToastError)
+				a.toasts.AddToast("Implementation service not configured", components.ToastError)
 			}
 		} else {
-			a.toasts.AddToast("Implementation service not configured", components.ToastError)
+			a.toasts.AddToast("Plan not found for retry", components.ToastError)
 		}
 		return a, tea.Batch(cmds...)
 
 	case FinalizeWorkItemMsg:
 		a.toasts.AddToast("Finalizing completed work item...", components.ToastInfo)
-		if a.provider.Implementation() != nil {
+		if a.provider.Logic() != nil {
+			cmds = append(cmds, FinalizeWorkItemWithClientCmd(a.registerPipelineCancel(msg.WorkItemID), a.provider.Logic(), msg.WorkItemID))
+		} else if a.provider.Implementation() != nil {
 			cmds = append(cmds, FinalizeWorkItemCmd(a.registerPipelineCancel(msg.WorkItemID), a.provider.Implementation(), msg.WorkItemID))
 		} else {
 			a.toasts.AddToast("Implementation service not configured", components.ToastError)
 		}
 		return a, tea.Batch(cmds...)
 
+	case OverrideAcceptMsg:
+		if a.provider.Logic() != nil {
+			cmds = append(cmds, OverrideAcceptWithClientCmd(a.provider.Logic(), msg.WorkItemID))
+		} else {
+			cmds = append(cmds, OverrideAcceptCmd(a.provider.Session(), msg.WorkItemID))
+		}
+		return a, tea.Batch(cmds...)
+
 	case FailReviewMsg:
-		cmds = append(cmds, FailReviewCmd(a.provider.Session(), msg.WorkItemID))
+		if a.provider.Logic() != nil {
+			cmds = append(cmds, FailReviewWithClientCmd(a.provider.Logic(), msg.WorkItemID))
+		} else {
+			cmds = append(cmds, FailReviewCmd(a.provider.Session(), msg.WorkItemID))
+		}
 		return a, tea.Batch(cmds...)
 
 	case StartManualAgentSessionMsg:
@@ -2553,9 +2863,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, LoadNewSessionFiltersCmd(a.provider.NewSessionFilters(), a.runtimeCtx.WorkspaceID)
 
 	case StartNewSessionAutonomousModeMsg:
-		if a.newSessionAutonomous != nil {
+		if a.newSessionAutonomous != nil || (a.remoteNewSessionAutonomousRun != nil && a.remoteNewSessionAutonomousRun.Running) {
 			a.toasts.AddToast("New Session autonomous mode is already running", components.ToastInfo)
 			return a, nil
+		}
+		if client := a.provider.AutonomousClient(); client != nil {
+			return a, StartRemoteNewSessionAutonomousModeCmd(client, a.runtimeCtx.WorkspaceID, a.runtimeCtx.InstanceID, msg.SelectedFilterIDs)
 		}
 		return a, StartNewSessionAutonomousModeCmd(
 			a.runtimeCtx.WorkspaceID,
@@ -2572,6 +2885,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			runtime = a.newSessionAutonomous
 		}
 		if runtime == nil {
+			if client := a.provider.AutonomousClient(); client != nil && a.remoteNewSessionAutonomousRun != nil && a.remoteNewSessionAutonomousRun.Running {
+				return a, StopRemoteNewSessionAutonomousModeCmd(client, a.runtimeCtx.InstanceID)
+			}
 			a.toasts.AddToast("New Session autonomous mode is not running", components.ToastInfo)
 			return a, nil
 		}
@@ -2586,10 +2902,19 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, WaitForNewSessionAutonomousEventCmd(a.newSessionAutonomousChan)
 
+	case RemoteNewSessionAutonomousStartedMsg:
+		a.remoteNewSessionAutonomousRun = msg.Run
+		a.syncNewSessionFilterOverlays()
+		if message := strings.TrimSpace(msg.Message); message != "" {
+			a.toasts.AddToast(message, components.ToastSuccess)
+		}
+		return a, nil
+
 	case NewSessionAutonomousStoppedMsg:
-		wasRunning := a.newSessionAutonomous != nil || a.newSessionAutonomousChan != nil
+		wasRunning := a.newSessionAutonomous != nil || a.newSessionAutonomousChan != nil || (a.remoteNewSessionAutonomousRun != nil && a.remoteNewSessionAutonomousRun.Running)
 		a.newSessionAutonomous = nil
 		a.newSessionAutonomousChan = nil
+		a.remoteNewSessionAutonomousRun = nil
 		a.syncNewSessionFilterOverlays()
 		if message := strings.TrimSpace(msg.Message); message != "" {
 			if !(message == autonomousLifecycleStoppedToast && !wasRunning) {
@@ -2659,7 +2984,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Repo.FullName != "" {
 			a.pendingCloneSlug = strings.ToLower(msg.Repo.FullName)
 		}
-		cmds = append(cmds, CloneRepoCmd(a.provider.GitClient(), msg.CloneDir, msg.CloneURL))
+		if client := a.provider.WorkspaceClient(); client != nil {
+			cmds = append(cmds, CloneRepoWithClientCmd(client, msg.CloneDir, msg.CloneURL))
+		} else {
+			cmds = append(cmds, CloneRepoCmd(a.provider.GitClient(), msg.CloneDir, msg.CloneURL))
+		}
 		return a, tea.Batch(cmds...)
 
 	case ShowAddRepoMsg:
@@ -2776,7 +3105,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.upsertWorkItem(msg.Session)
 		cmds = append(cmds, a.focusWorkItemOverview(msg.Session.ID))
-		if a.provider.Planning() != nil {
+		if a.provider.Logic() != nil {
+			cmds = append(cmds, StartPlanningWithClientCmd(a.registerPipelineCancel(msg.Session.ID), a.provider.Logic(), msg.Session.ID))
+		} else if a.provider.Planning() != nil {
 			cmds = append(cmds, StartPlanningCmd(a.registerPipelineCancel(msg.Session.ID), a.provider.Planning(), msg.Session.ID))
 		} else {
 			a.toasts.AddToast("Planning service not configured", components.ToastError)
@@ -2807,7 +3138,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			a.upsertWorkItem(existing)
 			cmds = append(cmds, a.focusWorkItemOverview(existing.ID))
-			if a.provider.Planning() != nil {
+			if a.provider.Logic() != nil {
+				cmds = append(cmds, StartPlanningWithClientCmd(a.registerPipelineCancel(existing.ID), a.provider.Logic(), existing.ID))
+			} else if a.provider.Planning() != nil {
 				cmds = append(cmds, StartPlanningCmd(a.registerPipelineCancel(existing.ID), a.provider.Planning(), existing.ID))
 			} else {
 				a.toasts.AddToast("Planning service not configured", components.ToastError)
@@ -2829,10 +3162,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.rebuildSidebar()
 			a.refreshSessionSearchEntriesFromLocalState()
 		} else if msg.WorkItemID != "" {
-			// Fallback: targeted reload when full payload is not available.
-			cmds = append(cmds, LoadTasksForSessionCmd(a.provider.Task(), msg.WorkItemID))
+			cmds = append(cmds, a.reloadSessionCmds(msg.WorkItemID, true)...)
+		} else if a.runtimeCtx.WorkspaceID != "" && a.provider.Logic() != nil {
+			cmds = append(cmds, LoadSessionsWithClientCmd(a.provider.Logic(), a.runtimeCtx.WorkspaceID))
 		} else if a.runtimeCtx.WorkspaceID != "" {
-			// Command-driven: full reload when no routing info available.
 			cmds = append(cmds,
 				LoadSessionsCmd(a.provider.Session(), a.runtimeCtx.WorkspaceID),
 				LoadTasksCmd(a.provider.Task(), a.runtimeCtx.WorkspaceID),
@@ -2845,11 +3178,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case PlanningRestartedMsg:
 		a.toasts.AddToast(msg.Message, components.ToastSuccess)
-		cmds = append(cmds,
-			LoadSessionCmd(a.provider.Session(), msg.WorkItemID),
-			LoadTasksForSessionCmd(a.provider.Task(), msg.WorkItemID),
-			LoadPlanForSessionCmd(a.provider.Plan(), msg.WorkItemID),
-		)
+		cmds = append(cmds, a.reloadSessionCmds(msg.WorkItemID, true)...)
 		if a.currentWorkItemID != "" {
 			cmds = append(cmds, a.updateContentFromState())
 		}
@@ -2932,7 +3261,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if warning := strings.TrimSpace(msg.Warning); warning != "" {
 			a.toasts.AddToast(warning, components.ToastWarning)
 		}
-		if a.runtimeCtx.WorkspaceID != "" {
+		if a.runtimeCtx.WorkspaceID != "" && a.provider.Logic() != nil {
+			cmds = append(cmds, LoadSessionsWithClientCmd(a.provider.Logic(), a.runtimeCtx.WorkspaceID))
+		} else if a.runtimeCtx.WorkspaceID != "" {
 			cmds = append(cmds,
 				LoadSessionsCmd(a.provider.Session(), a.runtimeCtx.WorkspaceID),
 				LoadTasksCmd(a.provider.Task(), a.runtimeCtx.WorkspaceID),
@@ -2996,6 +3327,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	} else if a.activeOverlay == overlayAddRepo {
 		a.addRepo, cmd = a.addRepo.Update(msg)
 		cmds = append(cmds, cmd)
+	} else if a.activeOverlay == overlayManageDaemons {
+		a.manageDaemons, cmd = a.manageDaemons.Update(msg)
+		cmds = append(cmds, cmd)
 	} else if a.activeOverlay == overlayRepoManager {
 		a.repoManager, cmd = a.repoManager.Update(msg)
 		cmds = append(cmds, cmd)
@@ -3019,6 +3353,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 	} else {
 		a.content, cmd = a.content.Update(msg)
+		if _, ok := msg.(SessionLogLinesMsg); ok && a.provider.LogClient() != nil && a.content.sessionLog.live && a.content.sessionLog.agentActive {
+			cmd = TailSessionLogWithClientCmd(a.provider.LogClient(), a.content.sessionLog.sessionID, a.content.sessionLog.offset)
+		}
 		cmds = append(cmds, cmd)
 	}
 
@@ -3115,6 +3452,10 @@ func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.reviewFollowupOverlay, cmd = a.reviewFollowupOverlay.Update(msg)
 		return a, cmd
 	}
+	if a.activeOverlay == overlayManageDaemons {
+		a.manageDaemons, cmd = a.manageDaemons.Update(msg)
+		return a, cmd
+	}
 	previousFocus := a.mainFocus
 	wasOverviewOverlayOpen := a.overviewOverlayOpen()
 	if wasOverviewOverlayOpen {
@@ -3140,9 +3481,14 @@ func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, a.openNewSessionAutonomousOverlay()
 	case "R":
 		return a, a.openRepoManager()
+	case "D":
+		return a, a.openManageDaemons()
 	case "s":
 		a.activeOverlay = overlaySettings
 		a.settingsPage.Open()
+		if a.provider.EventClient() != nil {
+			return a, SettingsDiagnosticsCmd(a.provider.Settings(), a.runtimeCtx.Cfg, a.sendAsyncMsg)
+		}
 		return a, nil
 	case "/":
 		return a, a.openSessionSearch()
@@ -3168,6 +3514,9 @@ func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		if sessionID := a.retryableFocusedSessionID(); sessionID != "" {
 			ctx := a.pipelineCtxForSession(sessionID)
+			if a.provider.Logic() != nil {
+				return a, RetryAgentSessionWithClientCmd(ctx, a.provider.Logic(), sessionID, a.runtimeCtx.InstanceID)
+			}
 			return a, RetrySessionCmd(ctx, a.provider.Task(), a.provider.Implementation(), a.sendAsyncMsg, sessionID, a.runtimeCtx.InstanceID)
 		}
 	case keyEsc, "left":
@@ -3458,6 +3807,19 @@ func graphManagedCompletedCodeFollowUpCandidate(session domain.AgentSession, ses
 	return domain.IsLeafAgentSessionID(sessions, session.ID)
 }
 
+func (a *App) tailSessionLogCmd(logPath, sessionID string, since int64, final bool) tea.Cmd {
+	if client := a.provider.LogClient(); client != nil {
+		if final {
+			return TailSessionLogFinalWithClientCmd(client, sessionID, since)
+		}
+		return TailSessionLogWithClientCmd(client, sessionID, since)
+	}
+	if final {
+		return TailSessionLogFinalCmd(logPath, sessionID, since)
+	}
+	return TailSessionLogCmd(logPath, sessionID, since)
+}
+
 func (a *App) showTaskContent(wi *domain.Session, agentSession *domain.AgentSession) tea.Cmd {
 	title := firstNonEmptyString(wi.ExternalID, wi.ID) + " · " + taskSidebarSessionTitle(agentSession)
 	metaParts := []string{sessionStatusLabel(agentSession.Status)}
@@ -3532,13 +3894,13 @@ func (a *App) showTaskContent(wi *domain.Session, agentSession *domain.AgentSess
 		}
 		if !a.tailingSessionIDs[agentSession.ID] {
 			a.tailingSessionIDs[agentSession.ID] = true
-			return TailSessionLogFinalCmd(logPath, agentSession.ID, resumeOffset)
+			return a.tailSessionLogCmd(logPath, agentSession.ID, resumeOffset, true)
 		}
 		return nil
 	}
 	if !a.tailingSessionIDs[agentSession.ID] || spinnerCmd != nil {
 		a.tailingSessionIDs[agentSession.ID] = true
-		return tea.Batch(spinnerCmd, TailSessionLogCmd(logPath, agentSession.ID, resumeOffset))
+		return tea.Batch(spinnerCmd, a.tailSessionLogCmd(logPath, agentSession.ID, resumeOffset, false))
 	}
 	return spinnerCmd
 }
@@ -3575,13 +3937,13 @@ func (a *App) showForemanContent(wi *domain.Session, foremanSession *domain.Agen
 		}
 		if !a.tailingSessionIDs[foremanSession.ID] {
 			a.tailingSessionIDs[foremanSession.ID] = true
-			return TailSessionLogFinalCmd(logPath, foremanSession.ID, resumeOffset)
+			return a.tailSessionLogCmd(logPath, foremanSession.ID, resumeOffset, true)
 		}
 		return nil
 	}
 	if !a.tailingSessionIDs[foremanSession.ID] || spinnerCmd != nil {
 		a.tailingSessionIDs[foremanSession.ID] = true
-		return tea.Batch(spinnerCmd, TailSessionLogCmd(logPath, foremanSession.ID, resumeOffset))
+		return tea.Batch(spinnerCmd, a.tailSessionLogCmd(logPath, foremanSession.ID, resumeOffset, false))
 	}
 	return spinnerCmd
 }
@@ -4451,6 +4813,8 @@ func (a App) View() string {
 		result = renderOverlay(a.addRepo.View(), a.windowWidth, a.windowHeight)
 	case overlayRepoManager:
 		result = renderOverlay(a.repoManager.View(), a.windowWidth, a.windowHeight)
+	case overlayManageDaemons:
+		result = renderOverlay(a.manageDaemons.View(), a.windowWidth, a.windowHeight)
 	case overlayWorktreePicker:
 		result = renderOverlay(a.worktreePicker.View(), a.windowWidth, a.windowHeight)
 	default:

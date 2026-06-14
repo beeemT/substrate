@@ -18,13 +18,23 @@ import (
 
 type emptyEventRepoForInit struct{}
 
-func (emptyEventRepoForInit) Create(_ context.Context, _ domain.SystemEvent) error { return nil }
+func (emptyEventRepoForInit) Create(_ context.Context, event domain.SystemEvent) (domain.SystemEvent, error) {
+	return event, nil
+}
 func (emptyEventRepoForInit) ListByType(_ context.Context, _ string, _ int) ([]domain.SystemEvent, error) {
 	return nil, nil
 }
 
 func (emptyEventRepoForInit) ListByWorkspaceID(_ context.Context, _ string, _ int) ([]domain.SystemEvent, error) {
 	return nil, nil
+}
+
+func (emptyEventRepoForInit) ListByWorkspaceIDAfterSequence(_ context.Context, _ string, _ uint64, _ int) ([]domain.SystemEvent, error) {
+	return nil, nil
+}
+
+func (emptyEventRepoForInit) LatestSequence(_ context.Context, _ string) (uint64, error) {
+	return 0, nil
 }
 
 type emptySessionArtifactRepoForInit struct{}

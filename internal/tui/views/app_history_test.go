@@ -72,13 +72,23 @@ func (r *recordingAnswerRouter) RefineAnswer(_ context.Context, _ string, _ stri
 
 type emptyEventRepo struct{}
 
-func (emptyEventRepo) Create(_ context.Context, _ domain.SystemEvent) error { return nil }
+func (emptyEventRepo) Create(_ context.Context, event domain.SystemEvent) (domain.SystemEvent, error) {
+	return event, nil
+}
 func (emptyEventRepo) ListByType(_ context.Context, _ string, _ int) ([]domain.SystemEvent, error) {
 	return nil, nil
 }
 
 func (emptyEventRepo) ListByWorkspaceID(_ context.Context, _ string, _ int) ([]domain.SystemEvent, error) {
 	return nil, nil
+}
+
+func (emptyEventRepo) ListByWorkspaceIDAfterSequence(_ context.Context, _ string, _ uint64, _ int) ([]domain.SystemEvent, error) {
+	return nil, nil
+}
+
+func (emptyEventRepo) LatestSequence(_ context.Context, _ string) (uint64, error) {
+	return 0, nil
 }
 
 type duplicateCreateWorkItemRepo struct {

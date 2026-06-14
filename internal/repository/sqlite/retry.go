@@ -8,7 +8,6 @@ import (
 	"os"
 	"time"
 
-	pkgerrors "github.com/pkg/errors"
 	"go.uber.org/multierr"
 )
 
@@ -39,12 +38,14 @@ func sqliteRetry(backoffs []time.Duration, run func() error) error {
 
 	err := run()
 	for i = 0; isRetryableTransactionError(err) && i < len(backoffs); i++ {
-		merr = multierr.Append(merr, pkgerrors.Wrapf(err, "try %d", i))
-		time.Sleep(backoffs[i])
+		merr = multierr.Append(merr, fmt.Errorf("try %d: %w", i, err))
+		if sleep := backoffs[i]; sleep > 0 {
+			time.Sleep(sleep)
+		}
 		err = run()
 	}
 	if err != nil {
-		merr = multierr.Append(merr, pkgerrors.Wrapf(err, "try %d", i))
+		merr = multierr.Append(merr, fmt.Errorf("try %d: %w", i, err))
 		return fmt.Errorf("error not retryable or reached maximum number of retries: %w", merr)
 	}
 	return nil

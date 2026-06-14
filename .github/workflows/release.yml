@@ -91,8 +91,10 @@ jobs:
           VERSION_NUM="${VERSION#v}"
           mkdir -p dist/bridge
 
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build \
-            -ldflags="-s -w -X github.com/beeemT/substrate/internal/buildinfo.Version=${VERSION_NUM}" \
+            -ldflags="-s -w -X github.com/beeemT/substrate/internal/buildinfo.Version=${VERSION_NUM} -X github.com/beeemT/substrate/internal/buildinfo.BuildSHA=${SHORT_SHA} -X github.com/beeemT/substrate/internal/buildinfo.BuildTime=${BUILD_TIME}" \
             -o "dist/substrate" \
             ./cmd/substrate
 

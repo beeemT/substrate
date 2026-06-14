@@ -1,8 +1,10 @@
 # Settings System
 
-<!-- docs:last-integrated-commit 1410a27c20a6fe30dc8ae17c85e9bf3115b876b3 -->
+<!-- docs:last-integrated-commit 2826f9fd2e658941eb96072a0c30df9766b92d94 -->
 
 Full-screen configuration covering commit strategy, planning, review, Foreman, harness routing, provider auth, and repository lifecycle.
+
+With the daemon/TUI split, settings have two ownership domains. The connected daemon owns runtime/product configuration and applies saves by rebuilding its service graph. The local TUI owns presentation defaults plus daemon registry/selection metadata. During the transition, some local TUI fields still round-trip through `SettingsAPI`; those paths must preserve token refs and last-seen metadata until the ownership split is complete.
 
 ## Page Structure
 ```

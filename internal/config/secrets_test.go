@@ -125,3 +125,32 @@ func TestSaveSecretsDeletesBlankSentryToken(t *testing.T) {
 		t.Fatalf("store.deleted = %#v, want delete for %q", store.deleted, "sentry.token")
 	}
 }
+
+func TestDaemonAccessTokenUsesRegistryTokenRef(t *testing.T) {
+	cfg := &Config{TUI: TUIConfig{Daemons: map[string]DaemonRegistryEntry{
+		"staging": {TokenRef: "keychain:daemon.staging.access_token"},
+	}}}
+	store := &memorySecretStore{values: map[string]string{"daemon.staging.access_token": "daemon-token"}}
+
+	token, err := DaemonAccessToken(cfg, store, "staging")
+	if err != nil {
+		t.Fatalf("DaemonAccessToken() error = %v", err)
+	}
+	if token != "daemon-token" {
+		t.Fatalf("token = %q, want daemon-token", token)
+	}
+}
+
+func TestSaveDaemonAccessTokenUsesRegistryTokenRef(t *testing.T) {
+	cfg := &Config{TUI: TUIConfig{Daemons: map[string]DaemonRegistryEntry{
+		"staging": {TokenRef: "keychain:daemon.staging.access_token"},
+	}}}
+	store := &memorySecretStore{}
+
+	if err := SaveDaemonAccessToken(cfg, store, "staging", "daemon-token"); err != nil {
+		t.Fatalf("SaveDaemonAccessToken() error = %v", err)
+	}
+	if got := store.values["daemon.staging.access_token"]; got != "daemon-token" {
+		t.Fatalf("stored token = %q, want daemon-token", got)
+	}
+}

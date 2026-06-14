@@ -36,7 +36,7 @@ func IsWorkItemNotFound(err error) bool {
 	return errors.As(err, &notFound) && notFound.Entity == "work item"
 }
 
-func PersistReviewArtifact(ctx context.Context, eventSvc *service.EventService, workspaceID, workItemID string, artifact domain.ReviewArtifact) error {
+func PersistReviewArtifact(ctx context.Context, repos ReviewArtifactRepos, workspaceID, workItemID string, artifact domain.ReviewArtifact) error {
 	if strings.TrimSpace(workspaceID) == "" || strings.TrimSpace(workItemID) == "" {
 		return nil
 	}
@@ -49,13 +49,18 @@ func PersistReviewArtifact(ctx context.Context, eventSvc *service.EventService, 
 		createdAt = time.Now()
 	}
 
-	return eventSvc.Create(ctx, domain.SystemEvent{
+	evt := domain.SystemEvent{
 		ID:          domain.NewID(),
 		EventType:   string(domain.EventReviewArtifactRecorded),
 		WorkspaceID: workspaceID,
 		Payload:     string(payload),
 		CreatedAt:   createdAt,
-	})
+	}
+	if repos.Bus != nil {
+		return repos.Bus.Publish(ctx, evt)
+	}
+	_, err = repos.Events.Create(ctx, evt)
+	return err
 }
 
 // PersistGithubPR dual-writes a GitHub PR: event (audit trail) + provider table + link table.
@@ -67,7 +72,7 @@ func PersistGithubPR(
 	owner, repo string,
 	number int,
 ) error {
-	if err := PersistReviewArtifact(ctx, repos.Events, workspaceID, workItemID, artifact); err != nil {
+	if err := PersistReviewArtifact(ctx, repos, workspaceID, workItemID, artifact); err != nil {
 		return err
 	}
 	now := time.Now()
@@ -114,7 +119,7 @@ func PersistGitlabMR(
 	projectPath string,
 	iid int,
 ) error {
-	if err := PersistReviewArtifact(ctx, repos.Events, workspaceID, workItemID, artifact); err != nil {
+	if err := PersistReviewArtifact(ctx, repos, workspaceID, workItemID, artifact); err != nil {
 		return err
 	}
 	iid = gitlabMRIID(iid, artifact)

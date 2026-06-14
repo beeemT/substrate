@@ -1,6 +1,6 @@
 # 03 - Event System
 
-<!-- docs:last-integrated-commit 5cbffc696e10a65fb98b6957c93e3c5f68e837d8 -->
+<!-- docs:last-integrated-commit 2826f9fd2e658941eb96072a0c30df9766b92d94 -->
 
 Substrate's event model has two parts:
 
@@ -109,7 +109,7 @@ Resume (no operator feedback) emits `agent_session.resumed`. Follow-up (operator
 
 ## Bus Model
 
-The bus is a singleton shared across the application composition layer. It is used by services, orchestrators, the TUI, and adapters.
+The bus is a singleton shared inside the logic composition layer. In daemon mode it is daemon-owned: services and orchestrators publish to it, adapters subscribe to it, and visualization clients consume the persisted/order-preserving event stream exposed by the daemon instead of holding a direct bus subscription.
 
 ### Subscriptions
 
@@ -185,9 +185,11 @@ sequenceDiagram
     participant WorkItemAdapter
 
     Human->>TUI: approve plan
-    TUI->>Bus: Publish(plan.approved)
-    Bus->>SQLite: persist event
+    TUI->>DaemonAPI: ApprovePlan
+    DaemonAPI->>Bus: Publish(plan.approved)
+    Bus->>SQLite: persist event with sequence
     Bus-->>WorkItemAdapter: deliver on subscriber channel
+    Bus-->>TUI: deliver via daemon event stream
     WorkItemAdapter->>WorkItemAdapter: filter by EventType in OnEvent
 ```
 
@@ -218,8 +220,8 @@ sequenceDiagram
 ## Design Summary
 
 - **Services** own domain state and are the source of truth for state-change events. They emit after database transactions commit.
-- **`event.Bus`** is a shared singleton in the application composition layer, used by services (as emitters), the TUI (as subscriber), and adapters (as subscribers).
+- **`event.Bus`** is a shared singleton inside the logic composition layer, used by services/orchestrators (as emitters) and adapters (as subscribers). In daemon mode it does not leave the daemon process.
 - **Orchestrators** own workflow-level events and emit via the shared emit helper. They do not emit state-transition events that services already emit.
-- **TUI** subscribes to the bus and bridges events to its update loop. It does not emit state-change events.
+- **TUI** consumes daemon event-stream batches and bridges them to its update loop. Transitional in-process mode may subscribe directly to the bus. It does not emit state-change events.
 - **Topic-based** in-process bus with subscriber channels, synchronous pre-hooks for gating, and asynchronous post-hooks for side effects.
 - **Best-effort fan-out** with explicit retry / drop-handler behavior.

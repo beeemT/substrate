@@ -2,6 +2,7 @@ package views
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -27,16 +28,17 @@ const (
 //
 //nolint:recvcheck // Bubble Tea convention
 type WorkspaceInitModal struct {
-	cwd          string
-	check        domain.WorkspaceHealthCheck
-	loading      bool // scanning in progress
-	active       bool
-	styles       styles.Styles
-	width        int
-	height       int
-	mode         workspaceInitMode
-	gitClient    *gitwork.Client
-	workspaceSvc *service.WorkspaceService
+	cwd             string
+	check           domain.WorkspaceHealthCheck
+	loading         bool // scanning in progress
+	active          bool
+	styles          styles.Styles
+	width           int
+	height          int
+	mode            workspaceInitMode
+	gitClient       *gitwork.Client
+	workspaceSvc    *service.WorkspaceService
+	workspaceClient WorkspaceClient
 
 	// errorText holds an error to display inline instead of dismissing the modal.
 	errorText string
@@ -58,6 +60,17 @@ func NewWorkspaceInitModal(cwd string, st styles.Styles, workspaceSvc *service.W
 		styles:       st,
 		workspaceSvc: workspaceSvc,
 	}
+}
+
+func (m *WorkspaceInitModal) SetWorkspaceClient(client WorkspaceClient) {
+	m.workspaceClient = client
+}
+
+// SetMode switches the modal between the create-workspace and new-repos
+// modes. In daemon mode the new-repos flow routes through
+// WorkspaceClient instead of the local gitwork client.
+func (m *WorkspaceInitModal) SetMode(mode workspaceInitMode) {
+	m.mode = mode
 }
 
 // NewNewReposModal creates a WorkspaceInitModal for the new-repos-detected flow.
@@ -105,9 +118,9 @@ func (m WorkspaceInitModal) Update(msg tea.Msg) (WorkspaceInitModal, tea.Cmd) {
 		switch msg.String() {
 		case "y", keyEnter:
 			if m.mode == workspaceInitModeNewRepos {
-				return m, initNewReposCmd(m.gitClient, m.check.PlainGitClones)
+				return m, initNewReposCmd(m.gitClient, m.check.PlainGitClones, m.workspaceClient)
 			}
-			return m, initWorkspaceCmd(m.cwd, m.workspaceSvc)
+			return m, initWorkspaceCmd(m.cwd, m.workspaceSvc, m.workspaceClient)
 		case "n", keyEsc:
 			if m.mode == workspaceInitModeNewRepos {
 				return m, func() tea.Msg { return CloseOverlayMsg{} }
@@ -136,8 +149,23 @@ func (m WorkspaceInitModal) Update(msg tea.Msg) (WorkspaceInitModal, tea.Cmd) {
 }
 
 // initWorkspaceCmd initializes plain git repos, creates the .substrate-workspace file, and registers in DB.
-func initWorkspaceCmd(cwd string, workspaceSvc *service.WorkspaceService) tea.Cmd {
+func initWorkspaceCmd(cwd string, workspaceSvc *service.WorkspaceService, clients ...WorkspaceClient) tea.Cmd {
 	return func() tea.Msg {
+		if len(clients) > 0 && clients[0] != nil {
+			name := filepath.Base(cwd)
+			workspace, err := clients[0].InitializeWorkspace(context.Background(), cwd, name)
+			if err != nil {
+				return ErrMsg{Err: err}
+			}
+			return WorkspaceInitDoneMsg{
+				WorkspaceID:   workspace.ID,
+				WorkspaceName: workspace.Name,
+				WorkspaceDir:  workspace.Dir,
+			}
+		}
+		if workspaceSvc == nil {
+			return ErrMsg{Err: errors.New("workspace service is unavailable")}
+		}
 		name := filepath.Base(cwd)
 		wsFile, err := gitwork.InitWorkspace(cwd, name)
 		createdWorkspaceFile := err == nil

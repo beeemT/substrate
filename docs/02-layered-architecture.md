@@ -1,7 +1,9 @@
 # 02 - Layered Architecture
-<!-- docs:last-integrated-commit 5cbffc696e10a65fb98b6957c93e3c5f68e837d8 -->
+<!-- docs:last-integrated-commit 2826f9fd2e658941eb96072a0c30df9766b92d94 -->
 
 This document describes the layered structure of the application and the patterns that connect layers.
+
+The daemon/TUI split moves this composition boundary behind the daemon process: `substrate daemon` owns repositories, services, orchestrators, harnesses, adapters, and the in-process event bus, while visualization clients use product-shaped daemon APIs and read models. Transitional in-process wiring can still exist during cutover, but new UI paths should prefer the daemon boundary.
 
 ## 1. Layer Diagram
 
@@ -124,4 +126,4 @@ The orchestration layer owns multi-step workflows that coordinate across service
 | `Foreman` | persistent question-answering session, FAQ append, escalation handling. Not graph-supervised. |
 | `SessionRegistry` | maps live agent session IDs to adapter handles for steering |
 
-**Wiring.** A service manager creates the shared event bus, constructs all services and orchestrators, and wires adapters to the bus. Adapters react to events; services do not depend on adapters. Orchestrators receive service pointers and the shared bus.
+**Wiring.** A service manager creates the shared event bus, constructs all services and orchestrators, and wires adapters to the bus. In daemon mode that service manager lives daemon-side; the TUI should not construct or retain repositories, orchestrators, harnesses, adapters, or an event bus except for transitional compatibility during the split. Adapters react to events; services do not depend on adapters. Orchestrators receive service pointers and the shared bus.

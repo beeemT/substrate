@@ -1767,11 +1767,14 @@ type planTestEventRepo struct {
 	events []domain.SystemEvent
 }
 
-func (r *planTestEventRepo) Create(_ context.Context, event domain.SystemEvent) error {
+func (r *planTestEventRepo) Create(_ context.Context, event domain.SystemEvent) (domain.SystemEvent, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if event.Sequence == 0 {
+		event.Sequence = uint64(len(r.events) + 1)
+	}
 	r.events = append(r.events, event)
-	return nil
+	return event, nil
 }
 
 func (r *planTestEventRepo) ListByType(_ context.Context, eventType string, _ int) ([]domain.SystemEvent, error) {
@@ -1794,4 +1797,28 @@ func (r *planTestEventRepo) ListByWorkspaceID(_ context.Context, workspaceID str
 		}
 	}
 	return events, nil
+}
+
+func (r *planTestEventRepo) ListByWorkspaceIDAfterSequence(_ context.Context, workspaceID string, afterSequence uint64, _ int) ([]domain.SystemEvent, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var events []domain.SystemEvent
+	for _, event := range r.events {
+		if event.WorkspaceID == workspaceID && event.Sequence > afterSequence {
+			events = append(events, event)
+		}
+	}
+	return events, nil
+}
+
+func (r *planTestEventRepo) LatestSequence(_ context.Context, workspaceID string) (uint64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var latest uint64
+	for _, event := range r.events {
+		if event.WorkspaceID == workspaceID && event.Sequence > latest {
+			latest = event.Sequence
+		}
+	}
+	return latest, nil
 }

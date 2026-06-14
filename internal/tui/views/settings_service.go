@@ -285,7 +285,14 @@ func (s *settingsService) loadConfigFromRaw(raw string) (*config.Config, error) 
 }
 
 func serializeSections(sections []SettingsSection, secretStore config.SecretStore) (string, *config.Config, error) {
-	cfg, err := configFromSections(sections)
+	return serializeSectionsWithPrevious(sections, secretStore, nil)
+}
+
+// serializeSectionsWithPrevious threads a previously loaded config into
+// configFromSections so the round-trip preserves fields the editor does not
+// surface, in particular daemon registry token refs and last-seen metadata.
+func serializeSectionsWithPrevious(sections []SettingsSection, secretStore config.SecretStore, previous *config.Config) (string, *config.Config, error) {
+	cfg, err := configFromSectionsWithPrevious(sections, previous)
 	if err != nil {
 		return "", nil, err
 	}
@@ -349,12 +356,12 @@ func (s *settingsService) SaveRaw(raw string) error {
 }
 
 func (s *settingsService) Save(ctx context.Context, sections []SettingsSection, current Services) (SettingsApplyResult, error) {
-	raw, cfg, err := serializeSections(sections, s.secretStore)
+	previous := current.Cfg
+	raw, cfg, err := serializeSectionsWithPrevious(sections, s.secretStore, previous)
+
 	if err != nil {
 		return SettingsApplyResult{}, err
 	}
-
-	// Save raw config first — runtime services must never use unpersisted config.
 	if err := s.saveRaw(raw); err != nil {
 		return SettingsApplyResult{}, err
 	}
@@ -809,6 +816,17 @@ func buildSettingsSections(cfg *config.Config) []SettingsSection {
 			Fields:      []SettingsField{{Section: "repo_docs", Key: "paths", Label: "Paths", Type: SettingsFieldStringList, Value: strings.Join(cfg.RepoDocs.Paths, ",")}},
 		},
 	}
+	if hasUserVisibleDaemonRegistry(cfg) {
+		sections = append([]SettingsSection{sections[0], {
+			ID:          "tui.daemons",
+			Title:       "Daemons",
+			Description: "Visualization daemon registry. Values are name=address; tokens stay in keychain via token_ref.",
+			Fields: []SettingsField{
+				{Section: "tui", Key: "active_daemon", Label: "Active Daemon", Type: SettingsFieldEnum, Value: cfg.TUI.ActiveDaemon, Options: daemonRegistryNames(cfg), Required: true},
+				{Section: "tui", Key: "daemons", Label: "Registry", Type: SettingsFieldKeyValue, Value: formatDaemonRegistry(cfg.TUI.Daemons)},
+			},
+		}}, sections[1:]...)
+	}
 	for i := range sections {
 		annotateFieldPresentation(&sections[i])
 		sections[i].Status = sectionStatus(sections[i])
@@ -939,7 +957,21 @@ func buildProviderStatuses(cfg *config.Config) map[string]ProviderStatus {
 }
 
 func configFromSections(sections []SettingsSection) (*config.Config, error) {
+	return configFromSectionsWithPrevious(sections, nil)
+}
+
+// configFromSectionsWithPrevious mirrors the field-driven build of
+// configFromSections but seeds tui.daemons with the caller's previous entries
+// so the round-trip preserves token refs, kind, and last-seen metadata that
+// the editor UI does not surface. Entries whose name still appears in the
+// current sections are re-emitted with the same TokenRef; names that vanished
+// from the editor are dropped to keep the registry in sync with the visible
+// form.
+func configFromSectionsWithPrevious(sections []SettingsSection, previous *config.Config) (*config.Config, error) {
 	cfg := &config.Config{}
+	if previous != nil {
+		cfg.TUI.Daemons = cloneDaemonRegistry(previous.TUI.Daemons)
+	}
 	for _, sec := range sections {
 		for _, field := range sec.Fields {
 			if err := applyField(cfg, field); err != nil {
@@ -951,10 +983,57 @@ func configFromSections(sections []SettingsSection) (*config.Config, error) {
 	return cfg, nil
 }
 
+func cloneDaemonRegistry(src map[string]config.DaemonRegistryEntry) map[string]config.DaemonRegistryEntry {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[string]config.DaemonRegistryEntry, len(src))
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
+}
+
 func applyField(cfg *config.Config, field SettingsField) error {
 	value := strings.TrimSpace(field.Value)
 	fieldPath := field.Section + "." + field.Key
 	switch fieldPath {
+	case "tui.active_daemon":
+		cfg.TUI.ActiveDaemon = value
+	case "tui.daemons":
+		// Rebuild the editor-visible entries from the parsed map, but keep
+		// token refs and local/selected metadata from the previous registry
+		// so the round-trip does not silently regenerate credential slots.
+		preserved := cfg.TUI.Daemons
+		next := map[string]config.DaemonRegistryEntry{}
+		for name, address := range parseMap(value) {
+			entry := config.DaemonRegistryEntry{
+				Label:    name,
+				Kind:     "remote",
+				Address:  address,
+				TokenRef: "keychain:daemon." + name + ".access_token",
+			}
+			if name == "local" {
+				entry.Kind = "local"
+				entry.AutoManaged = true
+			}
+			if prior, ok := preserved[name]; ok {
+				if prior.TokenRef != "" {
+					entry.TokenRef = prior.TokenRef
+				}
+				if prior.Kind != "" {
+					entry.Kind = prior.Kind
+				}
+				entry.AutoManaged = prior.AutoManaged
+				entry.LastSeenVersion = prior.LastSeenVersion
+				entry.LastSeenWorkspaceID = prior.LastSeenWorkspaceID
+				if prior.Label != "" {
+					entry.Label = prior.Label
+				}
+			}
+			next[name] = entry
+		}
+		cfg.TUI.Daemons = next
 	case "commit.strategy":
 		cfg.Commit.Strategy = config.CommitStrategy(value)
 	case "commit.message_format":
@@ -1399,8 +1478,22 @@ func parseInt(fieldPath, v string) (int, error) {
 
 func parseBool(v string) bool {
 	b, _ := strconv.ParseBool(strings.TrimSpace(v))
-
 	return b
+}
+
+func hasUserVisibleDaemonRegistry(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	if cfg.TUI.ActiveDaemon != "" && cfg.TUI.ActiveDaemon != "local" {
+		return true
+	}
+	for name, entry := range cfg.TUI.Daemons {
+		if name != "local" || !entry.AutoManaged {
+			return true
+		}
+	}
+	return false
 }
 
 func parseList(v string) []string {
@@ -1417,6 +1510,34 @@ func parseList(v string) []string {
 	}
 
 	return out
+}
+
+func daemonRegistryNames(cfg *config.Config) []string {
+	if cfg == nil || len(cfg.TUI.Daemons) == 0 {
+		return []string{"local"}
+	}
+	names := make([]string, 0, len(cfg.TUI.Daemons))
+	for name := range cfg.TUI.Daemons {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func formatDaemonRegistry(entries map[string]config.DaemonRegistryEntry) string {
+	if len(entries) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(entries))
+	for name := range entries {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		parts = append(parts, name+"="+entries[name].Address)
+	}
+	return strings.Join(parts, ",")
 }
 
 func parseMap(v string) map[string]string {

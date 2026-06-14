@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package substrate.v1;
+
+import "substrate/v1/sessions.proto";
+
+option go_package = "github.com/beeemT/substrate/internal/gen/substrate/v1;substratev1";
+
+// AgentSessionAPI exposes the product view of agent sessions that live under
+// a work item. The daemon owns `orchestrator.SessionRegistry`; clients
+// interact through events, questions, steering APIs, follow-up APIs, retry
+// APIs, and log streams. Harness handles and registry internals are NOT
+// exposed over gRPC.
+//
+// Shared request/response types (AnswerQuestionRequest, SkipQuestionRequest,
+// SteerSessionRequest, FollowUpAgentSessionRequest, RetryAgentSessionRequest,
+// ResumeAllForSessionRequest, ActionResultResponse) are defined in
+// sessions.proto and imported above.
+service AgentSessionAPI {
+  rpc ListAgentSessions(ListAgentSessionsRequest) returns (ListAgentSessionsResponse);
+  rpc SearchHistory(SearchHistoryRequest) returns (SearchHistoryResponse);
+  rpc GetInteraction(GetInteractionRequest) returns (GetInteractionResponse);
+  rpc AnswerQuestion(AnswerQuestionRequest) returns (ActionResultResponse);
+  rpc SkipQuestion(SkipQuestionRequest) returns (ActionResultResponse);
+  rpc SteerSession(SteerSessionRequest) returns (ActionResultResponse);
+  rpc FollowUpSession(FollowUpAgentSessionRequest) returns (ActionResultResponse);
+  rpc RetrySession(RetryAgentSessionRequest) returns (ActionResultResponse);
+  rpc ResumeAllForSession(ResumeAllForSessionRequest) returns (ActionResultResponse);
+  rpc CancelPipeline(CancelPipelineRequest) returns (ActionResultResponse);
+}
+
+message AgentSession { string id = 1; string work_item_id = 2; string status = 3; string kind = 4; }
+message ListAgentSessionsRequest { string workspace_id = 1; string work_item_id = 2; }
+message ListAgentSessionsResponse { repeated AgentSession agent_sessions = 1; }
+message SearchHistoryRequest { string query = 1; string workspace_id = 2; }
+message SearchHistoryResponse { repeated string entries_json = 1; }
+message GetInteractionRequest { string agent_session_id = 1; }
+message GetInteractionResponse { repeated string entries_json = 1; }
+message CancelPipelineRequest { string work_item_id = 1; string agent_session_id = 2; string idempotency_key = 3; }

@@ -1,17 +1,18 @@
 # Architecture Proposal: Logic / Visualization gRPC Split
 
-<!-- docs:last-integrated-commit 10e50295fb75f72c67233e191ae34fb8fc091f1e -->
+<!-- docs:last-integrated-commit 2826f9fd2e658941eb96072a0c30df9766b92d94 -->
 
 ## 1. Goal
 
-Separate Substrate's logic layer from its visualization layer so the logic layer can run as an independent local daemon and visualization clients communicate with it over local gRPC.
+Separate Substrate's logic layer from its visualization layer so the logic layer can run as an independent daemon and visualization clients communicate with a selected local or remote daemon over gRPC.
 
 The target architecture has:
 
+- separate daemon and TUI configuration roots, with daemon access tokens stored in the system keychain
 - a daemon-owned SQLite database, service graph, event bus, adapters, orchestrators, harness subprocesses, session registry, settings/secrets implementation, and log tailing
 - one daemon-owned event stream channel for domain events and live status updates
 - product-shaped gRPC APIs for actions, queries, settings, logs, and read models
-- no direct database, service, orchestrator, adapter, harness, repository, filesystem-repo, keychain, or event-bus ownership inside the TUI process
+- no direct database, service, orchestrator, adapter, harness, repository, filesystem-repo, provider/harness keychain secret, or event-bus ownership inside the TUI process
 - a migration path that preserves the current TUI while making the daemon boundary explicit
 
 The durable architectural rule is:
@@ -48,12 +49,15 @@ This proposal is intentionally not a request to distribute the current Go packag
 ### Goals
 
 - `substrate daemon` / `substrate serve` runs as a long-lived local logic process.
-- `substrate tui` runs as a visualization client and connects to the daemon over local gRPC.
-- `substrate` with no args remains compatible: it starts or connects to a daemon, then launches the TUI.
-- The daemon owns SQLite, migrations, config, secrets, service graph composition, event persistence, adapters, orchestrators, harness subprocesses, and session logs.
+- `substrate tui` runs as a visualization client and connects to a selected local or remote daemon over gRPC.
+- `substrate` with no args remains compatible: it starts or connects to the configured local daemon, then launches the TUI.
+- The daemon owns SQLite, migrations, daemon config, daemon secrets, service graph composition, event persistence, adapters, orchestrators, harness subprocesses, and session logs.
+- The TUI owns only TUI config, local daemon registry entries, access-token references, daemon selection, and view state.
+- Local daemon startup auto-registers the local daemon address and shares its access token through the system keychain.
+- Remote daemons can be added, tested, selected, and removed from the TUI without copying remote daemon product settings into local config.
 - Every daemon-published event can reach a client in publish order, with reconnect/catch-up semantics.
 - Mutating RPCs are idempotent where duplicate submission would otherwise create duplicate work.
-- Settings save continues to perform the existing hard service-graph rebuild, daemon-side, with a clear client resync signal.
+- Daemon settings save continues to perform the existing hard service-graph rebuild, daemon-side, with a clear client resync signal.
 - The TUI renders the same product state as today while progressively shedding non-visual responsibilities.
 - The API surface remains compatible with future visualization clients such as Electron.
 
@@ -61,7 +65,7 @@ This proposal is intentionally not a request to distribute the current Go packag
 
 - Electron renderer implementation.
 - New IPC for existing TypeScript bridges. OMP, Claude, ACP, Codex, and foreman-mcp bridges remain daemon-owned subprocesses using their existing stdio/socket protocols.
-- Remote multi-host deployment. The daemon listens on a local Unix domain socket by default.
+- Remote daemon hosting, provisioning, or discovery. Connecting to an explicitly configured remote daemon is in scope; operating a fleet of daemons is not.
 - Replacing the in-process event bus for daemon-internal consumers. The bus remains the daemon's source of truth; gRPC streaming is a delivery mechanism.
 - Full event payload schema rewrite in the first cut. Initial events carry raw JSON payloads plus metadata; typed payloads can be added event-by-event later.
 - Multi-client editing semantics in the first revision. The API must not preclude multiple clients later, but the first supported mode may be one controlling TUI client per daemon/workspace.
@@ -70,12 +74,16 @@ This proposal is intentionally not a request to distribute the current Go packag
 
 ### Natural logic boundary
 
-The current natural server boundary is `internal/tui/views.ServiceManager`.
+The natural server boundary is `internal/logic.ServiceManager`. The TUI's
+`internal/tui/views.ServiceManager` is a thin embed that only adds a couple
+of view-specific methods on top of the logic implementation; it does not
+re-own any of the runtime graph.
 
 Key files:
 
-- `internal/tui/views/service_manager.go`
-- `internal/tui/views/services.go`
+- `internal/logic/manager.go` — canonical service graph lifecycle and rebuild ordering
+- `internal/logic/services.go` — `Services` aggregation
+- `internal/tui/views/service_manager.go` — TUI-side thin embed for view-specific methods
 - `cmd/substrate/main.go`
 
 `ServiceManager` currently owns the complete runtime graph:
@@ -89,7 +97,9 @@ Key files:
 - refresh goroutines and adapter event wiring
 - service rebuilds on settings/workspace changes
 
-This graph moves behind the daemon API. The visualization layer must not construct or hold any of it.
+This graph moves behind the daemon API. The visualization layer must not
+construct or hold any of it; the TUI-side embed is allowed only as a
+transitional compatibility surface.
 
 ### Existing event boundary
 
@@ -203,7 +213,7 @@ macOS fallback:
 ~/Library/Application Support/substrate/run/<workspace-or-user-id>.sock
 ```
 
-The daemon writes an owner-only metadata file beside the socket:
+The daemon writes an owner-only metadata file beside the socket. The metadata file contains connection facts and a keychain reference, never the token value:
 
 ```text
 socket_path
@@ -213,13 +223,15 @@ build_sha
 schema_version
 workspace_id
 started_at
-token
+token_ref
 ```
 
 Auth rules:
 
 - Filesystem permissions on the socket directory are the primary local boundary.
-- The daemon also generates a random bearer token at startup, writes it with owner-only permissions, and requires it in gRPC metadata on every call.
+- The daemon generates or reuses a random bearer token, stores it in the system keychain, and requires it in gRPC metadata on every call.
+- The local daemon auto-registers its address and token reference in TUI config under the local daemon entry. It must not overwrite the user's selected active daemon.
+- Remote daemon entries store the remote address and a token reference in local TUI config. The token value lives only in the system keychain.
 - If loopback TCP is ever added, the bearer token is mandatory and remote listeners remain opt-in.
 - gRPC reflection may be enabled by default for local debugging only when socket/token auth is enforced; it must be disableable.
 
@@ -231,8 +243,76 @@ service SystemAPI {
   rpc Info(InfoRequest) returns (InfoResponse);
   rpc Disconnect(DisconnectRequest) returns (DisconnectResponse);
   rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
+  rpc GetAccessToken(GetAccessTokenRequest) returns (GetAccessTokenResponse);
+  rpc RotateAccessToken(RotateAccessTokenRequest) returns (RotateAccessTokenResponse);
 }
 ```
+
+`GetAccessToken` and `RotateAccessToken` require an already-authenticated connection. They are for copying or rotating the connected daemon's token from the settings page, not for unauthenticated token recovery.
+
+### Config ownership and daemon registry
+
+One physical config file may hold both daemon and TUI configuration, but the logical roots are separate:
+
+```yaml
+daemon:
+  runtime:
+    bind:
+      kind: unix
+      socket_path: ""
+    database_path: ""
+    log_level: info
+    reflection_enabled: false
+  commit: ...
+  plan: ...
+  review: ...
+  harness: ...
+  adapters: ...
+  foreman: ...
+  repo_docs: ...
+  repos: ...
+
+tui:
+  active_daemon: local
+  ui:
+    default_filter: active
+    default_group: state
+    log_level: info
+  daemons:
+    local:
+      label: Local
+      kind: local
+      address: unix:///Users/me/.substrate/run/local.sock
+      token_ref: keychain:daemon.local.access_token
+      auto_managed: true
+      last_seen_version: ""
+      last_seen_workspace_id: ""
+    staging:
+      label: Staging daemon
+      kind: remote
+      address: https://substrate.example.com:443
+      token_ref: keychain:daemon.staging.access_token
+      auto_managed: false
+```
+
+Daemon config covers runtime settings plus the product settings that affect orchestration: commit policy, planning, review, harness routing, adapters, Foreman, and repositories. TUI config covers only visualization defaults, active daemon selection, and daemon connection registry entries.
+
+When connected to a remote daemon, the settings page edits remote daemon settings through `SettingsAPI`. Remote daemon product settings are not copied into the local config file.
+
+The TUI includes a Manage Daemons dialog, parallel to the existing
+manage/add repository flows. It lists configured daemons, shows
+connection status, and currently supports:
+
+- add remote daemon (label, address, optional `token_ref`)
+- test connection
+- switch active daemon
+- remove remote daemon
+- reveal/copy/rotate the connected daemon's access token from daemon settings
+
+Editing an existing entry's label, address, or token is not yet wired into
+the overlay; current behavior is remove + re-add. The auto-managed local
+daemon entry is visible, testable, and switchable, but not removable. Its
+address is daemon-owned.
 
 `Health` returns ready/not-ready, daemon version, build SHA, schema version, uptime, workspace ID, and whether a rebuild is in progress.
 
@@ -355,26 +435,37 @@ service WorkspaceAPI {
 
 ```proto
 service SessionAPI {
-  rpc GetInitialSnapshot(GetInitialSnapshotRequest) returns (InitialSnapshot);
+  rpc GetInitialSnapshot(GetInitialSnapshotRequest) returns (GetInitialSnapshotResponse);
   rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
-  rpc GetSession(GetSessionRequest) returns (Session);
-  rpc ArchiveSession(ArchiveSessionRequest) returns (ActionResult);
-  rpc UnarchiveSession(UnarchiveSessionRequest) returns (ActionResult);
-  rpc DeleteSession(DeleteSessionRequest) returns (ActionResult);
-  rpc ApprovePlan(ApprovePlanRequest) returns (ActionResult);
-  rpc RequestPlanChanges(RequestPlanChangesRequest) returns (ActionResult);
-  rpc SaveReviewedPlan(SaveReviewedPlanRequest) returns (ReviewedPlan);
-  rpc StartPlanning(StartPlanningRequest) returns (Operation);
-  rpc RestartPlanning(RestartPlanningRequest) returns (Operation);
-  rpc RunImplementation(RunImplementationRequest) returns (Operation);
-  rpc FinalizeSession(FinalizeSessionRequest) returns (Operation);
-  rpc RetryFailedSession(RetryFailedSessionRequest) returns (Operation);
-  rpc OverrideAccept(OverrideAcceptRequest) returns (ActionResult);
-  rpc FailReview(FailReviewRequest) returns (ActionResult);
+  rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
+  rpc SearchSessionHistory(SearchSessionHistoryRequest) returns (SearchSessionHistoryResponse);
+  rpc ArchiveSession(ArchiveSessionRequest) returns (ActionResultResponse);
+  rpc UnarchiveSession(UnarchiveSessionRequest) returns (ActionResultResponse);
+  rpc DeleteSession(DeleteSessionRequest) returns (ActionResultResponse);
+  rpc ApprovePlan(ApprovePlanRequest) returns (ActionResultResponse);
+  rpc RequestPlanChanges(RequestPlanChangesRequest) returns (ActionResultResponse);
+  rpc SaveReviewedPlan(SaveReviewedPlanRequest) returns (SaveReviewedPlanResponse);
+  rpc StartPlanning(StartPlanningRequest) returns (ActionResultResponse);
+  rpc RestartPlanning(RestartPlanningRequest) returns (ActionResultResponse);
+  rpc FollowUpPlan(FollowUpPlanRequest) returns (ActionResultResponse);
+  rpc RunImplementation(RunImplementationRequest) returns (OperationResponse);
+  rpc FinalizeSession(FinalizeSessionRequest) returns (ActionResultResponse);
+  rpc RetryFailedSession(RetryFailedSessionRequest) returns (ActionResultResponse);
+  rpc OverrideAccept(OverrideAcceptRequest) returns (ActionResultResponse);
+  rpc FailReview(FailReviewRequest) returns (ActionResultResponse);
 }
+
+message GetInitialSnapshotRequest { string workspace_id = 1; }
+message InitialSnapshot {
+  string payload_json = 1;
+  uint64 latest_event_sequence = 2;
+}
+message GetInitialSnapshotResponse { InitialSnapshot snapshot = 1; }
 ```
 
-Long-running operations return quickly with an `Operation` token. Completion and progress are observed on the event stream. This matches today's TUI model: commands start work, events drive visible state.
+`GetInitialSnapshot` bundles the initial TUI state (sessions, agent sessions, plans, sub-plans, questions, reviews, filters, live instances, archived session IDs) into a nested `snapshot` envelope keyed by `payload_json` plus the latest persisted event sequence. The proto deliberately avoids per-entity message types until the payload shape is stable; clients decode the JSON via the existing in-process `domain.SystemEvent`-style decoder. See [§9 Initial Snapshot](#9-initial-snapshot) for the on-the-wire message details.
+
+Long-running operations return quickly with either an `OperationResponse` or an `ActionResultResponse`, depending on whether the transport returns a reusable operation token or only an immediate dispatch acknowledgement. Completion and progress are observed on the event stream. This matches today's TUI model: commands start work, events drive visible state.
 
 ### AgentSessionAPI
 
@@ -403,11 +494,34 @@ service SettingsAPI {
   rpc SaveSettings(SaveSettingsRequest) returns (SaveSettingsResponse);
   rpc TestProvider(TestProviderRequest) returns (ProviderStatus);
   rpc LoginProvider(LoginProviderRequest) returns (LoginProviderResponse);
-  rpc RefreshProviderDiagnostics(RefreshProviderDiagnosticsRequest) returns (SettingsSnapshot);
+  rpc RefreshProviderDiagnostics(RefreshProviderDiagnosticsRequest) returns (RefreshProviderDiagnosticsResponse);
+}
+
+message RefreshProviderDiagnosticsRequest { string raw_yaml = 1; }
+message RefreshProviderDiagnosticsResponse {
+  string raw_yaml = 1;
+  string harness_warning = 2;
+  map<string, ProviderStatus> providers = 3;
 }
 ```
 
-Settings save runs the existing hard service-graph rebuild daemon-side. Clients receive rebuild lifecycle events over `EventStreamAPI`, including a terminal `EventServiceGraphRebuilt`, then refresh runtime context/read models.
+Settings save runs the existing hard service-graph rebuild daemon-side. The current implementation acknowledges the save only after the daemon swaps to the rebuilt service graph; clients then refresh runtime context/read models from the response and event stream. A dedicated terminal `EventServiceGraphRebuilt` can be added later if multi-client synchronization needs a named rebuild event.
+
+`SettingsAPI` currently manages the connected daemon's raw settings document, including transitional TUI-owned fields while the client/daemon split is still being cut over. The target boundary remains: local TUI settings are read and saved by the TUI client because they are not daemon state.
+
+Settings page scope is structural:
+
+- `Settings → TUI` edits local TUI config: presentation defaults, active daemon, and daemon registry entries. During the transition these fields may still round-trip through `SettingsAPI` and must preserve token refs/metadata.
+- `Settings → Daemon` edits the connected daemon's runtime and product config via `SettingsAPI`.
+
+The daemon settings page also exposes the connected daemon's access token:
+
+```text
+Access token: ••••••••••••
+[r] reveal  [c] copy  [R] rotate
+```
+
+Copy, reveal, and rotate require an already-authenticated daemon connection. A remote user cannot recover a token without a valid existing token; a connected operator can copy the daemon token for another TUI user.
 
 ### AutonomousModeAPI
 
@@ -454,41 +568,55 @@ Once there are multiple visualization clients, action availability and product s
 
 ## 9. Initial Snapshot
 
-A separate snapshot RPC is required. Event replay catches up changes, but clients also need a coherent starting view.
+A dedicated snapshot RPC is required. Event replay catches up changes, but clients also need a coherent starting view.
 
-Today the TUI seeds state through a fan-out of commands such as `LoadSessionsCmd`, `LoadTasksCmd`, `LoadPlansCmd`, `LoadNewSessionFiltersCmd`, `LoadLiveInstancesCmd`, `ReconcileOrphanedTasksCmd`, and per-session cascades. Over gRPC that should become one bundled product snapshot.
+Today the TUI seeds state through a fan-out of commands such as `LoadSessionsCmd`, `LoadTasksCmd`, `LoadPlansCmd`, `LoadNewSessionFiltersCmd`, `LoadLiveInstancesCmd`, `ReconcileOrphanedTasksCmd`, and per-session cascades. Over gRPC that should become one bundled product snapshot. The snapshot RPC lives on `SessionAPI` rather than a separate service; the current proto has no `SnapshotAPI`.
 
 ```proto
-service SnapshotAPI {
-  rpc GetInitialSnapshot(GetInitialSnapshotRequest) returns (GetInitialSnapshotResponse);
-}
-
 message GetInitialSnapshotRequest {
   string workspace_id = 1;
 }
 
-message GetInitialSnapshotResponse {
-  repeated Session sessions = 1;
-  repeated AgentSession agent_sessions = 2;
-  map<string, Plan> plans = 3;
-  map<string, SubPlanList> sub_plans = 4;
-  map<string, QuestionList> questions = 5;
-  map<string, ReviewList> reviews = 6;
-  repeated NewSessionFilter filters = 7;
-  repeated Instance live_instances = 8;
-  repeated string archived_session_ids = 9;
-  uint64 latest_event_sequence = 10;
+message InitialSnapshot {
+  string payload_json = 1;   // JSON envelope: sessions, agent_sessions, plans, sub_plans, questions, reviews, filters, live_instances, archived_session_ids
+  uint64 latest_event_sequence = 2;
 }
+message GetInitialSnapshotResponse { InitialSnapshot snapshot = 1; }
 ```
+
+> **Transitional wire shape.** The proto above is the schema contract; the
+> in-process handler currently fills the snapshot with a structured
+> `logic.InitialSnapshot` (typed Go struct with sessions, agent sessions,
+> plans, sub-plans, questions, reviews, filters, live instances, archived
+> session IDs, and the latest event sequence) and serializes it via the
+> custom JSON-over-gRPC transport. The `payload_json` field is the
+> transitional JSON envelope; typed per-entity proto fields can be added
+> later as additional optional `oneof` cases, but the JSON shape remains the
+> source of truth for clients in the first cut. As the payload evolves, the
+> daemon keeps the contract stable; clients continue to decode it via the
+> existing in-process `domain.SystemEvent`-style decoder.
 
 Startup flow:
 
 1. Connect and call `Health`.
 2. Subscribe to events, recording the stream sequence.
-3. Call `GetInitialSnapshot`.
+3. Call `SessionAPI.GetInitialSnapshot`.
 4. Apply snapshot.
 5. Apply buffered events with `sequence > snapshot.latest_event_sequence`.
 6. Continue live.
+
+Daemon switch flow:
+
+1. Confirm or discard unsaved local drafts.
+2. Disconnect existing event and log streams.
+3. Clear all daemon-derived state: sessions, agent sessions, plans, sub-plans, questions, reviews, artifacts, live instances, logs, event cursor, in-flight command maps, and selections tied to the old daemon.
+4. Connect to the selected daemon with the token loaded from the system keychain.
+5. Call `Health`.
+6. Subscribe to events.
+7. Call `SessionAPI.GetInitialSnapshot`.
+8. Apply snapshot.
+9. Apply buffered events with `sequence > snapshot.latest_event_sequence`.
+10. Persist `tui.active_daemon`.
 
 This avoids missed updates between snapshot and stream establishment.
 
@@ -577,8 +705,14 @@ internal/daemon/
   client/
   socket/
   auth/
+  registry/
+
+internal/config/
+  daemon.go
+  tui.go
 
 internal/tui/
+  daemonpicker/
   views/                  # Bubble Tea only
 ```
 
@@ -730,7 +864,28 @@ Acceptance:
 - No process split yet.
 - Existing rendered behavior remains unchanged for converted paths.
 
-### Phase 2 — Move logic composition out of `internal/tui/views`
+### Phase 2 — Split config ownership and daemon registry
+
+Goal: separate daemon settings from TUI settings before the process boundary depends on the distinction.
+
+Steps:
+
+1. Split config into logical `daemon:` and `tui:` roots while keeping one physical config file.
+2. Move existing product settings under daemon config: commit, plan, review, harness, adapters, Foreman, and repos.
+3. Keep presentation defaults and daemon registry entries under TUI config.
+4. Store daemon access tokens in the system keychain and config only `token_ref` values.
+5. Add local daemon auto-registration semantics without changing the active daemon behind the user's back.
+6. Add a Manage Daemons dialog for add, edit, test, switch, and remove operations.
+
+Acceptance:
+
+- Config has separate daemon and TUI roots.
+- Access tokens are not serialized into config or metadata files.
+- Local daemon startup can publish its address and token reference for the TUI.
+- TUI can add and test a remote daemon entry without copying remote product settings locally.
+- TUI can switch active daemons through a state-resetting flow.
+
+### Phase 3 — Move logic composition out of `internal/tui/views`
 
 Goal: make the TUI package visually focused.
 
@@ -749,7 +904,7 @@ Acceptance:
 - `internal/tui/views/settings_service.go` is deleted or reduced to pure view conversion if transitional constraints require it.
 - `internal/tui/views` does not import adapter packages for settings diagnostics/login.
 
-### Phase 3 — Add event sequencing and snapshot contract
+### Phase 4 — Add event sequencing and snapshot contract
 
 Goal: make reconnectable remote clients possible before relying on gRPC for all behavior.
 
@@ -767,9 +922,9 @@ Acceptance:
 - A client can miss live events, reconnect from the last processed sequence, and converge.
 - Snapshot plus buffered event application has no lost-update window.
 
-### Phase 4 — Add gRPC transport
+### Phase 5 — Add gRPC transport
 
-Goal: expose the product client contract over local gRPC.
+Goal: expose the product client contract over local or explicitly configured remote gRPC.
 
 Steps:
 
@@ -778,7 +933,8 @@ Steps:
 3. Implement daemon RPC handlers by calling the same logic interfaces from Phase 1.
 4. Implement `EventStreamAPI.Subscribe` over persisted replay plus live `event.Bus` subscription.
 5. Implement `LogAPI` streaming/snapshot APIs.
-6. Add integration tests that exercise the same logic through gRPC.
+6. Implement daemon token copy/reveal/rotation APIs for authenticated clients.
+7. Add integration tests that exercise the same logic through gRPC.
 
 Acceptance:
 
@@ -786,8 +942,9 @@ Acceptance:
 - A gRPC client can get an initial snapshot, list sessions, perform a product action, subscribe to events, and tail a session log.
 - Event reconnect works by sequence.
 - Slow clients do not block daemon producers.
+- Authenticated clients can copy or rotate the connected daemon's access token through the daemon API.
 
-### Phase 5 — Split CLI modes
+### Phase 6 — Split CLI modes
 
 Goal: make process separation user-visible but compatible.
 
@@ -795,7 +952,7 @@ Steps:
 
 1. Add `substrate daemon` / `substrate serve`.
 2. Add `substrate tui`.
-3. Keep `substrate` as compatibility mode: start/connect daemon, then launch TUI.
+3. Keep `substrate` as compatibility mode: start/connect the configured local daemon, then launch TUI.
 4. Add socket metadata and bearer-token management.
 5. Add daemon health/info endpoints.
 6. Ensure clean shutdown aborts/interrupts sessions using existing graceful shutdown semantics.
@@ -803,12 +960,12 @@ Steps:
 Acceptance:
 
 - TUI process does not open SQLite.
-- TUI process does not load secrets.
+- TUI process does not load daemon-owned provider, harness, repo, or adapter secrets.
 - TUI process does not construct adapters or harnesses.
 - Quitting the TUI does not abort running agents.
 - Explicit daemon shutdown runs the existing daemon-side teardown path.
 
-### Phase 6 — Promote read models
+### Phase 7 — Promote read models
 
 Goal: remove product state derivation from visualization clients.
 
@@ -826,7 +983,7 @@ Acceptance:
 - Multiple visualization clients would show the same overview/sidebar/action availability from the same daemon read model.
 - TUI rendering remains byte-identical for a fixed seeded state.
 
-### Phase 7 — Future extensions
+### Phase 8 — Future extensions
 
 - Multi-workspace service graphs.
 - Multi-client model with one controller and read-only watchers, if product requirements justify it.
@@ -863,9 +1020,9 @@ Settings changes currently rebuild the service graph. In daemon mode:
 
 - rebuild remains daemon-local
 - mutating RPCs that cannot run during rebuild return `ERROR_CODE_GRAPH_REBUILDING`
-- clients receive rebuild lifecycle events
-- `EventServiceGraphRebuilt` is the terminal resync cue
-- clients refresh runtime context/read models after that event
+- `SaveSettings` acknowledges only after the daemon swaps to the rebuilt graph
+- clients refresh runtime context/read models from the response and event stream
+- a future named rebuild lifecycle event can be added if multi-client synchronization needs one
 
 The server owns rebuild ordering and locking. The TUI does not coordinate rebuild internals.
 
@@ -902,17 +1059,23 @@ Proto field numbers are forever. Use `reserved` ranges/names when removing field
 When implemented:
 
 1. `substrate daemon` / `substrate serve` runs as a long-lived process that owns SQLite, the service graph, the event bus, adapters, orchestrators, and all agent subprocesses.
-2. `substrate tui` connects to the daemon over a Unix socket, renders the full TUI, and contains no direct DB/service/orchestrator/adapter ownership.
-3. `substrate` with no args starts or connects to the daemon and launches the TUI compatibly.
-4. Quitting the TUI does not abort running agents.
-5. Explicit daemon shutdown does not corrupt the DB and runs the existing graceful teardown semantics.
-6. Settings save still hard-rebuilds the service graph and the TUI resyncs automatically after `EventServiceGraphRebuilt`.
-7. Every event the daemon publishes is assigned a monotonic sequence and can be replayed by reconnecting clients.
-8. The event stream has a defined slow-client policy that does not block daemon producers.
-9. Mutating RPCs that can duplicate work support idempotency keys.
-10. The TUI's rendered output is unchanged for fixed seeded state after each migration phase.
-11. The gRPC layer has integration tests against a real daemon process or daemon server harness.
-12. The API exposes product actions/read models, not repositories or current service/orchestrator structs.
+2. `substrate tui` connects to the selected daemon, renders the full TUI, and contains no direct DB/service/orchestrator/adapter ownership.
+3. `substrate` with no args starts or connects to the configured local daemon and launches the TUI compatibly.
+4. Config has separate daemon and TUI roots even if both live in one physical config file.
+5. Daemon access tokens are stored in the system keychain and referenced from config; they are never stored inline in config or metadata.
+6. Local daemon startup auto-registers its address and token reference without overriding the active daemon selection.
+7. The TUI can add, test, switch to, and remove remote daemon entries.
+8. Switching daemons flushes daemon-derived TUI state and loads the selected daemon's snapshot/event stream.
+9. A connected operator can reveal, copy, or rotate the connected daemon's access token from daemon settings.
+10. Quitting the TUI does not abort running agents.
+11. Explicit daemon shutdown does not corrupt the DB and runs the existing graceful teardown semantics.
+12. Settings save still hard-rebuilds the service graph and the saving TUI resyncs from the acknowledged response/read models.
+13. Every event the daemon publishes is assigned a monotonic sequence and can be replayed by reconnecting clients.
+14. The event stream has a defined slow-client policy that does not block daemon producers.
+15. Mutating RPCs that can duplicate work support idempotency keys.
+16. The TUI's rendered output is unchanged for fixed seeded state after each migration phase.
+17. The gRPC layer has integration tests against a real daemon process or daemon server harness.
+18. The API exposes product actions/read models, not repositories or current service/orchestrator structs.
 
 ## 16. References
 

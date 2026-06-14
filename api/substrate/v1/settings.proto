@@ -1,0 +1,78 @@
+syntax = "proto3";
+
+package substrate.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/beeemT/substrate/internal/gen/substrate/v1;substratev1";
+
+service SettingsAPI {
+  rpc GetSettings(GetSettingsRequest) returns (GetSettingsResponse);
+  rpc SaveSettings(SaveSettingsRequest) returns (SaveSettingsResponse);
+  rpc TestProvider(TestProviderRequest) returns (ProviderStatus);
+  rpc LoginProvider(LoginProviderRequest) returns (LoginProviderResponse);
+  rpc RefreshProviderDiagnostics(RefreshProviderDiagnosticsRequest) returns (RefreshProviderDiagnosticsResponse);
+}
+
+message GetSettingsRequest {}
+message SettingsSnapshot { string raw_yaml = 1; }
+// GetSettingsResponse matches the daemon transport shape: raw YAML plus
+// the local daemon registry and active-daemon selection so clients can
+// render settings without an extra round-trip.
+message GetSettingsResponse {
+  string raw_yaml = 1;
+  string active_daemon = 2;
+  repeated string daemons_json = 3;
+}
+message SaveSettingsRequest { string raw_yaml = 1; string idempotency_key = 2; }
+message SaveSettingsResponse { string message = 1; }
+message TestProviderRequest { string provider = 1; string raw_yaml = 2; }
+message ProviderStatus { string title = 1; bool configured = 2; bool connected = 3; string auth_source = 4; string description = 5; string last_error = 6; }
+message LoginProviderRequest { string provider = 1; string harness = 2; string raw_yaml = 3; string idempotency_key = 4; }
+message LoginProviderResponse { string message = 1; bool dirty = 2; string raw_yaml = 3; }
+message RefreshProviderDiagnosticsRequest { string raw_yaml = 1; }
+message RefreshProviderDiagnosticsResponse {
+  string raw_yaml = 1;
+  string harness_warning = 2;
+  map<string, ProviderStatus> providers = 3;
+}
+
+service AutonomousModeAPI {
+  rpc StartAutonomousMode(StartAutonomousModeRequest) returns (AutonomousModeRun);
+  rpc StopAutonomousMode(StopAutonomousModeRequest) returns (AutonomousModeStatusResponse);
+  rpc GetAutonomousModeStatus(GetAutonomousModeStatusRequest) returns (AutonomousModeStatusResponse);
+}
+
+message StartAutonomousModeRequest {
+  string workspace_id = 1;
+  string instance_id = 2;
+  repeated string selected_filter_ids = 3;
+  string idempotency_key = 4;
+}
+message StopAutonomousModeRequest { string instance_id = 1; string idempotency_key = 2; }
+message GetAutonomousModeStatusRequest { string instance_id = 1; }
+message AutonomousStatusEntry {
+  string kind = 1;
+  string level = 2;
+  string message = 3;
+  string payload = 4;
+  google.protobuf.Timestamp timestamp = 5;
+}
+message AutonomousModeRun {
+  string instance_id = 1;
+  string workspace_id = 2;
+  bool running = 3;
+  google.protobuf.Timestamp started_at = 4;
+  google.protobuf.Timestamp stopped_at = 5;
+  string stop_reason = 6;
+  repeated string active_filter_ids = 7;
+  map<string, StringList> active_by_provider = 8;
+  repeated string recent_status_json = 9;
+  repeated string last_detected_json = 10;
+}
+message AutonomousModeStatusResponse {
+  bool running = 1;
+  repeated AutonomousModeRun runs = 2;
+  int32 active_count = 3;
+}
+message StringList { repeated string values = 1; }

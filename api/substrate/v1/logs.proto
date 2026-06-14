@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package substrate.v1;
+
+option go_package = "github.com/beeemT/substrate/internal/gen/substrate/v1;substratev1";
+
+service LogAPI {
+  rpc TailAgentSessionLog(TailAgentSessionLogRequest) returns (stream SessionLogBatch);
+  rpc SnapshotAgentSessionLog(SnapshotAgentSessionLogRequest) returns (SessionLogSnapshot);
+  rpc TailAppLog(TailAppLogRequest) returns (stream AppLogBatch);
+  rpc SnapshotAppLog(SnapshotAppLogRequest) returns (AppLogSnapshot);
+}
+
+message TailAgentSessionLogRequest { string agent_session_id = 1; int64 since = 2; }
+message SnapshotAgentSessionLogRequest { string agent_session_id = 1; }
+message SessionLogBatch { string agent_session_id = 1; repeated string entries_json = 2; int64 next_offset = 3; bool final = 4; }
+message SessionLogSnapshot { string agent_session_id = 1; repeated string entries_json = 2; int64 next_offset = 3; }
+message TailAppLogRequest { int64 since = 1; }
+message AppLogBatch { repeated string entries_json = 1; int64 next_offset = 2; }
+message SnapshotAppLogRequest {}
+message AppLogSnapshot { repeated string entries_json = 1; int64 next_offset = 2; }

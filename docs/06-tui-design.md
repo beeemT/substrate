@@ -1,8 +1,10 @@
 # 06 - TUI Design
 
-<!-- docs:last-integrated-commit 5cbffc696e10a65fb98b6957c93e3c5f68e837d8 -->
+<!-- docs:last-integrated-commit 2826f9fd2e658941eb96072a0c30df9766b92d94 -->
 
 The Substrate terminal interface is built with Bubble Tea and lipgloss. The top-level app owns: left sidebar pane, right content pane, single footer/status row, centered overlays (work browser, session-history, workspace init, action menu), full-screen settings page, and a toast stack rendered over the shell.
+
+In daemon mode the TUI is a visualization client: it owns view state, overlays, local daemon selection, and rendering, while product actions/read models/event streams come from the selected daemon. Transitional in-process paths remain for compatibility but should not be the target for new UI behavior.
 
 ---
 
@@ -374,4 +376,4 @@ Multiple substrate instances can open the same workspace simultaneously. The glo
 
 **Agent output:** All output is persisted to the session log file. Any instance can tail from disk. Tailing handles log rotation: on size regression or inode change, offset resets to 0.
 
-**State visibility:** Session state changes are visible to all instances immediately via the event bus. The TUI subscribes to domain events for targeted state reloads without polling.
+**State visibility:** Session state changes are visible via daemon event-stream batches in daemon mode, and via direct bus subscription in transitional in-process mode. The TUI consumes those events for targeted state reloads without polling.

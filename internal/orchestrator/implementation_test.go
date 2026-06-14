@@ -637,12 +637,15 @@ type implementationEventRepo struct {
 	events []domain.SystemEvent
 }
 
-func (r *implementationEventRepo) Create(_ context.Context, evt domain.SystemEvent) error {
+func (r *implementationEventRepo) Create(_ context.Context, evt domain.SystemEvent) (domain.SystemEvent, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if evt.Sequence == 0 {
+		evt.Sequence = uint64(len(r.events) + 1)
+	}
 	r.events = append(r.events, evt)
 
-	return nil
+	return evt, nil
 }
 
 func (r *implementationEventRepo) ListByType(_ context.Context, eventType string, limit int) ([]domain.SystemEvent, error) {
@@ -675,6 +678,34 @@ func (r *implementationEventRepo) ListByWorkspaceID(_ context.Context, workspace
 	}
 
 	return events, nil
+}
+
+func (r *implementationEventRepo) ListByWorkspaceIDAfterSequence(_ context.Context, workspaceID string, afterSequence uint64, limit int) ([]domain.SystemEvent, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var events []domain.SystemEvent
+	for _, evt := range r.events {
+		if evt.WorkspaceID == workspaceID && evt.Sequence > afterSequence {
+			events = append(events, evt)
+		}
+	}
+	if limit > 0 && len(events) > limit {
+		events = events[:limit]
+	}
+
+	return events, nil
+}
+
+func (r *implementationEventRepo) LatestSequence(_ context.Context, workspaceID string) (uint64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var latest uint64
+	for _, event := range r.events {
+		if event.WorkspaceID == workspaceID && event.Sequence > latest {
+			latest = event.Sequence
+		}
+	}
+	return latest, nil
 }
 
 func TestImplementationForwardEventsDoesNotPublishTranscriptEvents(t *testing.T) {

@@ -125,9 +125,11 @@ type QuestionRepository interface {
 
 // EventRepository provides persistence for system events.
 type EventRepository interface {
-	Create(ctx context.Context, e domain.SystemEvent) error
+	Create(ctx context.Context, e domain.SystemEvent) (domain.SystemEvent, error)
 	ListByType(ctx context.Context, eventType string, limit int) ([]domain.SystemEvent, error)
 	ListByWorkspaceID(ctx context.Context, workspaceID string, limit int) ([]domain.SystemEvent, error)
+	ListByWorkspaceIDAfterSequence(ctx context.Context, workspaceID string, afterSequence uint64, limit int) ([]domain.SystemEvent, error)
+	LatestSequence(ctx context.Context, workspaceID string) (uint64, error)
 }
 
 // InstanceRepository provides CRUD for substrate instances.

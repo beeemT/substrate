@@ -217,10 +217,13 @@ type overviewEventRepo struct {
 	events []domain.SystemEvent
 }
 
-func (r *overviewEventRepo) Create(_ context.Context, e domain.SystemEvent) error {
+func (r *overviewEventRepo) Create(_ context.Context, e domain.SystemEvent) (domain.SystemEvent, error) {
+	if e.Sequence == 0 {
+		e.Sequence = uint64(len(r.events) + 1)
+	}
 	r.events = append(r.events, e)
 
-	return nil
+	return e, nil
 }
 
 func (r *overviewEventRepo) ListByType(_ context.Context, eventType string, limit int) ([]domain.SystemEvent, error) {
@@ -249,6 +252,30 @@ func (r *overviewEventRepo) ListByWorkspaceID(_ context.Context, workspaceID str
 	}
 
 	return filtered, nil
+}
+
+func (r *overviewEventRepo) ListByWorkspaceIDAfterSequence(_ context.Context, workspaceID string, afterSequence uint64, limit int) ([]domain.SystemEvent, error) {
+	filtered := make([]domain.SystemEvent, 0, len(r.events))
+	for _, event := range r.events {
+		if event.WorkspaceID == workspaceID && event.Sequence > afterSequence {
+			filtered = append(filtered, event)
+		}
+	}
+	if limit > 0 && len(filtered) > limit {
+		filtered = filtered[:limit]
+	}
+
+	return filtered, nil
+}
+
+func (r *overviewEventRepo) LatestSequence(_ context.Context, workspaceID string) (uint64, error) {
+	var latest uint64
+	for _, event := range r.events {
+		if event.WorkspaceID == workspaceID && event.Sequence > latest {
+			latest = event.Sequence
+		}
+	}
+	return latest, nil
 }
 
 type overviewArtifactLinkRepo struct {

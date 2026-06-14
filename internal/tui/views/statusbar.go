@@ -325,6 +325,7 @@ func DefaultHints() []KeybindHint {
 		{Key: "n", Label: "New session"},
 		{Key: "A", Label: "Autonomous"},
 		{Key: "R", Label: "Repos"},
+		{Key: "D", Label: "Daemons"},
 		{Key: "/", Label: "Search sessions"},
 		{Key: "s", Label: "Settings"},
 		{Key: "x", Label: "Actions"},

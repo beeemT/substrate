@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/beeemT/substrate/internal/domain"
+	"github.com/beeemT/substrate/internal/logic"
 	"github.com/beeemT/substrate/internal/tui/components"
 	"github.com/beeemT/substrate/internal/tui/styles"
 )
@@ -168,6 +169,42 @@ type ArtifactCheck struct {
 	Name       string
 	Status     string // "queued" | "in_progress" | "completed"
 	Conclusion string // "success" | "failure" | ...
+}
+
+func artifactItemFromLogic(item logic.ArtifactItem) ArtifactItem {
+	reviews := make([]ArtifactReview, 0, len(item.Reviews))
+	for _, review := range item.Reviews {
+		reviews = append(reviews, ArtifactReview{
+			ReviewerLogin: review.ReviewerLogin,
+			State:         review.State,
+			SubmittedAt:   review.SubmittedAt,
+		})
+	}
+	checks := make([]ArtifactCheck, 0, len(item.Checks))
+	for _, check := range item.Checks {
+		checks = append(checks, ArtifactCheck{
+			Name:       check.Name,
+			Status:     check.Status,
+			Conclusion: check.Conclusion,
+		})
+	}
+	return ArtifactItem{
+		ID:           item.ID,
+		Provider:     item.Provider,
+		Kind:         item.Kind,
+		RepoName:     item.RepoName,
+		Ref:          item.Ref,
+		URL:          item.URL,
+		State:        item.State,
+		Branch:       item.Branch,
+		Draft:        item.Draft,
+		WorktreePath: item.WorktreePath,
+		MergedAt:     item.MergedAt,
+		CreatedAt:    item.CreatedAt,
+		UpdatedAt:    item.UpdatedAt,
+		Reviews:      reviews,
+		Checks:       checks,
+	}
 }
 
 type OverviewActivityItem struct {
@@ -2145,6 +2182,13 @@ func recordedReviewArtifacts(ctx context.Context, svcs *Services, wi *domain.Ses
 	if wi == nil || wi.WorkspaceID == "" {
 		return nil
 	}
+	if svcs == nil || svcs.Events == nil {
+		// Daemon-backed mode does not expose the local event service; the
+		// daemon's own artifact cache (snapshot.Artifacts) is the
+		// authoritative source. Treat the local cache miss as empty rather
+		// than panicking.
+		return nil
+	}
 	events, err := svcs.Events.ListByWorkspaceID(ctx, wi.WorkspaceID, 0)
 	if err != nil {
 		slog.Warn("failed to list review artifact events", "error", err, "workspaceID", wi.WorkspaceID)
@@ -2184,6 +2228,9 @@ func recordedReviewArtifacts(ctx context.Context, svcs *Services, wi *domain.Ses
 func (a *App) buildArtifactItems(wi *domain.Session) []ArtifactItem {
 	if wi == nil || wi.WorkspaceID == "" {
 		return nil
+	}
+	if items, ok := a.artifactItems[wi.ID]; ok {
+		return append([]ArtifactItem(nil), items...)
 	}
 	ctx := context.Background()
 	var items []ArtifactItem

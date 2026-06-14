@@ -2,11 +2,16 @@ package sessionlog
 
 import (
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -482,6 +487,151 @@ func ReadFile(path string) ([]Entry, error) {
 	}
 
 	return ScanEntries(file)
+}
+
+func ValidateSessionID(sessionID string) error {
+	if strings.TrimSpace(sessionID) == "" {
+		return fmt.Errorf("session id is required")
+	}
+	for _, r := range sessionID {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			continue
+		}
+		return fmt.Errorf("session id contains invalid path character %q", r)
+	}
+	return nil
+}
+
+// InteractionPaths returns archived rotations followed by the active log path
+// for a session interaction transcript.
+func InteractionPaths(sessionsDir, sessionID string) ([]string, error) {
+	if err := ValidateSessionID(sessionID); err != nil {
+		return nil, err
+	}
+	pattern := filepath.Join(sessionsDir, sessionID+".log.*.gz")
+	compressed, err := filepath.Glob(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("glob session logs: %w", err)
+	}
+	prefix := sessionID + ".log."
+	suffix := ".gz"
+	sort.SliceStable(compressed, func(i, j int) bool {
+		ai := rotationIndex(compressed[i], prefix, suffix)
+		aj := rotationIndex(compressed[j], prefix, suffix)
+		if ai != aj {
+			return ai < aj
+		}
+		return compressed[i] < compressed[j]
+	})
+	paths := append([]string(nil), compressed...)
+	finalArchive := filepath.Join(sessionsDir, sessionID+".log.gz")
+	if _, err := os.Stat(finalArchive); err == nil {
+		paths = append(paths, finalArchive)
+	} else if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("stat session log archive: %w", err)
+	}
+	active := filepath.Join(sessionsDir, sessionID+".log")
+	if _, err := os.Stat(active); err == nil {
+		paths = append(paths, active)
+	} else if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("stat session log: %w", err)
+	}
+	return paths, nil
+}
+
+// rotationIndex extracts the numeric rotation suffix from a path of the form
+// "<prefix><n><suffix>" (e.g. "<sessionID>.log.123.gz"). Files whose suffix
+// is not a valid base-10 integer sort after numbered rotations so the
+// numeric order is preserved.
+func rotationIndex(path, prefix, suffix string) int64 {
+	base := filepath.Base(path)
+	if !strings.HasPrefix(base, prefix) || !strings.HasSuffix(base, suffix) {
+		return 1<<63 - 1
+	}
+	n, err := strconv.ParseInt(base[len(prefix):len(base)-len(suffix)], 10, 64)
+	if err != nil {
+		return 1<<63 - 1
+	}
+	return n
+}
+
+// ReadActiveFile reads the active log file and optionally includes a trailing
+// partial line. The returned offset is the number of active-file bytes consumed.
+func ReadActiveFile(path string, includePartial bool) ([]Entry, int64, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	end := len(data)
+	if !includePartial {
+		end = 0
+		if lastNewline := bytes.LastIndexByte(data, '\n'); lastNewline >= 0 {
+			end = lastNewline + 1
+		}
+	}
+	entries, err := ScanEntries(bytes.NewReader(data[:end]))
+	if err != nil {
+		return nil, int64(end), err
+	}
+	return entries, int64(end), nil
+}
+
+// LoadInteractionEntries reads archived rotations and the active log. nextOffset
+// is the byte length consumed from the active file, 0 when the active file
+// exists but no bytes have been consumed, and 0 when no active file exists so
+// a newly created active log can be tailed from its first byte. Stable corrupt
+// archives are returned as errors, but very recent truncated gzip files are
+// treated as in-progress rotation output and skipped for this load.
+func LoadInteractionEntries(sessionsDir, sessionID string, includePartial bool) ([]Entry, int64, error) {
+	if err := ValidateSessionID(sessionID); err != nil {
+		return nil, 0, err
+	}
+	active := filepath.Join(sessionsDir, sessionID+".log")
+	paths, err := InteractionPaths(sessionsDir, sessionID)
+	if err != nil {
+		return nil, 0, err
+	}
+	var entries []Entry
+	nextOffset := int64(0)
+	for _, path := range paths {
+		if path == active {
+			chunk, activeOffset, readErr := ReadActiveFile(path, includePartial)
+			if readErr != nil {
+				return nil, 0, fmt.Errorf("read active session log %s: %w", path, readErr)
+			}
+			entries = append(entries, chunk...)
+			nextOffset = activeOffset
+			continue
+		}
+		chunk, readErr := ReadFile(path)
+		if readErr != nil {
+			if isInProgressGzipSegment(path, readErr) {
+				continue
+			}
+			return nil, 0, fmt.Errorf("read session log %s: %w", path, readErr)
+		}
+		entries = append(entries, chunk...)
+	}
+	return entries, nextOffset, nil
+}
+
+func isInProgressGzipSegment(path string, err error) bool {
+	if !strings.HasSuffix(path, ".gz") {
+		return false
+	}
+	if !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
+		return false
+	}
+	info, statErr := os.Stat(path)
+	if statErr != nil {
+		return false
+	}
+	time.Sleep(50 * time.Millisecond)
+	after, statErr := os.Stat(path)
+	if statErr != nil {
+		return false
+	}
+	return after.Size() != info.Size() || !after.ModTime().Equal(info.ModTime())
 }
 
 // FlattenAssistantOutput concatenates all assistant and plain-text entries

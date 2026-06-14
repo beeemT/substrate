@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package substrate.v1;
+
+option go_package = "github.com/beeemT/substrate/internal/gen/substrate/v1;substratev1";
+
+// ReadModelAPI exposes daemon-owned product projections. Clients use these
+// instead of computing read state from raw events. Wrapper response types
+// (GetSessionOverviewResponse, GetSidebarResponse,
+// GetAvailableActionsResponse) match the nested transport shape; the inner
+// messages (SessionOverview, SidebarModel, AvailableActions) are placeholder
+// descriptors for the JSON payload. Typed oneof fields can be added later
+// without breaking the wire contract.
+service ReadModelAPI {
+  rpc GetSessionOverview(GetSessionOverviewRequest) returns (GetSessionOverviewResponse);
+  rpc GetSidebar(GetSidebarRequest) returns (GetSidebarResponse);
+  rpc GetPlan(GetPlanRequest) returns (PlanView);
+  rpc GetArtifacts(GetArtifactsRequest) returns (ArtifactsView);
+  rpc GetAvailableActions(GetAvailableActionsRequest) returns (GetAvailableActionsResponse);
+}
+
+message GetSessionOverviewRequest { string workspace_id = 1; string session_id = 2; }
+message SessionOverview { string session_id = 1; string title = 2; string state = 3; int32 agent_sessions = 4; int32 open_questions = 5; int32 review_cycles = 6; repeated string available_actions = 7; }
+message GetSessionOverviewResponse { SessionOverview overview = 1; }
+
+message GetSidebarRequest { string workspace_id = 1; }
+message SidebarModel { repeated SidebarEntry entries = 1; }
+message GetSidebarResponse { SidebarModel sidebar = 1; }
+message SidebarEntry { string id = 1; string kind = 2; string title = 3; string parent_id = 4; }
+
+message GetPlanRequest { string workspace_id = 1; string session_id = 2; }
+message PlanView { string payload_json = 1; }
+
+message GetArtifactsRequest { string workspace_id = 1; string session_id = 2; }
+message ArtifactsView { string payload_json = 1; }
+
+message GetAvailableActionsRequest { string workspace_id = 1; string session_id = 2; }
+message AvailableActions { repeated string actions = 1; }
+message GetAvailableActionsResponse { AvailableActions actions = 1; }

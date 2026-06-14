@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package substrate.v1;
+
+option go_package = "github.com/beeemT/substrate/internal/gen/substrate/v1;substratev1";
+
+service WorkspaceAPI {
+  rpc GetRuntimeContext(GetRuntimeContextRequest) returns (RuntimeContext);
+  rpc InitializeWorkspace(InitializeWorkspaceRequest) returns (Workspace);
+  rpc HealthCheckWorkspace(HealthCheckWorkspaceRequest) returns (WorkspaceHealth);
+  rpc ListManagedRepos(ListManagedReposRequest) returns (ListManagedReposResponse);
+  rpc ListWorktrees(ListWorktreesRequest) returns (ListWorktreesResponse);
+  rpc CloneRepo(CloneRepoRequest) returns (CloneRepoResponse);
+  rpc InitRepo(InitRepoRequest) returns (InitRepoResponse);
+  rpc RemoveRepo(RemoveRepoRequest) returns (RemoveRepoResponse);
+}
+
+message RuntimeContext { string workspace_id = 1; string workspace_name = 2; string workspace_dir = 3; string instance_id = 4; }
+message Workspace { string id = 1; string name = 2; string dir = 3; }
+message WorkspaceHealth { bool ok = 1; string message = 2; }
+message GetRuntimeContextRequest {}
+message InitializeWorkspaceRequest { string dir = 1; string name = 2; }
+message HealthCheckWorkspaceRequest { string dir = 1; }
+message ListManagedReposRequest { string workspace_dir = 1; }
+message ListManagedReposResponse { repeated string repos_json = 1; }
+message ListWorktreesRequest { string repo_path = 1; }
+message ListWorktreesResponse { repeated string worktrees_json = 1; }
+message CloneRepoRequest { string clone_url = 1; string clone_dir = 2; string idempotency_key = 3; }
+message CloneRepoResponse { string repo_path = 1; }
+message InitRepoRequest { string repo_path = 1; string idempotency_key = 2; }
+message InitRepoResponse { string repo_path = 1; }
+message RemoveRepoRequest { string repo_path = 1; string idempotency_key = 2; }
+message RemoveRepoResponse {}

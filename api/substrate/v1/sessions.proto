@@ -1,0 +1,108 @@
+syntax = "proto3";
+
+package substrate.v1;
+
+option go_package = "github.com/beeemT/substrate/internal/gen/substrate/v1;substratev1";
+
+// SessionAPI exposes the user-visible work-item / session surface. The API
+// is product-shaped: actions, not raw repository writes.
+//
+// Response wrappers (GetSessionResponse, SaveReviewedPlanResponse,
+// OperationResponse, ActionResultResponse) are nested envelopes matching the
+// actual transport shape. `Operation` is reused as the flat operation
+// payload embedded in OperationResponse. Long-running actions return
+// quickly; completion and progress are observed on the event stream.
+service SessionAPI {
+  rpc GetInitialSnapshot(GetInitialSnapshotRequest) returns (GetInitialSnapshotResponse);
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
+  rpc SearchSessionHistory(SearchSessionHistoryRequest) returns (SearchSessionHistoryResponse);
+  rpc ArchiveSession(ArchiveSessionRequest) returns (ActionResultResponse);
+  rpc UnarchiveSession(UnarchiveSessionRequest) returns (ActionResultResponse);
+  rpc DeleteSession(DeleteSessionRequest) returns (ActionResultResponse);
+  rpc ApprovePlan(ApprovePlanRequest) returns (ActionResultResponse);
+  rpc RequestPlanChanges(RequestPlanChangesRequest) returns (ActionResultResponse);
+  rpc SaveReviewedPlan(SaveReviewedPlanRequest) returns (SaveReviewedPlanResponse);
+  rpc StartPlanning(StartPlanningRequest) returns (ActionResultResponse);
+  rpc RestartPlanning(RestartPlanningRequest) returns (ActionResultResponse);
+  rpc FollowUpPlan(FollowUpPlanRequest) returns (ActionResultResponse);
+  rpc RunImplementation(RunImplementationRequest) returns (OperationResponse);
+  rpc FinalizeSession(FinalizeSessionRequest) returns (ActionResultResponse);
+  rpc RetryFailedSession(RetryFailedSessionRequest) returns (ActionResultResponse);
+  rpc OverrideAccept(OverrideAcceptRequest) returns (ActionResultResponse);
+  rpc FailReview(FailReviewRequest) returns (ActionResultResponse);
+  rpc ResumeAllForSession(ResumeAllForSessionRequest) returns (ActionResultResponse);
+  rpc RetryAgentSession(RetryAgentSessionRequest) returns (ActionResultResponse);
+  rpc FollowUpAgentSession(FollowUpAgentSessionRequest) returns (ActionResultResponse);
+  rpc SteerSession(SteerSessionRequest) returns (ActionResultResponse);
+  rpc AnswerQuestion(AnswerQuestionRequest) returns (ActionResultResponse);
+  rpc SkipQuestion(SkipQuestionRequest) returns (ActionResultResponse);
+}
+
+message Session { string id = 1; string title = 2; string state = 3; }
+message GetSessionResponse { Session session = 1; }
+
+message ReviewedPlan { string id = 1; string content = 2; }
+message Plan { string id = 1; string content = 2; }
+message SubPlan { string id = 1; string plan_id = 2; string content = 3; }
+message SaveReviewedPlanResponse {
+  Plan plan = 1;
+  repeated SubPlan sub_plans = 2;
+  string message = 3;
+}
+
+// InitialSnapshot is the bundled TUI start state for one workspace. The
+// payload is a JSON envelope matching the current in-process
+// `logic.InitialSnapshot` shape; the per-entity fields below are placeholder
+// descriptors and may be added as typed oneof cases as the payload evolves.
+message InitialSnapshot {
+  string payload_json = 1;
+  uint64 latest_event_sequence = 2;
+}
+message GetInitialSnapshotRequest { string workspace_id = 1; }
+message GetInitialSnapshotResponse { InitialSnapshot snapshot = 1; }
+
+message ListSessionsRequest { string workspace_id = 1; }
+message ListSessionsResponse { repeated Session sessions = 1; }
+message GetSessionRequest { string session_id = 1; }
+message SearchSessionHistoryRequest { string filter_json = 1; }
+message SearchSessionHistoryResponse { string entries_json = 1; }
+message ArchiveSessionRequest { string session_id = 1; }
+message UnarchiveSessionRequest { string session_id = 1; }
+message DeleteSessionRequest { string session_id = 1; string idempotency_key = 2; }
+message ApprovePlanRequest { string plan_id = 1; string work_item_id = 2; string idempotency_key = 3; }
+message RequestPlanChangesRequest { string work_item_id = 1; string plan_id = 2; string feedback = 3; string idempotency_key = 4; }
+message SaveReviewedPlanRequest { string plan_id = 1; string content = 2; string idempotency_key = 3; }
+message StartPlanningRequest { string work_item_id = 1; string idempotency_key = 2; }
+message RestartPlanningRequest { string work_item_id = 1; string prompt = 2; string idempotency_key = 3; }
+message FollowUpPlanRequest { string work_item_id = 1; string feedback = 2; string idempotency_key = 3; }
+message RunImplementationRequest { string plan_id = 1; string idempotency_key = 2; }
+message RetryAgentSessionRequest {
+  string agent_session_id = 1;
+  string instance_id = 2;
+  string idempotency_key = 3;
+}
+message FollowUpAgentSessionRequest {
+  string agent_session_id = 1;
+  string feedback = 2;
+  string instance_id = 3;
+  string idempotency_key = 4;
+}
+message SteerSessionRequest { string agent_session_id = 1; string message = 2; string idempotency_key = 3; }
+message AnswerQuestionRequest { string question_id = 1; string answer = 2; string answered_by = 3; string idempotency_key = 4; }
+message SkipQuestionRequest { string question_id = 1; string idempotency_key = 2; }
+message FinalizeSessionRequest { string work_item_id = 1; string idempotency_key = 2; }
+message RetryFailedSessionRequest { string work_item_id = 1; string plan_id = 2; string idempotency_key = 3; }
+message OverrideAcceptRequest { string work_item_id = 1; string idempotency_key = 2; }
+message FailReviewRequest { string work_item_id = 1; string idempotency_key = 2; }
+message ResumeAllForSessionRequest { string work_item_id = 1; string idempotency_key = 2; }
+
+message ActionResultResponse { string message = 1; }
+message Operation {
+  string id = 1;
+  string workspace_id = 2;
+  string session_id = 3;
+  string status = 4;
+  uint64 started_sequence = 5;
+}
+message OperationResponse { Operation operation = 1; }

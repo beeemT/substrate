@@ -106,6 +106,54 @@ func SaveSecrets(cfg *Config, store SecretStore) error {
 	return nil
 }
 
+// DaemonAccessToken returns a daemon bearer token by registry entry name.
+func DaemonAccessToken(cfg *Config, store SecretStore, name string) (string, error) {
+	if cfg == nil || store == nil {
+		return "", nil
+	}
+	entry, ok := cfg.TUI.Daemons[name]
+	if !ok {
+		return "", fmt.Errorf("daemon %q is not configured", name)
+	}
+	key, ok := keychainSecretKey(entry.TokenRef)
+	if !ok {
+		return "", fmt.Errorf("daemon %q has no keychain token ref", name)
+	}
+	value, err := store.Get(key)
+	if err != nil {
+		return "", fmt.Errorf("load daemon token %q: %w", name, err)
+	}
+	if strings.TrimSpace(value) == "" {
+		return "", fmt.Errorf("daemon %q token is empty", name)
+	}
+	return value, nil
+}
+
+// SaveDaemonAccessToken stores a daemon bearer token by registry entry name.
+func SaveDaemonAccessToken(cfg *Config, store SecretStore, name, token string) error {
+	if cfg == nil || store == nil {
+		return nil
+	}
+	entry, ok := cfg.TUI.Daemons[name]
+	if !ok {
+		return fmt.Errorf("daemon %q is not configured", name)
+	}
+	key, ok := keychainSecretKey(entry.TokenRef)
+	if !ok {
+		return fmt.Errorf("daemon %q has no keychain token ref", name)
+	}
+	if strings.TrimSpace(token) == "" {
+		if err := store.Delete(key); err != nil && err != keyring.ErrNotFound {
+			return fmt.Errorf("delete daemon token %q: %w", name, err)
+		}
+		return nil
+	}
+	if err := store.Set(key, token); err != nil {
+		return fmt.Errorf("save daemon token %q: %w", name, err)
+	}
+	return nil
+}
+
 func sentryTokenKey(cfg *Config) (string, bool) {
 	if cfg == nil {
 		return "", false

@@ -20,14 +20,17 @@ type mockEventRepo struct {
 	err    error
 }
 
-func (m *mockEventRepo) Create(_ context.Context, e domain.SystemEvent) error {
+func (m *mockEventRepo) Create(_ context.Context, e domain.SystemEvent) (domain.SystemEvent, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.err != nil {
-		return m.err
+		return domain.SystemEvent{}, m.err
+	}
+	if e.Sequence == 0 {
+		e.Sequence = uint64(len(m.events) + 1)
 	}
 	m.events = append(m.events, e)
-	return nil
+	return e, nil
 }
 
 func (m *mockEventRepo) ListByType(_ context.Context, _ string, _ int) ([]domain.SystemEvent, error) {
@@ -40,6 +43,30 @@ func (m *mockEventRepo) ListByWorkspaceID(_ context.Context, _ string, _ int) ([
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.events, nil
+}
+
+func (m *mockEventRepo) ListByWorkspaceIDAfterSequence(_ context.Context, _ string, afterSequence uint64, _ int) ([]domain.SystemEvent, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var replay []domain.SystemEvent
+	for _, event := range m.events {
+		if event.Sequence > afterSequence {
+			replay = append(replay, event)
+		}
+	}
+	return replay, nil
+}
+
+func (m *mockEventRepo) LatestSequence(_ context.Context, _ string) (uint64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var latest uint64
+	for _, event := range m.events {
+		if event.Sequence > latest {
+			latest = event.Sequence
+		}
+	}
+	return latest, nil
 }
 
 func newTestEvent() domain.SystemEvent {
@@ -74,6 +101,9 @@ func TestBus_Publish_DispatchesToSubscribers(t *testing.T) {
 	case got := <-sub.C:
 		if got.ID != event.ID {
 			t.Errorf("got event ID %q, want %q", got.ID, event.ID)
+		}
+		if got.Sequence == 0 {
+			t.Fatal("got sequence 0, want persisted sequence")
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Error("timed out waiting for event")
@@ -589,6 +619,69 @@ func TestBus_RetryLater(t *testing.T) {
 	err = bus.Publish(context.Background(), event)
 	if err != nil {
 		t.Fatalf("Publish should succeed after draining buffer: %v", err)
+	}
+}
+
+func TestBus_Publish_OrdersSequencesForSubscribers(t *testing.T) {
+	repo := &mockEventRepo{}
+	bus := NewBus(BusConfig{EventRepo: repo})
+	defer bus.Close()
+
+	sub, err := bus.Subscribe("ordering-sub")
+	if err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+	defer bus.Unsubscribe("ordering-sub")
+
+	const numGoroutines = 16
+	const eventsPerGoroutine = 25
+	const total = numGoroutines * eventsPerGoroutine
+
+	var wg sync.WaitGroup
+	for gid := range numGoroutines {
+		wg.Add(1)
+		go func(gid int) {
+			defer wg.Done()
+			for i := range eventsPerGoroutine {
+				evt := domain.SystemEvent{
+					ID:          fmt.Sprintf("order-%d-%d", gid, i),
+					EventType:   "order.test",
+					WorkspaceID: "ws-order",
+					Payload:     fmt.Sprintf(`{"g":%d,"i":%d}`, gid, i),
+					CreatedAt:   domain.Now(),
+				}
+				if err := bus.Publish(context.Background(), evt); err != nil {
+					t.Errorf("publish failed: %v", err)
+				}
+			}
+		}(gid)
+	}
+	wg.Wait()
+
+	received := make([]domain.SystemEvent, 0, total)
+	timeout := time.After(2 * time.Second)
+collect:
+	for len(received) < total {
+		select {
+		case evt := <-sub.C:
+			received = append(received, evt)
+		case <-timeout:
+			break collect
+		}
+	}
+	if len(received) != total {
+		t.Fatalf("received %d events, want %d", len(received), total)
+	}
+
+	// The bus serializes Publish, so subscribers must observe events in the
+	// same order the repository assigned sequences. Sequences are 1..N
+	// with no gaps and no duplicates.
+	for i := 1; i < len(received); i++ {
+		if received[i].Sequence != received[i-1].Sequence+1 {
+			t.Errorf("out-of-order at index %d: got seq %d after seq %d (ids %q -> %q)",
+				i, received[i].Sequence, received[i-1].Sequence,
+				received[i-1].ID, received[i].ID)
+		}
 	}
 }
 

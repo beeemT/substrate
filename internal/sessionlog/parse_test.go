@@ -1,6 +1,10 @@
 package sessionlog
 
 import (
+	"bytes"
+	"compress/gzip"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -264,5 +268,118 @@ func TestParseLine_ACPControlFramesDropped(t *testing.T) {
 		if entry, ok := ParseLine(line); ok {
 			t.Fatalf("ParseLine(%q) = %+v, true; want dropped", line, entry)
 		}
+	}
+}
+
+func TestLoadInteractionEntries_NoActiveLogOffsetZero(t *testing.T) {
+	// When the active log is absent (e.g. session not yet started), the
+	// returned offset must be 0 so a tail that reconnects with that offset
+	// can read the first byte of the active log as soon as it appears.
+	dir := t.TempDir()
+	entries, nextOffset, err := LoadInteractionEntries(dir, "agent-1", false)
+	if err != nil {
+		t.Fatalf("LoadInteractionEntries() error = %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("entries = %+v, want empty", entries)
+	}
+	if nextOffset != 0 {
+		t.Errorf("nextOffset = %d, want 0", nextOffset)
+	}
+}
+
+func TestLoadInteractionEntries_ActiveLogExistsOffsetConsumed(t *testing.T) {
+	// When the active log exists with content, the offset reports consumed
+	// bytes; a follow-up tail can read only newly appended bytes.
+	dir := t.TempDir()
+	active := filepath.Join(dir, "agent-1.log")
+	body := `{"type":"event","event":{"type":"assistant_output","text":"alpha"}}` + "\n"
+	if err := os.WriteFile(active, []byte(body), 0o600); err != nil {
+		t.Fatalf("write active log: %v", err)
+	}
+	entries, nextOffset, err := LoadInteractionEntries(dir, "agent-1", false)
+	if err != nil {
+		t.Fatalf("LoadInteractionEntries() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries = %+v, want 1 entry", entries)
+	}
+	if entries[0].Text != "alpha" {
+		t.Errorf("entries[0].Text = %q, want alpha", entries[0].Text)
+	}
+	if nextOffset != int64(len(body)) {
+		t.Errorf("nextOffset = %d, want %d", nextOffset, len(body))
+	}
+}
+
+func TestLoadInteractionEntries_NoActiveLog_DoesNotPanicOnSubsequentTail(t *testing.T) {
+	// Regression for the dropped-first-byte bug: after LoadInteractionEntries
+	// returns nextOffset=0 with no active log, a subsequent tail that reads
+	// from offset 0 must surface the active log's first line once the file
+	// is created. This mirrors the daemon TailAgentSessionLog path.
+	dir := t.TempDir()
+	active := filepath.Join(dir, "agent-1.log")
+	_, nextOffset, err := LoadInteractionEntries(dir, "agent-1", false)
+	if err != nil {
+		t.Fatalf("initial LoadInteractionEntries() error = %v", err)
+	}
+	if nextOffset != 0 {
+		t.Fatalf("initial nextOffset = %d, want 0", nextOffset)
+	}
+	body := `{"type":"event","event":{"type":"assistant_output","text":"alpha"}}` + "\n"
+	if err := os.WriteFile(active, []byte(body), 0o600); err != nil {
+		t.Fatalf("create active log: %v", err)
+	}
+	entries, nextOffset, err := LoadInteractionEntries(dir, "agent-1", false)
+	if err != nil {
+		t.Fatalf("post-create LoadInteractionEntries() error = %v", err)
+	}
+	if len(entries) != 1 || !strings.Contains(entries[0].Text, "alpha") {
+		t.Errorf("entries = %+v, want one alpha entry", entries)
+	}
+	if nextOffset != int64(len(body)) {
+		t.Errorf("nextOffset = %d, want %d (first byte must not be dropped)", nextOffset, len(body))
+	}
+}
+
+func TestLoadInteractionEntries_CorruptGzipReturnsError(t *testing.T) {
+	// A corrupt (truncated) gzip archive must surface as an error rather
+	// than being silently dropped, so rotation/transport damage is
+	// observable to callers instead of being swallowed. The previous
+	// "transient" classification was both unsafe (masked real corruption)
+	// and unprovable from the read result alone, so it has been removed.
+	dir := t.TempDir()
+	corrupt := filepath.Join(dir, "agent-1.log.1.gz")
+	// Truncate a valid gzip stream mid-record: the footer is missing so
+	// the reader hits an unexpected EOF, which previously caused the
+	// segment to be skipped.
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	body := `{"type":"event","event":{"type":"assistant_output","text":"alpha"}}` + "\n"
+	if _, err := gw.Write([]byte(body)); err != nil {
+		t.Fatalf("seed gzip write: %v", err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatalf("seed gzip close: %v", err)
+	}
+	// Drop the trailing checksum bytes to corrupt the stream without
+	// invalidating the gzip header.
+	full := buf.Bytes()
+	if len(full) < 8 {
+		t.Fatalf("seed gzip too short: %d bytes", len(full))
+	}
+	if err := os.WriteFile(corrupt, full[:len(full)-4], 0o600); err != nil {
+		t.Fatalf("write corrupt gzip: %v", err)
+	}
+
+	entries, nextOffset, err := LoadInteractionEntries(dir, "agent-1", false)
+	if err == nil {
+		t.Fatalf("LoadInteractionEntries() error = nil, entries = %+v, nextOffset = %d; want error for corrupt gzip", entries, nextOffset)
+	}
+	if !strings.Contains(err.Error(), corrupt) {
+		t.Errorf("error %q does not name the corrupt archive %q", err.Error(), corrupt)
+	}
+	if nextOffset != 0 {
+		t.Errorf("nextOffset = %d, want 0 on read failure", nextOffset)
 	}
 }

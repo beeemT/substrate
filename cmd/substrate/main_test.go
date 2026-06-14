@@ -31,3 +31,30 @@ func TestInitializeGlobalConfig_WritesParsableYAML(t *testing.T) {
 		t.Fatalf("commit.strategy = %q, want %q", cfg.Commit.Strategy, config.CommitStrategySemiRegular)
 	}
 }
+
+func TestParseDaemonSelectionArg(t *testing.T) {
+	name, remaining, err := parseDaemonSelectionArg([]string{"--daemon", "staging", "--version"})
+	if err != nil {
+		t.Fatalf("parseDaemonSelectionArg() error = %v", err)
+	}
+	if name != "staging" || len(remaining) != 1 || remaining[0] != "--version" {
+		t.Fatalf("parseDaemonSelectionArg() = %q, %#v", name, remaining)
+	}
+
+	name, remaining, err = parseDaemonSelectionArg([]string{"--daemon=prod", "--help"})
+	if err != nil {
+		t.Fatalf("parseDaemonSelectionArg(--daemon=prod) error = %v", err)
+	}
+	if name != "prod" || len(remaining) != 1 || remaining[0] != "--help" {
+		t.Fatalf("parseDaemonSelectionArg(--daemon=prod) = %q, %#v", name, remaining)
+	}
+}
+
+func TestParseDaemonSelectionArgRejectsMissingName(t *testing.T) {
+	if _, _, err := parseDaemonSelectionArg([]string{"--daemon"}); err == nil {
+		t.Fatal("parseDaemonSelectionArg(--daemon) error = nil")
+	}
+	if _, _, err := parseDaemonSelectionArg([]string{"--daemon="}); err == nil {
+		t.Fatal("parseDaemonSelectionArg(--daemon=) error = nil")
+	}
+}

@@ -556,6 +556,7 @@ func globalActions(a *App) []Action {
 		{ID: "new_session", Label: "New session", Shortcut: "n", Priority: 10, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd { return a.openNewSession() }},
 		{ID: "new_autonomous", Label: "New autonomous session", Shortcut: "A", Priority: 11, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd { return a.openNewSessionAutonomousOverlay() }},
 		{ID: "repo_manager", Label: "Open repo manager", Shortcut: "R", Priority: 20, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd { return a.openRepoManager() }},
+		{ID: "manage_daemons", Label: "Manage daemons", Shortcut: "D", Priority: 25, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd { return a.openManageDaemons() }},
 		{ID: "settings", Label: "Open settings", Shortcut: "s", Priority: 30, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd { a.activeOverlay = overlaySettings; a.settingsPage.Open(); return nil }},
 		{ID: "logs", Label: "Open logs", Shortcut: "L", Priority: 40, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd {
 			a.logsOverlay.SetSize(a.windowWidth, a.windowHeight)
@@ -609,6 +610,9 @@ func globalActions(a *App) []Action {
 				return nil
 			}
 			ctx := a.pipelineCtxForSession(sessionID)
+			if a.provider.Logic() != nil {
+				return RetryAgentSessionWithClientCmd(ctx, a.provider.Logic(), sessionID, a.runtimeCtx.InstanceID)
+			}
 			return RetrySessionCmd(ctx, a.provider.Task(), a.provider.Implementation(), a.sendAsyncMsg, sessionID, a.runtimeCtx.InstanceID)
 		}},
 		{ID: "quit", Label: "Quit", Shortcut: "q", Priority: 90, Condition: func(a *App) bool { return true }, Handler: func(a *App) tea.Cmd { _, cmd := a.handleQuitRequest(); return cmd }},

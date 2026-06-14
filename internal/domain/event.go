@@ -8,6 +8,7 @@ type EventType string
 // SystemEvent is a persisted system event for audit and replay.
 type SystemEvent struct {
 	ID          string
+	Sequence    uint64
 	EventType   string
 	WorkspaceID string
 	Payload     string

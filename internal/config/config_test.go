@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 func writeTestConfig(t *testing.T, content string) string {
@@ -72,6 +75,108 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.Adapters.Sentry.PollInterval != "5m" {
 		t.Errorf("adapters.sentry.poll_interval = %q, want %q", cfg.Adapters.Sentry.PollInterval, "5m")
+	}
+}
+
+func TestLoadNestedDaemonAndTUIRoots(t *testing.T) {
+	path := writeTestConfig(t, `
+daemon:
+  commit:
+    strategy: granular
+  plan:
+    max_parse_retries: 4
+  review:
+    pass_threshold: no_critiques
+    max_cycles: 5
+  harness:
+    default: codex
+  foreman:
+    question_timeout: 30s
+tui:
+  active_daemon: staging
+  ui:
+    default_filter: active
+    default_group: source
+    log_level: debug
+  daemons:
+    staging:
+      label: Staging
+      kind: remote
+      address: unix:///tmp/substrate.sock
+      token_ref: keychain:daemon.staging.access_token
+ `)
+	t.Setenv("PATH", "")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Commit.Strategy != CommitStrategyGranular {
+		t.Fatalf("commit.strategy = %q, want %q", cfg.Commit.Strategy, CommitStrategyGranular)
+	}
+	if cfg.TUI.ActiveDaemon != "staging" {
+		t.Fatalf("tui.active_daemon = %q, want staging", cfg.TUI.ActiveDaemon)
+	}
+	if cfg.UI.DefaultFilter != "active" || cfg.TUI.UI.DefaultFilter != "active" {
+		t.Fatalf("default_filter not synchronized: flat=%q nested=%q", cfg.UI.DefaultFilter, cfg.TUI.UI.DefaultFilter)
+	}
+	if cfg.TUI.Daemons["local"].TokenRef != "keychain:daemon.local.access_token" {
+		t.Fatalf("local daemon token ref = %q", cfg.TUI.Daemons["local"].TokenRef)
+	}
+}
+
+func TestConfigMarshalYAMLWritesNestedRoots(t *testing.T) {
+	cfg := &Config{}
+	applyDefaults(cfg)
+	syncConfigRoots(cfg)
+
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("Marshal() error: %v", err)
+	}
+	var raw map[string]any
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal() error: %v", err)
+	}
+	if _, ok := raw["daemon"]; !ok {
+		t.Fatalf("marshaled config missing daemon root:\n%s", data)
+	}
+	if _, ok := raw["tui"]; !ok {
+		t.Fatalf("marshaled config missing tui root:\n%s", data)
+	}
+	if _, ok := raw["commit"]; ok {
+		t.Fatalf("marshaled config kept legacy commit root:\n%s", data)
+	}
+}
+
+func TestSaveWritesCanonicalNestedConfig(t *testing.T) {
+	cfg := &Config{}
+	applyDefaults(cfg)
+	syncConfigRoots(cfg)
+	cfg.TUI.Daemons["local"] = DaemonRegistryEntry{
+		Label:       "Local",
+		Kind:        "local",
+		Address:     "unix:///tmp/substrate.sock",
+		TokenRef:    "keychain:daemon.local.access_token",
+		AutoManaged: true,
+	}
+
+	path := filepath.Join(t.TempDir(), "nested", "config.yaml")
+	if err := Save(path, cfg); err != nil {
+		t.Fatalf("Save() error: %v", err)
+	}
+	saved, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load(saved) error: %v", err)
+	}
+	if got := saved.TUI.Daemons["local"].Address; got != "unix:///tmp/substrate.sock" {
+		t.Fatalf("saved local daemon address = %q", got)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read saved config: %v", err)
+	}
+	if strings.Contains(string(raw), "\ncommit:") {
+		t.Fatalf("saved config kept legacy commit root:\n%s", raw)
 	}
 }
 

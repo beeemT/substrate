@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package substrate.v1;
+
+option go_package = "github.com/beeemT/substrate/internal/gen/substrate/v1;substratev1";
+
+service SystemAPI {
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc Info(InfoRequest) returns (InfoResponse);
+  rpc Disconnect(DisconnectRequest) returns (DisconnectResponse);
+  rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
+  rpc GetAccessToken(GetAccessTokenRequest) returns (GetAccessTokenResponse);
+  rpc RotateAccessToken(RotateAccessTokenRequest) returns (RotateAccessTokenResponse);
+}
+
+message HealthRequest {}
+message HealthResponse {
+  bool ready = 1;
+  string version = 2;
+  string build_sha = 3;
+  uint32 schema_version = 4;
+  string workspace_id = 5;
+  bool rebuild_in_progress = 6;
+  int64 uptime_seconds = 7;
+}
+message InfoRequest {}
+message InfoResponse {
+  string version = 1;
+  string build_sha = 2;
+  string workspace_id = 3;
+}
+message DisconnectRequest {}
+message DisconnectResponse {}
+message ShutdownRequest {}
+message ShutdownResponse {}
+message GetAccessTokenRequest {}
+message GetAccessTokenResponse { string token = 1; }
+message RotateAccessTokenRequest {}
+message RotateAccessTokenResponse { string token = 1; }

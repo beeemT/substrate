@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package substrate.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/beeemT/substrate/internal/gen/substrate/v1;substratev1";
+
+service EventStreamAPI {
+  rpc Subscribe(SubscribeEventsRequest) returns (stream EventBatch);
+}
+
+message SubscribeEventsRequest {
+  string workspace_id = 1;
+  uint64 after_sequence = 2;
+  int32 replay_window = 3;
+  repeated string event_types = 4;
+  bool include_snapshot_marker = 5;
+}
+
+message EventBatch {
+  repeated SystemEventEnvelope events = 1;
+  uint64 latest_sequence = 2;
+  bool caught_up = 3;
+}
+
+message SystemEventEnvelope {
+  uint64 sequence = 1;
+  string id = 2;
+  string workspace_id = 3;
+  string type = 4;
+  google.protobuf.Timestamp created_at = 5;
+  string payload_json = 6;
+}

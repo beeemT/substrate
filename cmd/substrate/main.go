@@ -3,26 +3,39 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"log/slog"
+	"net"
 	"os"
+	"os/exec"
+	"os/signal"
+	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	atomic "github.com/beeemT/go-atomic"
 	"github.com/jmoiron/sqlx"
+	"google.golang.org/grpc"
 	_ "modernc.org/sqlite"
 
 	"github.com/beeemT/substrate/internal/adapter"
 	"github.com/beeemT/substrate/internal/app"
 	"github.com/beeemT/substrate/internal/buildinfo"
 	"github.com/beeemT/substrate/internal/config"
+	daemonclient "github.com/beeemT/substrate/internal/daemon/client"
+	daemonserver "github.com/beeemT/substrate/internal/daemon/server"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/event"
 	"github.com/beeemT/substrate/internal/gitwork"
+	"github.com/beeemT/substrate/internal/logic"
 	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/repository/sqlite"
 	"github.com/beeemT/substrate/internal/service"
@@ -33,11 +46,14 @@ import (
 
 func printUsage() {
 	fmt.Println("substrate - AI-powered work item orchestration")
-	fmt.Println("")
+	fmt.Println()
 	fmt.Println("Usage:")
-	fmt.Println("  substrate           Start the TUI")
-	fmt.Println("  substrate --help    Show help")
-	fmt.Println("  substrate --version Show version")
+	fmt.Println("  substrate              Start/connect local daemon and launch TUI")
+	fmt.Println("  substrate tui          Connect to selected daemon and launch TUI")
+	fmt.Println("  substrate daemon       Run daemon")
+	fmt.Println("  substrate daemon stop  Stop local daemon")
+	fmt.Println("  substrate serve        Alias for daemon")
+	fmt.Println("  substrate --version    Show version")
 }
 
 func main() {
@@ -85,20 +101,371 @@ type adapterSetup struct {
 }
 
 func run() error {
-	if handleCLIArgs(os.Args[1:]) {
+	args := os.Args[1:]
+	if len(args) > 0 {
+		switch args[0] {
+		case "daemon", "serve":
+			return runDaemon(args[1:])
+		case "tui", "--tui":
+			return runTUIClient(args[1:])
+		}
+	}
+	if handleCLIArgs(args) {
 		return nil
 	}
 
-	logStore, logToasts := initTUILogging()
+	return runDefaultTUI(args)
+}
 
+func runDefaultTUI(args []string) error {
 	cfg, err := loadRuntimeConfig()
 	if err != nil {
 		return err
 	}
-	tuilog.SetDefaultLevelFromConfig(cfg.UI.LogLevel)
+	daemonName, _, err := parseDaemonSelectionArg(args)
+	if err != nil {
+		return err
+	}
+	active := daemonName
+	if active == "" {
+		active = cfg.TUI.ActiveDaemon
+	}
+	if active == "" {
+		active = "local"
+	}
+	if active == "local" {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := ensureLocalDaemon(ctx, cfg); err != nil {
+			return err
+		}
+	}
+
+	return runTUIClient(args)
+}
+
+func ensureLocalDaemon(ctx context.Context, cfg *config.Config) error {
+	if compatible, err := localDaemonMatchesWorkspace(ctx, cfg); compatible {
+		return nil
+	} else if err == nil {
+		slog.Info("local daemon is bound to a different workspace; restarting")
+	} else {
+		slog.Debug("local daemon health check failed; starting daemon", "error", err)
+	}
+
+	if err := stopStaleLocalDaemon(cfg); err != nil {
+		slog.Debug("stopping stale local daemon", "error", err)
+	}
+
+	if err := registerLocalDaemonAddress(cfg); err != nil {
+		return err
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve executable path: %w", err)
+	}
+	cmd := exec.Command(exe, "daemon")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start substrate daemon: %w", err)
+	}
+	if err := cmd.Process.Release(); err != nil {
+		slog.Warn("release daemon process handle", "error", err)
+	}
+
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		healthy, err := localDaemonHealthy(ctx, cfg)
+		if healthy {
+			return nil
+		}
+		if err != nil {
+			slog.Debug("waiting for local daemon readiness", "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait for local daemon readiness: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func localDaemonHealthy(ctx context.Context, cfg *config.Config) (bool, error) {
+	token, err := config.DaemonAccessToken(cfg, config.OSKeychainStore{}, "local")
+	if err != nil {
+		return false, err
+	}
+	address, err := localDaemonAddress(cfg)
+	if err != nil {
+		return false, err
+	}
+	client, err := daemonclient.Dial(ctx, address, token)
+	if err != nil {
+		return false, err
+	}
+	defer client.Close()
+	healthCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	if _, err := client.Health(healthCtx); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// localDaemonMatchesWorkspace reports whether the running local daemon is
+// healthy AND bound to the same workspace the current process is operating
+// in. A healthy daemon bound to a different workspace must be restarted so
+// we don't reuse it across workspace boundaries.
+func localDaemonMatchesWorkspace(ctx context.Context, cfg *config.Config) (bool, error) {
+	if healthy, err := localDaemonHealthy(ctx, cfg); !healthy {
+		return false, err
+	}
+	expectedDir, expectedID, err := currentWorkspaceIdentity()
+	if err != nil {
+		// Outside a workspace: trust the running daemon as long as it is
+		// healthy; it can serve the workspace-init flow.
+		slog.Debug("skipping workspace identity check (no workspace)", "error", err)
+		return true, nil
+	}
+	token, err := config.DaemonAccessToken(cfg, config.OSKeychainStore{}, "local")
+	if err != nil {
+		return false, err
+	}
+	address, err := localDaemonAddress(cfg)
+	if err != nil {
+		return false, err
+	}
+	runtimeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	client, err := daemonclient.Dial(runtimeCtx, address, token)
+	if err != nil {
+		return false, err
+	}
+	defer client.Close()
+	runtime, err := client.GetRuntimeContext(runtimeCtx)
+	if err != nil {
+		return false, err
+	}
+	if expectedID != "" && runtime.WorkspaceID != "" && runtime.WorkspaceID != expectedID {
+		slog.Info("local daemon workspace mismatch", "expected", expectedID, "actual", runtime.WorkspaceID)
+		return false, nil
+	}
+	if expectedDir != "" && runtime.WorkspaceDir != "" && runtime.WorkspaceDir != expectedDir {
+		slog.Info("local daemon workspace dir mismatch", "expected", expectedDir, "actual", runtime.WorkspaceDir)
+		return false, nil
+	}
+	return true, nil
+}
+
+// currentWorkspaceIdentity resolves the workspace dir and ID of the current
+// process's working directory by reading the workspace file Substrate writes
+// when initializing a workspace. Returns ("", "", nil) when no workspace is
+// detected so callers can short-circuit cross-workspace checks.
+func currentWorkspaceIdentity() (dir, id string, err error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", "", fmt.Errorf("getwd: %w", err)
+	}
+	wsDir, wsFile, wsErr := gitwork.FindWorkspace(cwd)
+	if wsErr != nil {
+		if gitwork.IsNotInWorkspace(wsErr) {
+			return "", "", nil
+		}
+		return "", "", wsErr
+	}
+	return wsDir, wsFile.ID, nil
+}
+
+// stopStaleLocalDaemon terminates the running local daemon so the caller can
+// spawn a fresh one. It is a best-effort helper: errors are returned for
+// logging but never block the restart path.
+func stopStaleLocalDaemon(cfg *config.Config) error {
+	socketPath, err := daemonSocketPath(cfg)
+	if err != nil {
+		return err
+	}
+	metadata, err := readDaemonMetadata(socketPath)
+	if err != nil {
+		return err
+	}
+	if metadata.PID <= 0 {
+		return fmt.Errorf("daemon metadata has invalid pid %d", metadata.PID)
+	}
+	if err := syscall.Kill(metadata.PID, 0); err != nil {
+		return fmt.Errorf("daemon process %d not reachable: %w", metadata.PID, err)
+	}
+	if err := syscall.Kill(metadata.PID, syscall.SIGTERM); err != nil {
+		return fmt.Errorf("stop daemon process %d: %w", metadata.PID, err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := syscall.Kill(metadata.PID, 0); err != nil {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("daemon process %d did not exit after SIGTERM", metadata.PID)
+}
+
+func localDaemonAddress(cfg *config.Config) (string, error) {
+	socketPath, err := daemonSocketPath(cfg)
+	if err != nil {
+		return "", err
+	}
+	return "unix://" + socketPath, nil
+}
+
+func registerLocalDaemonAddress(cfg *config.Config) error {
+	socketPath, err := daemonSocketPath(cfg)
+	if err != nil {
+		return err
+	}
+	entry := cfg.TUI.Daemons["local"]
+	entry.Label = "Local"
+	entry.Kind = "local"
+	entry.Address = "unix://" + socketPath
+	if strings.TrimSpace(entry.TokenRef) == "" {
+		entry.TokenRef = "keychain:daemon.local.access_token"
+	}
+	entry.AutoManaged = true
+	if cfg.TUI.Daemons == nil {
+		cfg.TUI.Daemons = map[string]config.DaemonRegistryEntry{}
+	}
+	cfg.TUI.Daemons["local"] = entry
+	if cfg.TUI.ActiveDaemon == "" {
+		cfg.TUI.ActiveDaemon = "local"
+	}
+	cfgPath, err := config.ConfigPath()
+	if err != nil {
+		return err
+	}
+	if err := config.Save(cfgPath, cfg); err != nil {
+		return fmt.Errorf("save local daemon registry entry: %w", err)
+	}
+	return nil
+}
+
+func runTUIClient(args []string) error {
+	daemonName, remainingArgs, err := parseDaemonSelectionArg(args)
+	if err != nil {
+		return err
+	}
+	if handleCLIArgs(remainingArgs) {
+		return nil
+	}
+	logStore, logToasts := initTUILogging()
+	cfg, err := loadRuntimeConfig()
+	if err != nil {
+		return err
+	}
+	tuilog.SetDefaultLevelFromConfig(cfg.TUI.UI.LogLevel)
+	active := daemonName
+	if active == "" {
+		active = cfg.TUI.ActiveDaemon
+	}
+	if active == "" {
+		active = "local"
+	}
+	entry, ok := cfg.TUI.Daemons[active]
+	if !ok {
+		return fmt.Errorf("active daemon %q is not configured", active)
+	}
+	token, err := config.DaemonAccessToken(cfg, config.OSKeychainStore{}, active)
+	if err != nil {
+		return err
+	}
+	address := entry.Address
+	if strings.TrimSpace(address) == "" && entry.Kind == "local" {
+		socketPath, socketErr := daemonSocketPath(cfg)
+		if socketErr != nil {
+			return socketErr
+		}
+		address = "unix://" + socketPath
+	}
+	client, err := daemonclient.Dial(context.Background(), address, token)
+	if err != nil {
+		return fmt.Errorf("dial daemon %q: %w", active, err)
+	}
+	defer client.Close()
+	if _, err := client.Health(context.Background()); err != nil {
+		return fmt.Errorf("daemon health: %w", err)
+	}
+	runtime, err := client.GetRuntimeContext(context.Background())
+	if err != nil {
+		return fmt.Errorf("daemon runtime context: %w", err)
+	}
+	runtimeCtx := views.RuntimeContext{
+		Cfg:           cfg,
+		LogStore:      logStore,
+		LogToasts:     logToasts,
+		InstanceID:    runtime.InstanceID,
+		WorkspaceID:   runtime.WorkspaceID,
+		WorkspaceName: runtime.WorkspaceName,
+		WorkspaceDir:  runtime.WorkspaceDir,
+	}
+	return views.RunTUI(views.NewDaemonProvider(client), runtimeCtx)
+}
+
+func parseDaemonSelectionArg(args []string) (string, []string, error) {
+	remaining := make([]string, 0, len(args))
+	daemonName := ""
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--daemon" {
+			if i+1 >= len(args) {
+				return "", nil, fmt.Errorf("--daemon requires a daemon name")
+			}
+			if daemonName != "" {
+				return "", nil, fmt.Errorf("--daemon specified more than once")
+			}
+			daemonName = strings.TrimSpace(args[i+1])
+			if daemonName == "" {
+				return "", nil, fmt.Errorf("--daemon requires a daemon name")
+			}
+			i++
+			continue
+		}
+		if strings.HasPrefix(arg, "--daemon=") {
+			if daemonName != "" {
+				return "", nil, fmt.Errorf("--daemon specified more than once")
+			}
+			daemonName = strings.TrimSpace(strings.TrimPrefix(arg, "--daemon="))
+			if daemonName == "" {
+				return "", nil, fmt.Errorf("--daemon requires a daemon name")
+			}
+			continue
+		}
+		remaining = append(remaining, arg)
+	}
+	return daemonName, remaining, nil
+}
+
+func runDaemon(args []string) error {
+	if len(args) > 0 {
+		switch args[0] {
+		case "stop":
+			return stopLocalDaemon()
+		default:
+			return fmt.Errorf("unknown daemon command %q", args[0])
+		}
+	}
+	cfg, err := loadRuntimeConfig()
+	if err != nil {
+		return err
+	}
+
+	// Install the TUI-aware slog handler before any subsequent slog calls so
+	// daemon startup logs are captured in the LogStore and available to the
+	// TUI's logs overlay.
+	logStore, _ := initTUILogging()
+	tuilog.SetDefaultLevelFromConfig(cfg.Daemon.Runtime.LogLevel)
 
 	ctx := context.Background()
-	db, err := openDatabase(ctx)
+	db, err := openDatabase(ctx, cfg.Daemon.Runtime.DatabasePath)
 	if err != nil {
 		return err
 	}
@@ -107,6 +474,10 @@ func run() error {
 	remote := dbRemote{db}
 	eventRepo := sqlite.NewEventRepo(remote)
 	transacter := sqlite.NewTransacter(db)
+
+	if err := registerLocalDaemonAddress(cfg); err != nil {
+		return err
+	}
 
 	if err := config.LoadSecrets(cfg, config.OSKeychainStore{}); err != nil {
 		return fmt.Errorf("load config secrets: %w", err)
@@ -120,50 +491,293 @@ func run() error {
 		return err
 	}
 
-	var instanceID string
-	if workspace.ID != "" {
-		instanceID = registerInstance(ctx, service.NewInstanceService(transacter), workspace.ID)
-	}
-
-	serviceMgr := views.NewServiceManager(transacter, eventRepo)
-	initialServices := views.Services{
-		InstanceID:    instanceID,
+	serviceMgr := logic.NewServiceManager(transacter, eventRepo)
+	initialServices := logic.Services{
 		WorkspaceID:   workspace.ID,
 		WorkspaceName: workspace.Name,
 		WorkspaceDir:  workspace.Dir,
 	}
-	startupIntegrationsInProgress := workspace.ID != ""
-	if startupIntegrationsInProgress {
-		err = serviceMgr.InitWithDeferredIntegrations(ctx, cfg, initialServices)
-	} else {
-		err = serviceMgr.InitWithServices(ctx, cfg, initialServices)
-	}
-	if err != nil {
+	if err := serviceMgr.InitWithServices(ctx, cfg, initialServices); err != nil {
 		return fmt.Errorf("init service manager: %w", err)
 	}
+	instanceID := registerInstance(ctx, serviceMgr.Instance(), workspace.ID)
+	if services := serviceMgr.GetServices(); services != nil {
+		services.InstanceID = instanceID
+	}
+	defer serviceMgr.Close(context.Background())
 	if markWorkspaceReady {
 		if transitionErr := serviceMgr.Workspace().MarkReady(ctx, workspace.ID); transitionErr != nil {
 			slog.Warn("workspace found with status creating; failed to transition to ready", "id", workspace.ID, "err", transitionErr)
-		} else {
-			slog.Debug("workspace transitioned from creating to ready", "id", workspace.ID)
 		}
 	}
 
-	// Load settings snapshot without running diagnostics (deferred to after first frame).
-	if err := serviceMgr.Settings().RefreshConfigOnly(context.Background(), cfg); err != nil {
-		return fmt.Errorf("load settings: %w", err)
+	token, err := daemonToken(cfg)
+	if err != nil {
+		return err
+	}
+	socketPath, err := daemonSocketPath(cfg)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
+		return fmt.Errorf("create daemon socket directory: %w", err)
+	}
+	live, err := isSocketLive(socketPath)
+	if err != nil {
+		return fmt.Errorf("check daemon socket liveness: %w", err)
+	}
+	if live {
+		return fmt.Errorf("refusing to unlink live daemon socket %q: another daemon is listening", socketPath)
+	}
+	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove stale daemon socket: %w", err)
 	}
 
-	return views.RunTUI(serviceMgr, views.RuntimeContext{
-		Cfg:                           cfg,
-		LogStore:                      logStore,
-		LogToasts:                     logToasts,
-		InstanceID:                    instanceID,
-		WorkspaceID:                   workspace.ID,
-		WorkspaceDir:                  workspace.Dir,
-		WorkspaceName:                 workspace.Name,
-		StartupIntegrationsInProgress: startupIntegrationsInProgress,
+	listener, err := daemonserver.ListenUnix(socketPath)
+	if err != nil {
+		return err
+	}
+	metadata := daemonMetadata{
+		SocketPath:    socketPath,
+		PID:           os.Getpid(),
+		Version:       buildinfo.Version,
+		BuildSHA:      buildinfo.BuildSHA,
+		BuildTime:     buildinfo.BuildTime,
+		SchemaVersion: 1,
+		WorkspaceID:   workspace.ID,
+		StartedAt:     time.Now().Format(time.RFC3339Nano),
+		TokenRef:      cfg.TUI.Daemons["local"].TokenRef,
+	}
+	if err := writeDaemonMetadata(socketPath, metadata); err != nil {
+		return err
+	}
+	defer os.Remove(metadataPath(socketPath))
+	defer listener.Close()
+
+	sessionsDir, err := config.SessionsDir()
+	if err != nil {
+		return err
+	}
+	shutdownCh := make(chan struct{})
+	var shutdownOnce sync.Once
+
+	api := daemonserver.NewAPI(daemonserver.Options{
+		WorkspaceID: workspace.ID,
+		InstanceID:  instanceID,
+		ShutdownFunc: func() {
+			shutdownOnce.Do(func() {
+				close(shutdownCh)
+			})
+		},
+		WorkspaceName: workspace.Name,
+		WorkspaceDir:  workspace.Dir,
+		Token:         token,
+		Config:        cfg,
+		Harnesses:     serviceMgr.GetServices().Harnesses,
+		LogStore:      logStore,
+		SessionsDir:   sessionsDir,
+		SettingsReloader: func(ctx context.Context, next *config.Config) (*logic.Services, error) {
+			current := serviceMgr.GetServices()
+			if current == nil {
+				return nil, fmt.Errorf("service graph is not initialized")
+			}
+			return serviceMgr.Rebuild(ctx, next, *current)
+		},
+		WorkItems:         serviceMgr.Session(),
+		Workspaces:        serviceMgr.Workspace(),
+		NewSessionFilters: serviceMgr.NewSessionFilters(),
+		NewSessionLocks:   serviceMgr.NewSessionFilterLocks(),
+		WorkItemAdapters:  serviceMgr.Adapters(),
+		Logic:             serviceMgr.Logic(),
+		Events:            serviceMgr.Events(),
+		Bus:               serviceMgr.Bus(),
+		StartedAt:         time.Now(),
 	})
+	grpcServer := daemonserver.NewGRPCServer(api)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- grpcServer.Serve(listener)
+	}()
+	slog.Info("substrate daemon listening", "socket", socketPath, "workspace_id", workspace.ID)
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(sigCh)
+	select {
+	case sig := <-sigCh:
+		slog.Info("substrate daemon stopping", "signal", sig.String())
+		stopGRPCServer(grpcServer)
+	case <-shutdownCh:
+		slog.Info("substrate daemon stopping", "reason", "shutdown rpc")
+		stopGRPCServer(grpcServer)
+	case err := <-errCh:
+		if err != nil {
+			return fmt.Errorf("serve daemon grpc: %w", err)
+		}
+	}
+	return nil
+}
+
+func stopGRPCServer(server *grpc.Server) {
+	done := make(chan struct{})
+	go func() {
+		server.GracefulStop()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		slog.Warn("daemon graceful stop timed out; forcing stop")
+		server.Stop()
+		<-done
+	}
+}
+
+func daemonSocketPath(cfg *config.Config) (string, error) {
+	if cfg != nil && strings.TrimSpace(cfg.Daemon.Runtime.Bind.SocketPath) != "" {
+		return cfg.Daemon.Runtime.Bind.SocketPath, nil
+	}
+	globalDir, err := config.GlobalDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(globalDir, "run", "local.sock"), nil
+}
+
+func daemonToken(cfg *config.Config) (string, error) {
+	store := config.OSKeychainStore{}
+	token, err := config.DaemonAccessToken(cfg, store, "local")
+	if err == nil && strings.TrimSpace(token) != "" {
+		return token, nil
+	}
+	tokenBytes := make([]byte, 32)
+	if _, readErr := rand.Read(tokenBytes); readErr != nil {
+		return "", fmt.Errorf("generate daemon access token: %w", readErr)
+	}
+	token = hex.EncodeToString(tokenBytes)
+	if saveErr := config.SaveDaemonAccessToken(cfg, store, "local", token); saveErr != nil {
+		return "", saveErr
+	}
+	return token, nil
+}
+func buildInfoString() string {
+	parts := []string{buildinfo.Version}
+	if strings.TrimSpace(buildinfo.BuildSHA) != "" {
+		parts = append(parts, "sha="+buildinfo.BuildSHA)
+	}
+	if strings.TrimSpace(buildinfo.BuildTime) != "" {
+		parts = append(parts, "built="+buildinfo.BuildTime)
+	}
+	return strings.Join(parts, " ")
+}
+
+type daemonMetadata struct {
+	SocketPath    string `json:"socket_path"`
+	PID           int    `json:"pid"`
+	Version       string `json:"version"`
+	BuildSHA      string `json:"build_sha"`
+	BuildTime     string `json:"build_time"`
+	SchemaVersion uint32 `json:"schema_version"`
+	WorkspaceID   string `json:"workspace_id"`
+	StartedAt     string `json:"started_at"`
+	TokenRef      string `json:"token_ref"`
+}
+
+func writeDaemonMetadata(socketPath string, metadata daemonMetadata) error {
+	data, err := json.MarshalIndent(metadata, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode daemon metadata: %w", err)
+	}
+	if err := os.WriteFile(metadataPath(socketPath), data, 0o600); err != nil {
+		return fmt.Errorf("write daemon metadata: %w", err)
+	}
+	return nil
+}
+func readDaemonMetadata(socketPath string) (daemonMetadata, error) {
+	data, err := os.ReadFile(metadataPath(socketPath))
+	if err != nil {
+		return daemonMetadata{}, fmt.Errorf("read daemon metadata: %w", err)
+	}
+	var metadata daemonMetadata
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		return daemonMetadata{}, fmt.Errorf("decode daemon metadata: %w", err)
+	}
+	return metadata, nil
+}
+
+func stopLocalDaemon() error {
+	cfg, err := loadRuntimeConfig()
+	if err != nil {
+		return err
+	}
+	socketPath, err := daemonSocketPath(cfg)
+	if err != nil {
+		return err
+	}
+	metadata, err := readDaemonMetadata(socketPath)
+	if err != nil {
+		return err
+	}
+	if metadata.PID <= 0 {
+		return fmt.Errorf("daemon metadata has invalid pid %d", metadata.PID)
+	}
+	if metadata.SocketPath != "" && metadata.SocketPath != socketPath {
+		return fmt.Errorf("daemon metadata socket %q does not match configured socket %q", metadata.SocketPath, socketPath)
+	}
+	if err := syscall.Kill(metadata.PID, 0); err != nil {
+		return fmt.Errorf("daemon process %d is not reachable: %w", metadata.PID, err)
+	}
+	identityCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	token, err := config.DaemonAccessToken(cfg, config.OSKeychainStore{}, "local")
+	if err != nil {
+		return err
+	}
+	address := "unix://" + socketPath
+	client, err := daemonclient.Dial(identityCtx, address, token)
+	if err != nil {
+		return fmt.Errorf("verify daemon identity before stop: %w", err)
+	}
+	defer client.Close()
+	runtime, err := client.GetRuntimeContext(identityCtx)
+	if err != nil {
+		return fmt.Errorf("verify daemon runtime before stop: %w", err)
+	}
+	if metadata.WorkspaceID != "" && runtime.WorkspaceID != "" && metadata.WorkspaceID != runtime.WorkspaceID {
+		return fmt.Errorf("daemon metadata workspace %q does not match live daemon workspace %q", metadata.WorkspaceID, runtime.WorkspaceID)
+	}
+	if err := syscall.Kill(metadata.PID, syscall.SIGTERM); err != nil {
+		return fmt.Errorf("stop daemon process %d: %w", metadata.PID, err)
+	}
+	return nil
+}
+
+func isSocketLive(socketPath string) (bool, error) {
+	if _, err := os.Stat(socketPath); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	conn, err := net.DialTimeout("unix", socketPath, time.Second)
+	if err == nil {
+		if closeErr := conn.Close(); closeErr != nil {
+			slog.Warn("close daemon socket probe", "error", closeErr)
+		}
+		return true, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return false, nil
+	}
+	return false, err
+}
+
+func metadataPath(socketPath string) string {
+	return socketPath + ".json"
 }
 
 func handleCLIArgs(args []string) bool {
@@ -176,7 +790,7 @@ func handleCLIArgs(args []string) bool {
 		printUsage()
 		return true
 	case "--version", "-v", "version":
-		fmt.Println(buildinfo.Version)
+		fmt.Println(buildInfoString())
 		return true
 	default:
 		return false
@@ -241,10 +855,22 @@ func ensureSessionsDir() error {
 	return nil
 }
 
-func openDatabase(ctx context.Context) (*sqlx.DB, error) {
-	dbPath, err := config.GlobalDBPath()
-	if err != nil {
-		return nil, fmt.Errorf("getting database path: %w", err)
+func openDatabase(ctx context.Context, configuredPath string) (*sqlx.DB, error) {
+	dbPath := strings.TrimSpace(configuredPath)
+	if dbPath == "" {
+		// Fall back to the global default only when the operator has not
+		// explicitly configured a per-daemon database path.
+		defaultPath, err := config.GlobalDBPath()
+		if err != nil {
+			return nil, fmt.Errorf("getting database path: %w", err)
+		}
+		dbPath = defaultPath
+	} else {
+		// Make sure the parent directory exists so the SQLite open below
+		// does not fail on a bare user-supplied path.
+		if err := os.MkdirAll(filepath.Dir(dbPath), 0o750); err != nil {
+			return nil, fmt.Errorf("creating database directory: %w", err)
+		}
 	}
 
 	db, err := sqlx.Open("sqlite", dbPath+"?_foreign_keys=1&_journal_mode=WAL&_busy_timeout=5000")

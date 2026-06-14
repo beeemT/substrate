@@ -13,8 +13,11 @@ import (
 
 type mockEventRepoForPlanning struct{}
 
-func (m *mockEventRepoForPlanning) Create(ctx context.Context, event domain.SystemEvent) error {
-	return nil
+func (m *mockEventRepoForPlanning) Create(ctx context.Context, event domain.SystemEvent) (domain.SystemEvent, error) {
+	if event.Sequence == 0 {
+		event.Sequence = 1
+	}
+	return event, nil
 }
 
 func (m *mockEventRepoForPlanning) ListByType(ctx context.Context, eventType string, limit int) ([]domain.SystemEvent, error) {
@@ -23,6 +26,14 @@ func (m *mockEventRepoForPlanning) ListByType(ctx context.Context, eventType str
 
 func (m *mockEventRepoForPlanning) ListByWorkspaceID(ctx context.Context, workspaceID string, limit int) ([]domain.SystemEvent, error) {
 	return nil, nil
+}
+
+func (m *mockEventRepoForPlanning) ListByWorkspaceIDAfterSequence(ctx context.Context, workspaceID string, afterSequence uint64, limit int) ([]domain.SystemEvent, error) {
+	return nil, nil
+}
+
+func (m *mockEventRepoForPlanning) LatestSequence(ctx context.Context, workspaceID string) (uint64, error) {
+	return 0, nil
 }
 
 func TestStartPlanning_EmitsEvent(t *testing.T) {

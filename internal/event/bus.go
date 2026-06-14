@@ -51,7 +51,6 @@ type HookConfig struct {
 // The handler typically logs a warning or enqueues a toast notification.
 type DropHandler func(subscriberID string, event domain.SystemEvent)
 
-
 // Publisher is the interface for publishing events.
 type Publisher interface {
 	Publish(ctx context.Context, event domain.SystemEvent) error
@@ -93,6 +92,7 @@ type Bus struct {
 	eventRepo   repository.EventRepository
 	onDrop      DropHandler // called when subscriber buffer is full; nil returns ErrRetryLater
 	closed      bool
+	publishMu   sync.Mutex // serializes Publish so subscribers see events in sequence order
 }
 
 type preHookEntry struct {
@@ -228,6 +228,12 @@ func (b *Bus) RegisterPostHook(config HookConfig, hook PostHook) {
 //   - Run pre-hooks synchronously (can abort dispatch but not persistence)
 //   - Dispatch to matching subscribers
 //   - Run post-hooks asynchronously
+//
+// Concurrency: Publish holds publishMu for the entire persist+pre-hook+dispatch
+// flow. This serializes concurrent Publish calls so that subscribers cannot
+// observe sequence N+1 before sequence N. Post-hooks run asynchronously after
+// the lock is released; their execution order is best-effort and does not
+// affect event delivery ordering.
 func (b *Bus) Publish(ctx context.Context, event domain.SystemEvent) error {
 	b.mu.RLock()
 	closed := b.closed
@@ -237,11 +243,22 @@ func (b *Bus) Publish(ctx context.Context, event domain.SystemEvent) error {
 		return errors.New("event bus is closed")
 	}
 
-	// Persist event first - it represents a fact that already occurred
+	// Serialize the entire persist+pre-hook+dispatch pipeline so subscribers
+	// observe events in the same order the repository assigns sequences.
+	// The dedicated mutex keeps Subscribe/Unsubscribe/RegisterHook (which take
+	// b.mu) responsive while a long-running publish is in flight.
+	b.publishMu.Lock()
+	defer b.publishMu.Unlock()
+
+	// Persist event first - it represents a fact that already occurred.
+	// The repository returns the same event with its daemon-local monotonic
+	// sequence assigned in the persistence transaction.
 	if b.eventRepo != nil {
-		if err := b.eventRepo.Create(ctx, event); err != nil {
+		persisted, err := b.eventRepo.Create(ctx, event)
+		if err != nil {
 			return fmt.Errorf("persist event: %w", err)
 		}
+		event = persisted
 	}
 
 	// Run pre-hooks synchronously (can abort dispatch but not persistence)

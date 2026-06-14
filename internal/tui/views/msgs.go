@@ -7,14 +7,21 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/beeemT/substrate/internal/adapter"
+	daemonapi "github.com/beeemT/substrate/internal/daemon/api"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/gitwork"
+	"github.com/beeemT/substrate/internal/logic"
 	"github.com/beeemT/substrate/internal/sessionlog"
 )
 
 // --- DB polling / data loading ---
 
 // SessionsLoadedMsg is sent when the session list is refreshed.
+
+type InitialSnapshotLoadedMsg struct {
+	WorkspaceID string
+	Snapshot    logic.InitialSnapshot
+}
 type SessionsLoadedMsg struct {
 	WorkspaceID string
 	Items       []domain.Session
@@ -61,6 +68,20 @@ type PlanForSessionLoadedMsg struct {
 // It is produced by the event consumer goroutine and handled in App.Update().
 type DomainEventMsg struct {
 	Event domain.SystemEvent
+}
+
+// RemoteEventBatchMsg is emitted by the daemon event subscription for a single
+// poll window. WorkspaceID and Generation let the App drop batches that were
+// produced before a workspace/daemon reload: a batch whose generation no
+// longer matches the App's current generation (or whose WorkspaceID does not
+// match the active workspace) was almost certainly emitted against stale
+// state and must not mutate the UI.
+type RemoteEventBatchMsg struct {
+	Events         []domain.SystemEvent
+	LatestSequence uint64
+	WorkspaceID    string
+	Generation     uint64
+	Err            error
 }
 
 // --- Event-driven typed messages ---
@@ -427,6 +448,11 @@ type StopNewSessionAutonomousModeMsg struct{ Runtime *NewSessionAutonomousRuntim
 type NewSessionAutonomousStartedMsg struct {
 	Runtime *NewSessionAutonomousRuntime
 	Events  <-chan tea.Msg
+	Message string
+}
+
+type RemoteNewSessionAutonomousStartedMsg struct {
+	Run     *daemonapi.AutonomousModeRun
 	Message string
 }
 

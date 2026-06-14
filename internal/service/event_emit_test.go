@@ -238,11 +238,14 @@ type mockEventRepoForEmit struct {
 	mu     sync.Mutex
 }
 
-func (m *mockEventRepoForEmit) Create(ctx context.Context, event domain.SystemEvent) error {
+func (m *mockEventRepoForEmit) Create(ctx context.Context, event domain.SystemEvent) (domain.SystemEvent, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if event.Sequence == 0 {
+		event.Sequence = uint64(len(m.events) + 1)
+	}
 	m.events = append(m.events, event)
-	return nil
+	return event, nil
 }
 
 func (m *mockEventRepoForEmit) ListByType(ctx context.Context, eventType string, limit int) ([]domain.SystemEvent, error) {
@@ -251,6 +254,30 @@ func (m *mockEventRepoForEmit) ListByType(ctx context.Context, eventType string,
 
 func (m *mockEventRepoForEmit) ListByWorkspaceID(ctx context.Context, workspaceID string, limit int) ([]domain.SystemEvent, error) {
 	return m.events, nil
+}
+
+func (m *mockEventRepoForEmit) ListByWorkspaceIDAfterSequence(ctx context.Context, workspaceID string, afterSequence uint64, limit int) ([]domain.SystemEvent, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var replay []domain.SystemEvent
+	for _, event := range m.events {
+		if event.WorkspaceID == workspaceID && event.Sequence > afterSequence {
+			replay = append(replay, event)
+		}
+	}
+	return replay, nil
+}
+
+func (m *mockEventRepoForEmit) LatestSequence(ctx context.Context, workspaceID string) (uint64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var latest uint64
+	for _, event := range m.events {
+		if event.WorkspaceID == workspaceID && event.Sequence > latest {
+			latest = event.Sequence
+		}
+	}
+	return latest, nil
 }
 
 func TestSessionService_EmitsEvents(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -86,8 +87,41 @@ type UIConfig struct {
 	LogLevel string `yaml:"log_level"`
 }
 
-// Config is the top-level configuration loaded from config.yaml.
-type Config struct {
+// DaemonRegistryEntry describes a daemon endpoint known to the local TUI.
+type DaemonRegistryEntry struct {
+	Label               string `yaml:"label"`
+	Kind                string `yaml:"kind"`
+	Address             string `yaml:"address"`
+	TokenRef            string `yaml:"token_ref"`
+	AutoManaged         bool   `yaml:"auto_managed"`
+	LastSeenVersion     string `yaml:"last_seen_version"`
+	LastSeenWorkspaceID string `yaml:"last_seen_workspace_id"`
+}
+
+// TUIConfig owns local visualization settings and daemon selection state.
+type TUIConfig struct {
+	ActiveDaemon string                         `yaml:"active_daemon"`
+	UI           UIConfig                       `yaml:"ui"`
+	Daemons      map[string]DaemonRegistryEntry `yaml:"daemons"`
+}
+
+// DaemonRuntimeConfig owns daemon process runtime settings.
+type DaemonRuntimeConfig struct {
+	Bind              DaemonBindConfig `yaml:"bind"`
+	DatabasePath      string           `yaml:"database_path"`
+	LogLevel          string           `yaml:"log_level"`
+	ReflectionEnabled bool             `yaml:"reflection_enabled"`
+}
+
+// DaemonBindConfig describes where the daemon listens.
+type DaemonBindConfig struct {
+	Kind       string `yaml:"kind"`
+	SocketPath string `yaml:"socket_path"`
+}
+
+// DaemonConfig owns daemon runtime and product orchestration settings.
+type DaemonConfig struct {
+	Runtime  DaemonRuntimeConfig   `yaml:"runtime"`
 	Commit   CommitConfig          `yaml:"commit"`
 	Plan     PlanConfig            `yaml:"plan"`
 	Review   ReviewConfig          `yaml:"review"`
@@ -96,7 +130,22 @@ type Config struct {
 	Foreman  ForemanConfig         `yaml:"foreman"`
 	RepoDocs RepoDocsConfig        `yaml:"repo_docs"`
 	Repos    map[string]RepoConfig `yaml:"repos"`
-	UI       UIConfig              `yaml:"ui"`
+}
+
+// Config is the top-level configuration loaded from config.yaml.
+type Config struct {
+	Daemon DaemonConfig `yaml:"daemon"`
+	TUI    TUIConfig    `yaml:"tui"`
+
+	Commit   CommitConfig          `yaml:"commit,omitempty"`
+	Plan     PlanConfig            `yaml:"plan,omitempty"`
+	Review   ReviewConfig          `yaml:"review,omitempty"`
+	Harness  HarnessConfig         `yaml:"harness,omitempty"`
+	Adapters AdaptersConfig        `yaml:"adapters,omitempty"`
+	Foreman  ForemanConfig         `yaml:"foreman,omitempty"`
+	RepoDocs RepoDocsConfig        `yaml:"repo_docs,omitempty"`
+	Repos    map[string]RepoConfig `yaml:"repos,omitempty"`
+	UI       UIConfig              `yaml:"ui,omitempty"`
 }
 
 // CommitConfig controls agent commit behavior.
@@ -521,13 +570,177 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parsing config file: %w", err)
 	}
 
+	normalizeConfigRoots(cfg)
 	applyDefaults(cfg)
+	syncConfigRoots(cfg)
 
 	if err := validate(cfg); err != nil {
 		return nil, fmt.Errorf("validating config: %w", err)
 	}
 
 	return cfg, nil
+}
+
+// Save writes cfg to path using the canonical nested daemon/TUI config shape.
+func Save(path string, cfg *Config) error {
+	if cfg == nil {
+		return fmt.Errorf("config is required")
+	}
+	normalizeConfigRoots(cfg)
+	syncConfigRoots(cfg)
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create config directory: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return fmt.Errorf("write config file: %w", err)
+	}
+	return nil
+}
+
+func (c Config) MarshalYAML() (any, error) {
+	syncConfigRoots(&c)
+	type nestedConfig struct {
+		Daemon DaemonConfig `yaml:"daemon"`
+		TUI    TUIConfig    `yaml:"tui"`
+	}
+	return nestedConfig{Daemon: c.Daemon, TUI: c.TUI}, nil
+}
+
+// normalizeConfigRoots copies nested daemon/UI subsections into their legacy
+// top-level mirrors ONLY for subsections that were explicitly set in the
+// nested form. Legacy top-level subsections that have no corresponding
+// nested entry are preserved untouched, so a config that mixes
+// `daemon.commit:` with a top-level `harness:` round-trips without losing
+// either side.
+// normalizeConfigRoots merges nested daemon/UI subsections into their legacy
+// top-level mirrors on a per-field basis. Each non-zero nested field
+// overrides its legacy top-level sibling, and legacy top-level fields that
+// have no nested counterpart are preserved untouched. This lets a config mix
+// `tui.ui.log_level: debug` with a top-level `ui.default_filter: active`
+// without either side clobbering the other.
+func normalizeConfigRoots(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	if daemonHasCommitConfig(cfg.Daemon) {
+		cfg.Commit = cfg.Daemon.Commit
+	}
+	if daemonHasPlanConfig(cfg.Daemon) {
+		cfg.Plan = cfg.Daemon.Plan
+	}
+	if daemonHasReviewConfig(cfg.Daemon) {
+		cfg.Review = cfg.Daemon.Review
+	}
+	if daemonHasHarnessConfig(cfg.Daemon) {
+		cfg.Harness = cfg.Daemon.Harness
+	}
+	if daemonHasAdaptersConfig(cfg.Daemon) {
+		cfg.Adapters = cfg.Daemon.Adapters
+	}
+	if daemonHasForemanConfig(cfg.Daemon) {
+		cfg.Foreman = cfg.Daemon.Foreman
+	}
+	if daemonHasRepoDocsConfig(cfg.Daemon) {
+		cfg.RepoDocs = cfg.Daemon.RepoDocs
+	}
+	if cfg.Daemon.Repos != nil {
+		cfg.Repos = cfg.Daemon.Repos
+	}
+	mergeUIConfig(&cfg.UI, cfg.TUI.UI)
+}
+
+func mergeUIConfig(dst *UIConfig, src UIConfig) {
+	if src.DefaultFilter != "" {
+		dst.DefaultFilter = src.DefaultFilter
+	}
+	if src.DefaultGroup != "" {
+		dst.DefaultGroup = src.DefaultGroup
+	}
+	if src.LogLevel != "" {
+		dst.LogLevel = src.LogLevel
+	}
+}
+
+func daemonHasCommitConfig(cfg DaemonConfig) bool {
+	return !reflect.DeepEqual(cfg.Commit, CommitConfig{})
+}
+
+func daemonHasPlanConfig(cfg DaemonConfig) bool {
+	return !reflect.DeepEqual(cfg.Plan, PlanConfig{})
+}
+
+func daemonHasReviewConfig(cfg DaemonConfig) bool {
+	return !reflect.DeepEqual(cfg.Review, ReviewConfig{})
+}
+
+func daemonHasHarnessConfig(cfg DaemonConfig) bool {
+	return !reflect.DeepEqual(cfg.Harness, HarnessConfig{})
+}
+
+func daemonHasAdaptersConfig(cfg DaemonConfig) bool {
+	return !reflect.DeepEqual(cfg.Adapters, AdaptersConfig{})
+}
+
+func daemonHasForemanConfig(cfg DaemonConfig) bool {
+	return !reflect.DeepEqual(cfg.Foreman, ForemanConfig{})
+}
+
+func daemonHasRepoDocsConfig(cfg DaemonConfig) bool {
+	return !reflect.DeepEqual(cfg.RepoDocs, RepoDocsConfig{})
+}
+
+func syncConfigRoots(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	cfg.Daemon.Commit = cfg.Commit
+	cfg.Daemon.Plan = cfg.Plan
+	cfg.Daemon.Review = cfg.Review
+	cfg.Daemon.Harness = cfg.Harness
+	cfg.Daemon.Adapters = cfg.Adapters
+	cfg.Daemon.Foreman = cfg.Foreman
+	cfg.Daemon.RepoDocs = cfg.RepoDocs
+	cfg.Daemon.Repos = cfg.Repos
+	cfg.TUI.UI = cfg.UI
+	if cfg.TUI.ActiveDaemon == "" {
+		cfg.TUI.ActiveDaemon = "local"
+	}
+	if cfg.TUI.Daemons == nil {
+		cfg.TUI.Daemons = map[string]DaemonRegistryEntry{}
+	}
+	if _, ok := cfg.TUI.Daemons["local"]; !ok {
+		cfg.TUI.Daemons["local"] = DaemonRegistryEntry{
+			Label:       "Local",
+			Kind:        "local",
+			TokenRef:    "keychain:daemon.local.access_token",
+			AutoManaged: true,
+		}
+	}
+	if cfg.Daemon.Runtime.Bind.Kind == "" {
+		cfg.Daemon.Runtime.Bind.Kind = "unix"
+	}
+	if cfg.Daemon.Runtime.LogLevel == "" {
+		cfg.Daemon.Runtime.LogLevel = "info"
+	}
+}
+
+// hasDaemonProductConfig reports whether any nested daemon product subsection
+// is configured. It exists for callers that want a single boolean (e.g. the
+// marshaler deciding whether to emit a `daemon:` block) without choosing
+// which subsections to merge.
+func hasDaemonProductConfig(cfg DaemonConfig) bool {
+	return daemonHasCommitConfig(cfg) ||
+		daemonHasPlanConfig(cfg) ||
+		daemonHasReviewConfig(cfg) ||
+		daemonHasHarnessConfig(cfg) ||
+		daemonHasAdaptersConfig(cfg) ||
+		daemonHasForemanConfig(cfg) ||
+		daemonHasRepoDocsConfig(cfg) ||
+		cfg.Repos != nil
 }
 
 func applyDefaults(cfg *Config) {
@@ -735,6 +948,15 @@ func validate(cfg *Config) error {
 	if !validUIGroups[cfg.UI.DefaultGroup] {
 		return fmt.Errorf("invalid ui.default_group: %q (must be none, state, source, created, or activity)", cfg.UI.DefaultGroup)
 	}
+	if cfg.Daemon.Runtime.Bind.Kind != "unix" {
+		return fmt.Errorf("invalid daemon.runtime.bind.kind: %q (only unix is supported)", cfg.Daemon.Runtime.Bind.Kind)
+	}
+	if cfg.Daemon.Runtime.ReflectionEnabled {
+		return fmt.Errorf("invalid daemon.runtime.reflection_enabled: true (gRPC reflection is not supported)")
+	}
+	if err := validateDaemonRegistryAddresses(cfg); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -751,6 +973,71 @@ func (c *Config) IssueCommentContentForSource(source string) IssueCommentContent
 	default:
 		return IssueCommentSubPlan
 	}
+}
+
+// validateDaemonAddress ensures the daemon endpoint cannot silently transport
+// bearer tokens over plaintext to a non-local peer. The current gRPC client
+// uses insecure credentials, so every transport that leaves the host
+// (non-loopback HTTP and any non-loopback scheme the client does not yet
+// speak over TLS) is rejected. Only unix-domain sockets and loopback HTTP
+// (traffic that never leaves the kernel) are accepted. HTTPS for remote
+// hosts is intentionally rejected until the client is wired with TLS
+// credentials; relying on the URL scheme while still using
+// insecure.NewCredentials() on the client would silently downgrade to
+// plaintext.
+func validateDaemonAddress(raw string) error {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return errors.New("daemon address is required")
+	}
+	// Unix-domain sockets are always acceptable: traffic is confined to the
+	// kernel and cannot be intercepted on the wire.
+	if strings.HasPrefix(trimmed, "unix:") || strings.HasPrefix(trimmed, "unix://") {
+		return nil
+	}
+	parsed, err := url.ParseRequestURI(trimmed)
+	if err != nil {
+		return fmt.Errorf("invalid daemon address: %w", err)
+	}
+	switch parsed.Scheme {
+	case "http", "https":
+		switch parsed.Hostname() {
+		case "localhost", "127.0.0.1", "::1":
+			return nil
+		}
+		return errors.New("remote daemons require TLS-wired gRPC credentials; only unix sockets and loopback http/https are accepted until then")
+	}
+	return errors.New("daemon address must use unix socket or loopback http/https")
+}
+
+// validateDaemonRegistryAddresses walks the daemon registry and rejects
+// any entry whose address would expose its bearer token in transit or whose
+// token_ref embeds a plaintext secret.
+func validateDaemonRegistryAddresses(cfg *Config) error {
+	active := strings.TrimSpace(cfg.TUI.ActiveDaemon)
+	if active != "" {
+		if _, ok := cfg.TUI.Daemons[active]; !ok {
+			return fmt.Errorf("tui.active_daemon %q is not configured in tui.daemons", active)
+		}
+	}
+	for name, entry := range cfg.TUI.Daemons {
+		if strings.TrimSpace(name) == "" {
+			return errors.New("tui.daemons contains an empty name")
+		}
+		if err := validateDaemonTokenRef(entry.TokenRef); err != nil {
+			return fmt.Errorf("tui.daemons.%s.token_ref: %w", name, err)
+		}
+		if entry.Kind != "local" && strings.TrimSpace(entry.Address) == "" {
+			return fmt.Errorf("tui.daemons.%s.address is required", name)
+		}
+		if strings.TrimSpace(entry.Address) == "" {
+			continue
+		}
+		if err := validateDaemonAddress(entry.Address); err != nil {
+			return fmt.Errorf("tui.daemons.%s.address: %w", name, err)
+		}
+	}
+	return nil
 }
 
 func validateHTTPSURL(raw string) error {
