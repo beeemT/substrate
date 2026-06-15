@@ -922,3 +922,38 @@ func readACPLogEntries(t *testing.T, logDir, sessionID string) []sessionlog.Entr
 func strPtr(s string) *string { return &s }
 
 func boolPtr(v bool) *bool { return &v }
+
+// TestSessionNewMCPServersAlwaysEmitArgsAndEnv guards against a regression where
+// an mcpServers entry omits the args/env fields. The ACP v1 spec marks both as
+// required on stdio MCP servers, and kiro-cli >= 2.7.0 silently never responds
+// to session/new when either is missing or null, which the client observes as
+// "create acp session: session/new: EOF".
+func TestSessionNewMCPServersAlwaysEmitArgsAndEnv(t *testing.T) {
+	cfg := config.ACPConfig{Command: "kiro-cli", Args: []string{"acp"}, Agent: "Kiro"}
+	// A compiled-binary MCP server has no CLI args (Args is nil) and may have no env.
+	servers := []mcpServer{{Name: "substrate-foreman", Command: "/path/to/foreman-mcp"}}
+	params := newSessionCreateParams("/workspace", servers, cfg)
+	data, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("marshal params: %v", err)
+	}
+	var raw struct {
+		MCPServers []map[string]json.RawMessage `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal params: %v", err)
+	}
+	if len(raw.MCPServers) != 1 {
+		t.Fatalf("expected 1 mcp server, got %d: %s", len(raw.MCPServers), data)
+	}
+	srv := raw.MCPServers[0]
+	for _, field := range []string{"args", "env"} {
+		v, ok := srv[field]
+		if !ok {
+			t.Fatalf("mcp server missing required %q field: %s", field, data)
+		}
+		if string(v) != "[]" && v[0] != '[' {
+			t.Fatalf("mcp server %q must serialize as a JSON array, got %s", field, v)
+		}
+	}
+}
