@@ -111,8 +111,31 @@ func (c sessionCapabilities) supportsSetMode() bool {
 type mcpServer struct {
 	Name    string   `json:"name"`
 	Command string   `json:"command"`
-	Args    []string `json:"args,omitempty"`
-	Env     []envVar `json:"env,omitempty"`
+	Args    []string `json:"args"`
+	Env     []envVar `json:"env"`
+}
+
+// MarshalJSON guarantees that args and env are always serialized as JSON
+// arrays. The ACP v1 spec marks both as required on stdio MCP servers
+// (McpServerStdio), and some agents enforce this strictly: kiro-cli >= 2.7.0
+// silently drops session/new (never responding) when either field is missing
+// or null, which surfaces to the client as an EOF on the session/new call.
+// A nil slice must therefore serialize to [] rather than being omitted.
+func (m mcpServer) MarshalJSON() ([]byte, error) {
+	type wire struct {
+		Name    string   `json:"name"`
+		Command string   `json:"command"`
+		Args    []string `json:"args"`
+		Env     []envVar `json:"env"`
+	}
+	w := wire{Name: m.Name, Command: m.Command, Args: m.Args, Env: m.Env}
+	if w.Args == nil {
+		w.Args = []string{}
+	}
+	if w.Env == nil {
+		w.Env = []envVar{}
+	}
+	return json.Marshal(w)
 }
 
 type envVar struct {
