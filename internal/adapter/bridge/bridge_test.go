@@ -1,9 +1,12 @@
 package bridge
 
 import (
+	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -591,4 +594,242 @@ func TestResolveGitDir(t *testing.T) {
 			t.Errorf("ResolveGitDir(%q) = %q, want empty string (file not dir)", worktree, got)
 		}
 	})
+}
+
+// startFakeBridge launches the testdata/fake-bridge.ts fixture as a subprocess
+// and returns a wired-up BridgeSession ready for use. t.Fatal on missing deps.
+// extraEnv controls bridge error modes (e.g. ERROR_MODE=nonzero_exit).
+func startFakeBridge(t *testing.T, extraEnv ...string) *BridgeSession {
+	t.Helper()
+
+	bunPath, err := exec.LookPath("bun")
+	if err != nil {
+		t.Skipf("bun not in PATH: %v", err)
+	}
+
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	fixturePath := filepath.Join(filepath.Dir(thisFile), "testdata", "fake-bridge.ts")
+	if _, err := os.Stat(fixturePath); err != nil {
+		t.Fatalf("fixture missing: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	t.Cleanup(cancel)
+
+	cmd := exec.CommandContext(ctx, bunPath, fixturePath)
+	cmd.Dir = filepath.Dir(fixturePath)
+	cmd.Env = append(os.Environ(), extraEnv...)
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatalf("stdin pipe: %v", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		t.Fatalf("stderr pipe: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start bridge: %v", err)
+	}
+
+	bs := NewBridgeSession("fake-test", adapter.SessionModeAgent)
+	bs.Cmd = cmd
+	bs.Stdin = stdin
+	bs.Stdout = stdout
+	bs.Stderr = stderr
+	bs.StartReaders()
+	return bs
+}
+
+// drainEvents reads all events from ch until it closes or the deadline expires.
+func drainEvents(ch <-chan adapter.AgentEvent, deadline time.Duration) ([]adapter.AgentEvent, bool) {
+	var events []adapter.AgentEvent
+	timer := time.After(deadline)
+	for {
+		select {
+		case evt, ok := <-ch:
+			if !ok {
+				return events, true
+			}
+			events = append(events, evt)
+		case <-timer:
+			return events, false
+		}
+	}
+}
+
+func TestBridgeProcessHappyPath(t *testing.T) {
+	t.Parallel()
+
+	bs := startFakeBridge(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	t.Cleanup(cancel)
+
+	if err := bs.SendPrompt("hello"); err != nil {
+		t.Fatalf("SendPrompt: %v", err)
+	}
+
+	// Close stdin so the fake bridge detects EOF and exits cleanly.
+	if err := bs.Stdin.Close(); err != nil {
+		t.Fatalf("close stdin: %v", err)
+	}
+
+	// Wait for the bridge to exit.
+	if err := bs.Wait(ctx); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+
+	// Events channel must be closed after Wait returns.
+	events, closed := drainEvents(bs.EventsChan(), 2*time.Second)
+	if len(events) != 3 {
+		t.Fatalf("got %d events, want 3", len(events))
+	}
+	if !closed {
+		t.Fatal("event channel not closed after session end")
+	}
+
+	if events[0].Type != "input" {
+		t.Errorf("events[0].Type = %q, want input", events[0].Type)
+	}
+	if events[1].Type != "text_delta" {
+		t.Errorf("events[1].Type = %q, want text_delta", events[1].Type)
+	}
+	if events[1].Payload != "echo: hello" {
+		t.Errorf("events[1].Payload = %q, want 'echo: hello'", events[1].Payload)
+	}
+	if events[2].Type != "done" {
+		t.Errorf("events[2].Type = %q, want done", events[2].Type)
+	}
+}
+
+func TestBridgeProcessFollowUpMessage(t *testing.T) {
+	t.Parallel()
+
+	bs := startFakeBridge(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	t.Cleanup(cancel)
+
+	// Send initial prompt.
+	if err := bs.SendPrompt("first"); err != nil {
+		t.Fatalf("SendPrompt: %v", err)
+	}
+
+	// Send follow-up message.
+	if err := bs.SendMessage(ctx, "second"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	// Close stdin so the fake bridge detects EOF and exits cleanly.
+	if err := bs.Stdin.Close(); err != nil {
+		t.Fatalf("close stdin: %v", err)
+	}
+
+	if err := bs.Wait(ctx); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+
+	events, closed := drainEvents(bs.EventsChan(), 2*time.Second)
+	// Expected: input, text_delta("echo: first"), done, text_delta("followup: second"), done
+	if len(events) != 5 {
+		t.Fatalf("got %d events, want 5: %v", len(events), events)
+	}
+	if !closed {
+		t.Fatal("event channel not closed after session end")
+	}
+
+	if events[0].Type != "input" {
+		t.Errorf("events[0].Type = %q, want input", events[0].Type)
+	}
+	if events[1].Payload != "echo: first" {
+		t.Errorf("events[1].Payload = %q, want 'echo: first'", events[1].Payload)
+	}
+	if events[2].Type != "done" {
+		t.Errorf("events[2].Type = %q, want done", events[2].Type)
+	}
+	if events[3].Payload != "followup: second" {
+		t.Errorf("events[3].Payload = %q, want 'followup: second'", events[3].Payload)
+	}
+	if events[4].Type != "done" {
+		t.Errorf("events[4].Type = %q, want done", events[4].Type)
+	}
+}
+
+func TestBridgeProcessAbort(t *testing.T) {
+	t.Parallel()
+
+	bs := startFakeBridge(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+
+	// Send init first so the bridge is waiting for a prompt.
+	if err := bs.WriteRawMsg([]byte(`{"type":"init"}`)); err != nil {
+		t.Fatalf("WriteRawMsg: %v", err)
+	}
+
+	if err := bs.Abort(ctx); err != nil {
+		t.Fatalf("Abort: %v", err)
+	}
+
+	// Events channel must close after Abort.
+	events, closed := drainEvents(bs.EventsChan(), 2*time.Second)
+	if len(events) != 0 {
+		t.Errorf("expected 0 events after abort, got %d", len(events))
+	}
+	if !closed {
+		t.Fatal("event channel not closed after session end")
+	}
+}
+
+func TestBridgeProcessMalformedOutput(t *testing.T) {
+	t.Parallel()
+
+	bs := startFakeBridge(t, "ERROR_MODE=malformed")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+
+	// The bridge emits one malformed line and exits 0.
+	// readEvents skips the malformed line; Wait should return nil.
+	if err := bs.Wait(ctx); err != nil {
+		t.Fatalf("Wait should succeed for malformed output with clean exit: %v", err)
+	}
+
+	events, closed := drainEvents(bs.EventsChan(), 2*time.Second)
+	if len(events) != 0 {
+		t.Errorf("expected 0 events, got %d", len(events))
+	}
+	if !closed {
+		t.Fatal("event channel not closed after session end")
+	}
+}
+
+func TestBridgeProcessNonZeroExit(t *testing.T) {
+	t.Parallel()
+
+	bs := startFakeBridge(t, "ERROR_MODE=nonzero_exit")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+
+	err := bs.Wait(ctx)
+	if err == nil {
+		t.Fatal("Wait should return an error for non-zero exit")
+	}
+	if !strings.Contains(err.Error(), "bridge subprocess exited") {
+		t.Errorf("error = %q, want it to contain 'bridge subprocess exited'", err.Error())
+	}
+
+	// Events channel must still close — no goroutine left dangling.
+	events, closed := drainEvents(bs.EventsChan(), 2*time.Second)
+	if len(events) != 0 {
+		t.Errorf("expected 0 events on non-zero exit, got %d", len(events))
+	}
+	if !closed {
+		t.Fatal("event channel not closed after session end")
+	}
 }

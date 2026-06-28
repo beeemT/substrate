@@ -1,0 +1,68 @@
+#!/bin/sh
+set -eu
+
+if [ "${FAKE_CODEX_CAPTURE_ARGV:-}" != "" ]; then
+  printf '%s\n' "$*" >> "$FAKE_CODEX_CAPTURE_ARGV"
+fi
+
+if [ "${1:-}" = "exec" ] && [ "${2:-}" = "--help" ]; then
+  printf 'usage: codex exec --json\n'
+  exit 0
+fi
+
+if [ "${1:-}" != "exec" ]; then
+  exit 1
+fi
+
+prompt=$(cat)
+if [ "${FAKE_CODEX_CAPTURE_STDIN:-}" != "" ]; then
+  {
+    printf '%s\n' '--- invocation ---'
+    printf '%s' "$prompt"
+    printf '\n'
+  } >> "$FAKE_CODEX_CAPTURE_STDIN"
+fi
+
+if [ "${FAKE_CODEX_NONZERO:-}" = "1" ]; then
+  printf '{"type":"thread.started","thread_id":"tid-fixture"}\n'
+  printf '{"type":"turn.failed","error":{"message":"fake codex failure"}}\n'
+  exit 17
+fi
+
+if [ "${FAKE_CODEX_MALFORMED:-}" = "1" ]; then
+  printf 'not valid json\n'
+  printf '{"type":"thread.started","thread_id":"tid-fixture"}\n'
+  printf '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}\n'
+  exit 0
+fi
+
+resume_id=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "resume" ]; then
+    resume_id="$arg"
+    break
+  fi
+  prev="$arg"
+done
+
+thread_id="${FAKE_CODEX_THREAD_ID:-tid-fixture}"
+if [ "$resume_id" != "" ]; then
+  text="Follow-up from fake codex"
+else
+  text="Hello from fake codex"
+  printf '{"type":"thread.started","thread_id":"%s"}\n' "$thread_id"
+fi
+
+if [ "${FAKE_CODEX_SLOW:-}" = "1" ]; then
+  sleep 30
+fi
+
+printf '{"type":"turn.started"}\n'
+printf '{"type":"item.started","item":{"id":"m1","type":"agent_message","text":""}}\n'
+printf '{"type":"item.updated","item":{"id":"m1","type":"agent_message","text":"%s"}}\n' "$text"
+printf '{"type":"item.completed","item":{"id":"m1","type":"agent_message","text":"%s"}}\n' "$text"
+printf '{"type":"item.completed","item":{"id":"cmd1","type":"command_execution","command":"printf fake","aggregated_output":"fake output","exit_code":0,"status":"completed"}}\n'
+printf '{"type":"item.completed","item":{"id":"mcp1","type":"mcp_tool_call","server":"fake","tool":"lookup","status":"error","error":{"message":"fake tool error"}}}\n'
+printf '{"type":"turn.completed","usage":{"input_tokens":11,"cached_input_tokens":2,"output_tokens":7}}\n'
+exit 0

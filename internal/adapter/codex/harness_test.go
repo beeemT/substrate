@@ -16,6 +16,20 @@ import (
 	"github.com/beeemT/substrate/internal/sessionlog"
 )
 
+// Stage 1 harness-contract checklist — Codex adapter:
+//   §1  config/readiness path: buildArgs, capabilities, check_auth
+//   §2  stable session ID / logs use Substrate session ID
+//   §3  initial prompt reaches child boundary
+//   §4  assistant output → text_delta (JSONL event mapping)
+//   §5  terminal success → done
+//   §6  follow-up messaging via resume (SupportsMessaging = true)
+//   §7  SendAnswer / Steer / Compact work or documented unsupported
+//   §8  abort closes event stream and process resources
+//   §9  readiness/startup/malformed failures → useful errors
+//   §10 canonical assistant log output review-parseable
+
+// §9 — event emission: terminal event backpressure
+
 func TestSessionEmitEventBlocksTerminalEventsWhenChannelFull(t *testing.T) {
 	t.Parallel()
 
@@ -45,8 +59,10 @@ func TestSessionEmitEventBlocksTerminalEventsWhenChannelFull(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// buildArgs
+// buildArgs — §1 config/readiness path, §3 initial prompt, §6 follow-up
 // ---------------------------------------------------------------------------
+
+// §1 — config/readiness path: new session build args
 
 func TestBuildArgs_NewSession(t *testing.T) {
 	cfg := config.CodexConfig{Model: "o4"}
@@ -76,6 +92,8 @@ func TestBuildArgs_NewSession(t *testing.T) {
 	}
 }
 
+// §6 — follow-up messaging: resume build args
+
 func TestBuildArgs_Resume(t *testing.T) {
 	cfg := config.CodexConfig{}
 	opts := adapter.SessionOpts{
@@ -92,6 +110,8 @@ func TestBuildArgs_Resume(t *testing.T) {
 		t.Fatalf("thread ID not present after resume: %v", args)
 	}
 }
+
+// §1 — config/readiness path: reasoning effort config
 
 func TestBuildArgs_ReasoningEffort(t *testing.T) {
 	tests := []struct {
@@ -128,6 +148,8 @@ func TestBuildArgs_ReasoningEffort(t *testing.T) {
 	}
 }
 
+// §3 — initial prompt: buildPrompt folds system + user
+
 func TestBuildPrompt(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -154,7 +176,7 @@ func TestBuildPrompt(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// StartSession: prompt delivered via stdin
+// StartSession: prompt delivered via stdin — §2 session ID, §3 initial prompt
 // ---------------------------------------------------------------------------
 
 func TestStartSession_PromptDeliveredViaStdin(t *testing.T) {
@@ -219,8 +241,245 @@ exit 1
 	}
 }
 
+func installFakeCodex(t *testing.T) string {
+	t.Helper()
+
+	fixturePath := filepath.Join("testdata", "fake-codex")
+	content, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatalf("read fake codex fixture: %v", err)
+	}
+	binDir := t.TempDir()
+	writeHarnessExecutable(t, binDir, "codex", string(content))
+	return filepath.Join(binDir, "codex")
+}
+
+func readTextFile(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(data)
+}
+
+func joinedPayloads(events []adapter.AgentEvent) string {
+	var b strings.Builder
+	for _, ev := range events {
+		b.WriteString(ev.Payload)
+	}
+	return b.String()
+}
+
+func waitForEventType(t *testing.T, sess adapter.AgentSession, eventType string, timeout time.Duration) []adapter.AgentEvent {
+	t.Helper()
+	deadline := time.After(timeout)
+	var events []adapter.AgentEvent
+	for {
+		select {
+		case ev, ok := <-sess.Events():
+			if !ok {
+				t.Fatalf("session closed before %s; events=%#v", eventType, events)
+			}
+			events = append(events, ev)
+			if ev.Type == eventType {
+				return events
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for %s; events=%#v", eventType, events)
+		}
+	}
+}
+
+func TestStartSession_WithFakeCodexExecutable(t *testing.T) {
+	binary := installFakeCodex(t)
+	tmpDir := t.TempDir()
+	stdinCapture := filepath.Join(tmpDir, "stdin.txt")
+	argvCapture := filepath.Join(tmpDir, "argv.txt")
+	t.Setenv("FAKE_CODEX_CAPTURE_STDIN", stdinCapture)
+	t.Setenv("FAKE_CODEX_CAPTURE_ARGV", argvCapture)
+
+	h := NewHarness(config.CodexConfig{BinaryPath: binary, Model: "o4", ReasoningEffort: "high"})
+	logDir := filepath.Join(tmpDir, "sessions")
+	worktree := filepath.Join(tmpDir, "worktree")
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatalf("mkdir worktree: %v", err)
+	}
+
+	sess, err := h.StartSession(context.Background(), adapter.SessionOpts{
+		SessionID:     "s-fake-codex",
+		WorktreePath:  worktree,
+		SessionLogDir: logDir,
+		SystemPrompt:  "Be deterministic",
+		UserPrompt:    "first turn",
+	})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	defer sess.Abort(context.Background())
+
+	if got := sess.ID(); got != "s-fake-codex" {
+		t.Fatalf("session ID = %q, want s-fake-codex", got)
+	}
+	events := collectEventsUntilDone(t, sess, 5*time.Second)
+	if got := sess.ResumeInfo()["codex_thread_id"]; got != "tid-fixture" {
+		t.Fatalf("codex_thread_id = %q, want tid-fixture", got)
+	}
+	if text := joinedPayloads(filterEvents(events, "text_delta")); text != "Hello from fake codex" {
+		t.Fatalf("text_delta = %q, want fake assistant output", text)
+	}
+	if done := findEvent(events, "done"); done == nil {
+		t.Fatal("missing done event")
+	} else if got, _ := done.Metadata["input_tokens"].(int64); got != 11 {
+		t.Fatalf("input_tokens = %v, want 11", got)
+	}
+	if cmd := findEventWhere(events, "tool_result", func(e adapter.AgentEvent) bool { return e.Payload == "printf fake" }); cmd == nil {
+		t.Fatal("missing command tool_result from fake codex")
+	}
+	if mcp := findEventWhere(events, "tool_result", func(e adapter.AgentEvent) bool { return e.Payload == "fake.lookup" }); mcp == nil {
+		t.Fatal("missing error mcp tool_result from fake codex")
+	} else if got, _ := mcp.Metadata["error"].(string); got != "fake tool error" {
+		t.Fatalf("mcp error = %q, want fake tool error", got)
+	}
+
+	stdin := readTextFile(t, stdinCapture)
+	if !strings.Contains(stdin, "Be deterministic\n\nfirst turn") {
+		t.Fatalf("stdin capture = %q, want folded prompt", stdin)
+	}
+	argv := readTextFile(t, argvCapture)
+	for _, want := range []string{"exec", "--json", "--full-auto", "--cd " + worktree, "-m o4", "-c model_reasoning_effort=high"} {
+		if !strings.Contains(argv, want) {
+			t.Fatalf("argv capture = %q, missing %q", argv, want)
+		}
+	}
+	logContent := readTextFile(t, filepath.Join(logDir, "s-fake-codex.log"))
+	if !strings.Contains(logContent, "Hello from fake codex") {
+		t.Fatalf("session log missing fake assistant output: %s", logContent)
+	}
+
+	if err := sess.SendMessage(context.Background(), "second turn"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	resumeEvents := collectEventsUntilDone(t, sess, 5*time.Second)
+	if text := joinedPayloads(filterEvents(resumeEvents, "text_delta")); text != "Follow-up from fake codex" {
+		t.Fatalf("resume text_delta = %q, want follow-up output", text)
+	}
+	argv = readTextFile(t, argvCapture)
+	if !strings.Contains(argv, "resume tid-fixture") {
+		t.Fatalf("argv capture = %q, want resume tid-fixture", argv)
+	}
+	stdin = readTextFile(t, stdinCapture)
+	if !strings.Contains(stdin, "second turn") {
+		t.Fatalf("stdin capture = %q, want follow-up prompt", stdin)
+	}
+}
+
+func TestSessionControls_WithFakeCodexExecutable(t *testing.T) {
+	binary := installFakeCodex(t)
+	h := NewHarness(config.CodexConfig{BinaryPath: binary})
+	sess, err := h.StartSession(context.Background(), adapter.SessionOpts{
+		SessionID:    "s-fake-controls",
+		WorktreePath: t.TempDir(),
+		UserPrompt:   "test",
+	})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	defer sess.Abort(context.Background())
+	collectEventsUntilDone(t, sess, 5*time.Second)
+
+	if err := sess.SendAnswer(context.Background(), "answer"); !errors.Is(err, adapter.ErrSendAnswerNotSupported) {
+		t.Fatalf("SendAnswer error = %v, want ErrSendAnswerNotSupported", err)
+	}
+	if err := sess.Compact(context.Background()); !errors.Is(err, adapter.ErrCompactNotSupported) {
+		t.Fatalf("Compact error = %v, want ErrCompactNotSupported", err)
+	}
+	if err := sess.Steer(context.Background(), "steer"); !errors.Is(err, adapter.ErrSteerNotSupported) {
+		t.Fatalf("Steer error = %v, want ErrSteerNotSupported", err)
+	}
+}
+
+func TestAbort_MidTurnWithFakeCodexExecutable(t *testing.T) {
+	binary := installFakeCodex(t)
+	t.Setenv("FAKE_CODEX_SLOW", "1")
+	h := NewHarness(config.CodexConfig{BinaryPath: binary})
+	sess, err := h.StartSession(context.Background(), adapter.SessionOpts{
+		SessionID:    "s-fake-abort",
+		WorktreePath: t.TempDir(),
+		UserPrompt:   "slow",
+	})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+
+	events := waitForEventType(t, sess, "started", 5*time.Second)
+	if len(events) == 0 {
+		t.Fatal("missing started event before abort")
+	}
+	if err := sess.Abort(context.Background()); err != nil {
+		t.Fatalf("Abort: %v", err)
+	}
+	select {
+	case <-sess.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("session Done did not close after abort")
+	}
+	if _, ok := <-sess.Events(); ok {
+		t.Fatal("events channel should be closed after abort")
+	}
+}
+
+func TestRunAction_CheckAuthWithFakeCodexExecutable(t *testing.T) {
+	binary := installFakeCodex(t)
+	h := NewHarness(config.CodexConfig{BinaryPath: binary})
+	result, err := h.RunAction(context.Background(), adapter.HarnessActionRequest{Action: "check_auth"})
+	if err != nil {
+		t.Fatalf("RunAction check_auth: %v", err)
+	}
+	if !result.Success || result.Identity != binary {
+		t.Fatalf("result = %+v, want success with fake binary identity", result)
+	}
+}
+
+func TestStartSession_FakeCodexFailureModes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		env  string
+	}{
+		{name: "malformed", env: "FAKE_CODEX_MALFORMED"},
+		{name: "nonzero", env: "FAKE_CODEX_NONZERO"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			binary := installFakeCodex(t)
+			t.Setenv(tc.env, "1")
+			h := NewHarness(config.CodexConfig{BinaryPath: binary})
+			sess, err := h.StartSession(context.Background(), adapter.SessionOpts{
+				SessionID:    "s-fake-" + tc.name,
+				WorktreePath: t.TempDir(),
+				UserPrompt:   "fail",
+			})
+			if err != nil {
+				t.Fatalf("StartSession: %v", err)
+			}
+			events := collectEventsUntilDone(t, sess, 5*time.Second)
+			if tc.name == "malformed" {
+				if findEvent(events, "done") == nil {
+					t.Fatalf("events = %#v, want done after malformed line is skipped", events)
+				}
+				return
+			}
+			waitErr := sess.Wait(context.Background())
+			if waitErr == nil || !strings.Contains(waitErr.Error(), "fake codex failure") {
+				t.Fatalf("Wait error = %v, want fake codex failure", waitErr)
+			}
+		})
+	}
+}
+
+// §4,§5 — JSONL event mapping: text_delta and done
+
 // ---------------------------------------------------------------------------
-// JSONL event mapping
+// JSONL event mapping — §4 assistant output, §5 terminal success, §9 edge cases, §10 logs
 // ---------------------------------------------------------------------------
 
 func TestReadStdout_EventMapping(t *testing.T) {
@@ -310,6 +569,8 @@ exit 1
 	}
 }
 
+// §4 — assistant output: streaming text_delta
+
 func TestReadStdout_StreamingDelta(t *testing.T) {
 	binDir := t.TempDir()
 	writeHarnessExecutable(t, binDir, "codex", `#!/bin/sh
@@ -351,6 +612,8 @@ exit 1
 		}
 	}
 }
+
+// §9 — malformed/non-zero: edge cases in event parsing
 
 func TestEventMapping_EdgeCases(t *testing.T) {
 	binDir := t.TempDir()
@@ -425,6 +688,8 @@ exit 1
 	}
 }
 
+// §10 — canonical log: session log records assistant output
+
 func TestSessionLog_RecordsOutput(t *testing.T) {
 	logDir := t.TempDir()
 	binDir := t.TempDir()
@@ -468,8 +733,10 @@ exit 1
 }
 
 // ---------------------------------------------------------------------------
-// Multi-turn: SendMessage via resume
+// Multi-turn: SendMessage via resume — §6 follow-up, §9 error guards
 // ---------------------------------------------------------------------------
+
+// §6 — follow-up messaging: SendMessage resumes a turn
 
 func TestSendMessage_ResumesTurn(t *testing.T) {
 	binDir := t.TempDir()
@@ -535,6 +802,8 @@ exit 1
 	}
 }
 
+// §10 — canonical log: multi-turn continuity in session log
+
 func TestSessionLog_MultiTurnContinuity(t *testing.T) {
 	logDir := t.TempDir()
 	binDir := t.TempDir()
@@ -593,6 +862,8 @@ exit 1
 	}
 }
 
+// §9 — error: SendMessage rejected while turn is running
+
 func TestSendMessage_RejectsWhileRunning(t *testing.T) {
 	binDir := t.TempDir()
 	// Fake codex that sleeps long enough for us to call SendMessage mid-turn.
@@ -641,6 +912,8 @@ ready:
 	}
 }
 
+// §8 — abort: clean turn does not hang
+
 func TestAbort_AfterCleanTurn_DoesNotHang(t *testing.T) {
 	binDir := t.TempDir()
 	writeHarnessExecutable(t, binDir, "codex", `#!/bin/sh
@@ -675,6 +948,8 @@ exit 1
 	}
 }
 
+// §9 — error: failed turn preserves error message
+
 func TestWait_TurnFailed_PreservesMessage(t *testing.T) {
 	binDir := t.TempDir()
 	writeHarnessExecutable(t, binDir, "codex", `#!/bin/sh
@@ -707,8 +982,10 @@ exit 1
 }
 
 // ---------------------------------------------------------------------------
-// Session lifecycle: Abort, Wait, SendMessage guards
+// Session lifecycle: Abort, Wait, SendMessage guards — §7 Steer, §8 abort
 // ---------------------------------------------------------------------------
+
+// §8 — abort: idempotent close
 
 func TestAbort_Idempotent(t *testing.T) {
 	binDir := t.TempDir()
@@ -741,6 +1018,8 @@ exit 1
 		t.Fatalf("second Abort: %v", err)
 	}
 }
+
+// §8 — abort: mid-turn terminates session and closes resources
 
 func TestAbort_MidTurn_TerminatesSession(t *testing.T) {
 	binDir := t.TempDir()
@@ -794,6 +1073,8 @@ ready:
 	}
 }
 
+// §8 — abort: SendMessage rejected after abort
+
 func TestSendMessage_RejectsAfterAbort(t *testing.T) {
 	binDir := t.TempDir()
 	writeHarnessExecutable(t, binDir, "codex", `#!/bin/sh
@@ -827,6 +1108,8 @@ exit 1
 		t.Fatalf("SendMessage error = %q, want 'aborted' mention", err.Error())
 	}
 }
+
+// §8 — abort: Wait returns on context cancellation
 
 func TestWait_ContextCancellation(t *testing.T) {
 	binDir := t.TempDir()
@@ -877,6 +1160,8 @@ ready:
 	}
 }
 
+// §7 — Steer: documented unsupported error
+
 func TestSteer_NotSupported(t *testing.T) {
 	binDir := t.TempDir()
 	writeHarnessExecutable(t, binDir, "codex", `#!/bin/sh
@@ -908,8 +1193,10 @@ exit 1
 }
 
 // ---------------------------------------------------------------------------
-// check_auth: rejects missing exec subcommand
+// check_auth / RunAction — §9 readiness/startup failures
 // ---------------------------------------------------------------------------
+
+// §9 — readiness failure: check_auth rejects missing exec subcommand
 
 func TestCheckAuth_FailsOnMissingExecSubcommand(t *testing.T) {
 	binDir := t.TempDir()
@@ -932,6 +1219,8 @@ exit 0
 	}
 }
 
+// §9 — readiness failure: unsupported RunAction
+
 func TestRunAction_UnsupportedAction(t *testing.T) {
 	h := NewHarness(config.CodexConfig{})
 	_, err := h.RunAction(context.Background(), adapter.HarnessActionRequest{Action: "do_magic"})
@@ -942,6 +1231,8 @@ func TestRunAction_UnsupportedAction(t *testing.T) {
 		t.Fatalf("error = %q, want 'unsupported codex action'", err.Error())
 	}
 }
+
+// §9 — readiness failure: unsupported provider
 
 func TestRunAction_UnsupportedProvider(t *testing.T) {
 	h := NewHarness(config.CodexConfig{})
@@ -958,8 +1249,10 @@ func TestRunAction_UnsupportedProvider(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Capabilities
+// Capabilities — §1 config/readiness path
 // ---------------------------------------------------------------------------
+
+// §1 — config/readiness path: harness name and capabilities
 
 func TestHarnessNameAndCapabilities(t *testing.T) {
 	h := NewHarness(config.CodexConfig{})

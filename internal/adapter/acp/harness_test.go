@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +19,20 @@ import (
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/sessionlog"
 )
+
+// Stage 1 harness-contract checklist — ACP adapter:
+//   §1  config/readiness path: harness config, capabilities, MCP servers
+//   §2  stable session ID / logs use Substrate session ID
+//   §3  initial prompt reaches child boundary (JSON-RPC subprocess)
+//   §4  assistant output → ACP notification updates (text_delta equivalent)
+//   §5  terminal success → done (session/prompt stop reason)
+//   §6  follow-up messaging (SupportsMessaging = true)
+//   §7  SendAnswer / Steer / Compact work or documented unsupported
+//   §8  abort closes event stream and process resources
+//   §9  readiness/startup/malformed failures → useful errors
+//   §10 canonical assistant log output review-parseable
+
+// §2,§3,§4,§5,§10 — subprocess fixture: ACP process lifecycle, event mapping, log output
 
 func TestHelperACPProcess(t *testing.T) {
 	if os.Getenv("GO_WANT_ACP_HELPER") != "1" {
@@ -64,6 +79,17 @@ func TestHelperACPProcess(t *testing.T) {
 			writeHelper(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{"configOptions": []map[string]any{{"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": "new", "options": []map[string]any{{"value": "new", "name": "New"}}}}}})
 		case "session/prompt":
 			captureHelperPrompt(msg)
+			if os.Getenv("ACP_EXIT_DURING_PROMPT") == "1" {
+				os.Exit(0)
+			}
+			if os.Getenv("ACP_MALFORMED_PROMPT_RESPONSE") == "1" {
+				writeHelper(map[string]any{"jsonrpc": "2.0", "id": id, "result": "not-object"})
+				continue
+			}
+			if os.Getenv("ACP_PROMPT_ERROR") == "1" {
+				writeHelper(map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": -32603, "message": "prompt failed"}})
+				continue
+			}
 			if os.Getenv("ACP_ECHO_USER_MESSAGE") == "1" {
 				writeHelper(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{"sessionId": "acp-sess-1", "update": map[string]any{"sessionUpdate": "user_message_chunk", "content": map[string]any{"type": "text", "text": helperPromptText(msg)}}}})
 			}
@@ -71,7 +97,11 @@ func TestHelperACPProcess(t *testing.T) {
 			writeHelper(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{"sessionId": "acp-sess-1", "update": map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": "hello"}}}})
 			writeHelper(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{"sessionId": "acp-sess-1", "update": map[string]any{"sessionUpdate": "tool_call", "toolCallId": "tc1", "title": "Read file", "kind": "read", "status": "pending"}}})
 			writeHelper(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{"sessionId": "acp-sess-1", "update": map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "tc1", "status": "completed", "content": []map[string]any{{"type": "content", "content": map[string]any{"type": "text", "text": "ok"}}}}}})
-			writeHelper(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{"stopReason": "end_turn"}})
+			stopReason := os.Getenv("ACP_STOP_REASON")
+			if stopReason == "" {
+				stopReason = "end_turn"
+			}
+			writeHelper(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{"stopReason": stopReason}})
 			if os.Getenv("ACP_EXIT_AFTER_PROMPT") == "1" {
 				os.Exit(0)
 			}
@@ -115,8 +145,19 @@ func validateHelperSessionParams(msg map[string]any) error {
 }
 
 func writeHelper(v any) {
-	data, _ := json.Marshal(v)
-	fmt.Println(string(data))
+	data, err := json.Marshal(v)
+	if err != nil {
+		slog.Error("acp helper marshal response failed", "error", err)
+		os.Exit(1)
+	}
+	writeHelperRaw(string(data))
+}
+
+func writeHelperRaw(line string) {
+	if _, err := fmt.Println(line); err != nil {
+		slog.Error("acp helper write response failed", "error", err)
+		os.Exit(1)
+	}
 }
 
 func captureHelperPrompt(msg map[string]any) {
@@ -127,14 +168,22 @@ func captureHelperPrompt(msg map[string]any) {
 	text := helperPromptText(msg)
 	data, err := json.Marshal(text)
 	if err != nil {
+		slog.Warn("acp helper marshal prompt capture failed", "error", err)
 		return
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
+		slog.Warn("acp helper open prompt capture failed", "error", err)
 		return
 	}
-	defer f.Close()
-	fmt.Fprintln(f, string(data))
+	defer func() {
+		if err := f.Close(); err != nil {
+			slog.Warn("acp helper close prompt capture failed", "error", err)
+		}
+	}()
+	if _, err := fmt.Fprintln(f, string(data)); err != nil {
+		slog.Warn("acp helper write prompt capture failed", "error", err)
+	}
 }
 
 func helperPromptText(msg map[string]any) string {
@@ -152,6 +201,8 @@ func helperACPConfig(t *testing.T) config.ACPConfig {
 	t.Helper()
 	return config.ACPConfig{Command: os.Args[0], Args: []string{"-test.run=TestHelperACPProcess", "--"}, Env: map[string]string{"GO_WANT_ACP_HELPER": "1", "ACP_AGENT_NAME": "Kilo", "ACP_AUTH_ID": "kilo-login"}, ClientFS: boolPtr(true), ClientTerminal: boolPtr(true)}
 }
+
+// §1 — config/readiness path: Kiro ACP agent config
 
 func TestKiroACPAgentConfigUsesCommandArg(t *testing.T) {
 	cfg := config.ACPConfig{Command: "kiro-cli", Args: []string{"acp"}, Agent: "my-agent", RegistryID: "ignored"}
@@ -179,6 +230,8 @@ func TestKiroACPAgentConfigUsesCommandArg(t *testing.T) {
 	}
 }
 
+// §1 — config/readiness path: non-Kiro ACP agent config
+
 func TestNonKiroACPAgentConfigUsesSessionParams(t *testing.T) {
 	cfg := config.ACPConfig{Command: "agent", Args: []string{"acp"}, Agent: "cursor", RegistryID: "cursor"}
 	command, args := acpCommand(cfgWithSessionAgent(cfg))
@@ -191,6 +244,46 @@ func TestNonKiroACPAgentConfigUsesSessionParams(t *testing.T) {
 	}
 }
 
+// §5,§9 — prompt stop reasons and protocol failures surface terminal events/errors
+
+func TestStartSessionPromptTerminalFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		envKey      string
+		envVal      string
+		wantPayload string
+		wantWait    string
+	}{
+		{name: "cancelled_stop_reason", envKey: "ACP_STOP_REASON", envVal: "cancelled", wantPayload: "ACP prompt cancelled", wantWait: "context canceled"},
+		{name: "unknown_stop_reason", envKey: "ACP_STOP_REASON", envVal: "mystery", wantPayload: "acp prompt stopped: mystery", wantWait: "acp prompt stopped: mystery"},
+		{name: "prompt_error_response", envKey: "ACP_PROMPT_ERROR", envVal: "1", wantPayload: "session/prompt", wantWait: "session/prompt"},
+		{name: "malformed_prompt_response", envKey: "ACP_MALFORMED_PROMPT_RESPONSE", envVal: "1", wantPayload: "decode session/prompt response", wantWait: "decode session/prompt response"},
+		{name: "process_eof_during_prompt", envKey: "ACP_EXIT_DURING_PROMPT", envVal: "1", wantWait: "EOF"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := helperACPConfig(t)
+			cfg.Env[tc.envKey] = tc.envVal
+			h := NewHarness(cfg, t.TempDir())
+			sess, err := h.StartSession(context.Background(), adapter.SessionOpts{SessionID: "s-" + tc.name, WorktreePath: t.TempDir(), SessionLogDir: t.TempDir(), UserPrompt: "do work"})
+			if err != nil {
+				t.Fatalf("StartSession: %v", err)
+			}
+			if tc.wantPayload != "" {
+				event := collectUntilEventType(t, sess, "error")
+				if !strings.Contains(event.Payload, tc.wantPayload) {
+					t.Fatalf("error payload = %q, want %q", event.Payload, tc.wantPayload)
+				}
+			}
+			err = sess.Wait(context.Background())
+			if err == nil || !strings.Contains(err.Error(), tc.wantWait) {
+				t.Fatalf("Wait error = %v, want %q", err, tc.wantWait)
+			}
+		})
+	}
+}
+
+// §2,§4,§5 — session lifecycle: ACP events map to text_delta and done
+
 func TestStartSessionLifecycleMapsACPEvents(t *testing.T) {
 	cfg := helperACPConfig(t)
 	cfg.Agent = "kiro-coder"
@@ -202,7 +295,7 @@ func TestStartSessionLifecycleMapsACPEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartSession: %v", err)
 	}
-	defer sess.Abort(context.Background())
+	defer abortACPTestSession(t, sess)
 	events := collectUntilDone(t, sess)
 	for _, typ := range []string{"started", "text_delta", "tool_start", "tool_result", "done"} {
 		if !slices.ContainsFunc(events, func(e adapter.AgentEvent) bool { return e.Type == typ }) {
@@ -218,6 +311,8 @@ func TestStartSessionLifecycleMapsACPEvents(t *testing.T) {
 	}
 }
 
+// §9 — startup failure: ACP load fails → fallback to new session
+
 func TestStartSessionFallsBackToNewWhenACPLoadFails(t *testing.T) {
 	cfg := helperACPConfig(t)
 	cfg.Env["ACP_DISABLE_RESUME"] = "1"
@@ -232,12 +327,14 @@ func TestStartSessionFallsBackToNewWhenACPLoadFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartSession: %v", err)
 	}
-	defer sess.Abort(context.Background())
+	defer abortACPTestSession(t, sess)
 	info := sess.ResumeInfo()
 	if info["acp_agent_session_id"] != "acp-sess-1" || info["acp_resume_method"] != "new" {
 		t.Fatalf("ResumeInfo = %#v, want new ACP session after load failure", info)
 	}
 }
+
+// §9 — startup failure: ACP resume fails → fallback to new session
 
 func TestStartSessionFallsBackToNewWhenACPResumeFails(t *testing.T) {
 	cfg := helperACPConfig(t)
@@ -252,12 +349,14 @@ func TestStartSessionFallsBackToNewWhenACPResumeFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartSession: %v", err)
 	}
-	defer sess.Abort(context.Background())
+	defer abortACPTestSession(t, sess)
 	info := sess.ResumeInfo()
 	if info["acp_agent_session_id"] != "acp-sess-1" || info["acp_resume_method"] != "new" {
 		t.Fatalf("ResumeInfo = %#v, want new ACP session after resume failure", info)
 	}
 }
+
+// §3 — initial prompt: session context folded into prompt
 
 func TestStartSessionFoldsSessionContextIntoInitialPrompt(t *testing.T) {
 	cfg := helperACPConfig(t)
@@ -270,7 +369,7 @@ func TestStartSessionFoldsSessionContextIntoInitialPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartSession: %v", err)
 	}
-	defer sess.Abort(context.Background())
+	defer abortACPTestSession(t, sess)
 	collectUntilDone(t, sess)
 	prompts := readCapturedPrompts(t, capturePath)
 	if len(prompts) != 1 || prompts[0] != "system context\n\nbegin" {
@@ -291,6 +390,8 @@ func TestStartSessionFoldsSessionContextIntoInitialPrompt(t *testing.T) {
 	}
 }
 
+// §3 — initial prompt: system-only context does not auto-prompt
+
 func TestStartSessionWithOnlySystemContextDoesNotAutoPrompt(t *testing.T) {
 	cfg := helperACPConfig(t)
 	capturePath := filepath.Join(t.TempDir(), "prompts.jsonl")
@@ -300,11 +401,13 @@ func TestStartSessionWithOnlySystemContextDoesNotAutoPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartSession: %v", err)
 	}
-	defer sess.Abort(context.Background())
+	defer abortACPTestSession(t, sess)
 	if _, err := os.Stat(capturePath); !os.IsNotExist(err) {
 		t.Fatalf("capture file exists or stat failed: %v", err)
 	}
 }
+
+// §6 — follow-up messaging: SendMessage folds pending context once
 
 func TestSendMessageFoldsPendingSessionContextOnce(t *testing.T) {
 	cfg := helperACPConfig(t)
@@ -316,7 +419,7 @@ func TestSendMessageFoldsPendingSessionContextOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartSession: %v", err)
 	}
-	defer sess.Abort(context.Background())
+	defer abortACPTestSession(t, sess)
 	if err := sess.SendMessage(context.Background(), "first"); err != nil {
 		t.Fatalf("SendMessage first: %v", err)
 	}
@@ -348,6 +451,8 @@ func TestSendMessageFoldsPendingSessionContextOnce(t *testing.T) {
 	}
 }
 
+// §7 — Steer/Compact: do not consume pending session context
+
 func TestSteerAndCompactDoNotConsumePendingSessionContext(t *testing.T) {
 	cfg := helperACPConfig(t)
 	capturePath := filepath.Join(t.TempDir(), "prompts.jsonl")
@@ -357,7 +462,7 @@ func TestSteerAndCompactDoNotConsumePendingSessionContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartSession: %v", err)
 	}
-	defer sess.Abort(context.Background())
+	defer abortACPTestSession(t, sess)
 	if err := sess.Compact(context.Background()); err != nil {
 		t.Fatalf("Compact: %v", err)
 	}
@@ -385,6 +490,8 @@ func TestSteerAndCompactDoNotConsumePendingSessionContext(t *testing.T) {
 	}
 }
 
+// §10 — canonical log: session log records canonical (not raw protocol) output
+
 func TestStartSessionLogsCanonicalRecordsNotRawProtocol(t *testing.T) {
 	cfg := helperACPConfig(t)
 	h := NewHarness(cfg, t.TempDir())
@@ -394,7 +501,7 @@ func TestStartSessionLogsCanonicalRecordsNotRawProtocol(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartSession: %v", err)
 	}
-	defer sess.Abort(context.Background())
+	defer abortACPTestSession(t, sess)
 	collectUntilDone(t, sess)
 
 	// Read the active log before Abort compresses it.
@@ -418,6 +525,8 @@ func TestStartSessionLogsCanonicalRecordsNotRawProtocol(t *testing.T) {
 		}
 	}
 }
+
+// §10 — canonical log: ACP log archived with discoverable segment name
 
 func TestStartSessionArchivesACPLogWithDiscoverableSegmentName(t *testing.T) {
 	cfg := helperACPConfig(t)
@@ -457,6 +566,8 @@ func TestStartSessionArchivesACPLogWithDiscoverableSegmentName(t *testing.T) {
 	}
 }
 
+// §4 — assistant output: tool call raw input mapping
+
 func TestMapSessionUpdateToolCallRawInput(t *testing.T) {
 	events := mapSessionUpdate(json.RawMessage(`{"sessionUpdate":"tool_call","toolCallId":"tc1","title":"read","kind":"read","status":"pending","rawInput":{"operations":[{"mode":"Line","path":"/tmp/plan.md","limit":10}]}}`))
 	if len(events) != 1 {
@@ -476,6 +587,8 @@ func TestMapSessionUpdateToolCallRawInput(t *testing.T) {
 	}
 }
 
+// §4 — assistant output: tool call title fallback
+
 func TestMapSessionUpdateToolCallTitleFallback(t *testing.T) {
 	events := mapSessionUpdate(json.RawMessage(`{"sessionUpdate":"tool_call","toolCallId":"tc1","title":"ask_foreman","status":"pending","rawInput":{"question":"Proceed?"}}`))
 	if len(events) != 1 {
@@ -485,6 +598,8 @@ func TestMapSessionUpdateToolCallTitleFallback(t *testing.T) {
 		t.Fatalf("metadata tool = %q, want ask_foreman", got)
 	}
 }
+
+// §4 — assistant output: tool call raw output mapping
 
 func TestMapSessionUpdateToolCallRawOutput(t *testing.T) {
 	events := mapSessionUpdate(json.RawMessage(`{"sessionUpdate":"tool_call_update","toolCallId":"tc1","kind":"read","status":"completed","rawOutput":{"items":[{"Text":"User id: 502\n-rw-r--r-- file.yaml"}]}}`))
@@ -498,6 +613,8 @@ func TestMapSessionUpdateToolCallRawOutput(t *testing.T) {
 		t.Fatalf("payload = %q", events[0].Payload)
 	}
 }
+
+// §4 — assistant output: todo tool call mapping
 
 func TestMapSessionUpdateTodoToolCall(t *testing.T) {
 	start := mapSessionUpdate(json.RawMessage(`{"sessionUpdate":"tool_call","toolCallId":"tc1","title":"Creating task list: Implement chart","rawInput":{"command":"create","task_list_description":"Implement chart","tasks":[{"task_description":"Create chart"}]}}`))
@@ -528,6 +645,8 @@ func TestMapSessionUpdateTodoToolCall(t *testing.T) {
 		t.Fatalf("result payload = %q, want todo state payload suppressed", result[0].Payload)
 	}
 }
+
+// §1 — config/readiness path: MCP servers use human question tool
 
 func TestBuildMCPServersUsesHumanQuestionToolForHumanPolicy(t *testing.T) {
 	dir := t.TempDir()
@@ -564,12 +683,16 @@ func TestBuildMCPServersUsesHumanQuestionToolForHumanPolicy(t *testing.T) {
 	}
 }
 
+// §1 — config/readiness path: MCP servers skip question tools for none policy
+
 func TestBuildMCPServersSkipsQuestionToolsForNonePolicy(t *testing.T) {
 	s := &Session{mode: adapter.SessionModeAgent}
 	if servers := s.buildQuestionMCPServers(adapter.QuestionToolPolicyNone); len(servers) != 0 {
 		t.Fatalf("mcp servers = %#v, want none", servers)
 	}
 }
+
+// §7 — SendAnswer: writes answer input to log
 
 func TestSessionSendAnswerWritesAnswerInputLog(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "session.log")
@@ -596,6 +719,8 @@ func TestSessionSendAnswerWritesAnswerInputLog(t *testing.T) {
 	}
 }
 
+// §1 — config/readiness path: session includes empty MCP servers
+
 func TestStartSessionIncludesEmptyMCPServers(t *testing.T) {
 	cfg := helperACPConfig(t)
 	h := NewHarness(cfg, t.TempDir())
@@ -607,6 +732,8 @@ func TestStartSessionIncludesEmptyMCPServers(t *testing.T) {
 		t.Fatalf("Abort: %v", err)
 	}
 }
+
+// §8 — abort: after session finished
 
 func TestAbortAfterSessionFinished(t *testing.T) {
 	cfg := helperACPConfig(t)
@@ -640,6 +767,8 @@ func TestAbortAfterSessionFinished(t *testing.T) {
 	}
 }
 
+// §1 — config/readiness path: question MCP bridge uses configured executable
+
 func TestResolveQuestionMCPBridgeUsesConfiguredExecutable(t *testing.T) {
 	dir := t.TempDir()
 	bridgePath := filepath.Join(dir, "custom-question-mcp")
@@ -654,6 +783,8 @@ func TestResolveQuestionMCPBridgeUsesConfiguredExecutable(t *testing.T) {
 		t.Fatalf("resolved cmd=%q args=%v, want configured executable with no args", cmd, args)
 	}
 }
+
+// §1 — config/readiness path: question MCP bridge uses configured script
 
 func TestResolveQuestionMCPBridgeUsesConfiguredScript(t *testing.T) {
 	bun, err := exec.LookPath("bun")
@@ -677,6 +808,8 @@ func TestResolveQuestionMCPBridgeUsesConfiguredScript(t *testing.T) {
 	}
 }
 
+// §7 — Compact: strategy detection
+
 func TestCompactStrategyDetection(t *testing.T) {
 	cfg := config.ACPConfig{Command: "agent", Args: []string{"acp"}}
 	if got := detectConfiguredCompactStrategy(cfg).command; got != "compress" {
@@ -691,6 +824,8 @@ func TestCompactStrategyDetection(t *testing.T) {
 		t.Fatalf("advertised strategy = %q, want compress", got)
 	}
 }
+
+// §1 — config/readiness path: capabilities report Substrate ACP tools
 
 func TestCapabilitiesReportSubstrateACPTools(t *testing.T) {
 	caps := NewHarness(config.ACPConfig{}, t.TempDir()).Capabilities()
@@ -717,6 +852,8 @@ func TestCapabilitiesReportSubstrateACPTools(t *testing.T) {
 	}
 }
 
+// §1 — config/readiness path: capabilities respect disabled ACP client tools
+
 func TestCapabilitiesRespectDisabledACPClientTools(t *testing.T) {
 	caps := NewHarness(config.ACPConfig{ClientFS: boolPtr(false), ClientTerminal: boolPtr(false)}, t.TempDir()).Capabilities()
 	for _, disabledTool := range []string{"acp/fs.read_text_file", "acp/fs.write_text_file", "acp/terminal.create"} {
@@ -730,6 +867,8 @@ func TestCapabilitiesRespectDisabledACPClientTools(t *testing.T) {
 		}
 	}
 }
+
+// §9 — error: file system client methods enforce root
 
 func TestFileSystemClientMethodsEnforceRoot(t *testing.T) {
 	root := t.TempDir()
@@ -751,6 +890,8 @@ func TestFileSystemClientMethodsEnforceRoot(t *testing.T) {
 	}
 }
 
+// §10 — canonical log: terminal ring truncates at UTF-8 boundary
+
 func TestTerminalRingTruncatesAtUTF8Boundary(t *testing.T) {
 	var r terminalRing
 	r.limit = 5
@@ -762,6 +903,8 @@ func TestTerminalRingTruncatesAtUTF8Boundary(t *testing.T) {
 		t.Fatalf("buffer is not valid UTF-8: %q", string(r.buf))
 	}
 }
+
+// §4 — assistant output: session response decodes spec mode state
 
 func TestSessionResponseDecodesSpecModeState(t *testing.T) {
 	data := []byte(`{"sessionId":"acp-sess-1","modes":{"currentModeId":"code","availableModes":[{"id":"code","name":"Code","description":"write code"}]}}`)
@@ -776,6 +919,8 @@ func TestSessionResponseDecodesSpecModeState(t *testing.T) {
 		t.Fatalf("AvailableModes = %#v, want code mode", resp.Modes.AvailableModes)
 	}
 }
+
+// §4 — assistant output: session response decodes legacy mode list
 
 func TestSessionResponseDecodesLegacyModeList(t *testing.T) {
 	data := []byte(`{"sessionId":"acp-sess-1","modes":[{"id":"ask","name":"Ask"}]}`)
@@ -816,6 +961,8 @@ func collectUntilDone(t *testing.T, sess adapter.AgentSession) []adapter.AgentEv
 		}
 	}
 }
+
+// §4 — assistant output: foreman emit keeps proposal out of backpressure
 
 func TestForemanEmitKeepsProposalOutOfBackpressure(t *testing.T) {
 	t.Parallel()
@@ -919,9 +1066,18 @@ func readACPLogEntries(t *testing.T, logDir, sessionID string) []sessionlog.Entr
 	return nil
 }
 
+func abortACPTestSession(t *testing.T, sess adapter.AgentSession) {
+	t.Helper()
+	if err := sess.Abort(context.Background()); err != nil {
+		t.Logf("Abort cleanup: %v", err)
+	}
+}
+
 func strPtr(s string) *string { return &s }
 
 func boolPtr(v bool) *bool { return &v }
+
+// §9 — readiness failure: MCP servers must always emit args and env
 
 // TestSessionNewMCPServersAlwaysEmitArgsAndEnv guards against a regression where
 // an mcpServers entry omits the args/env fields. The ACP v1 spec marks both as

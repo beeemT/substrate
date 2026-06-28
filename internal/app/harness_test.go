@@ -9,6 +9,10 @@ import (
 	"github.com/beeemT/substrate/internal/config"
 )
 
+// Stage 1 harness-contract checklist — product config/readiness path:
+//   §1  config/readiness path: BuildAgentHarnesses selects correct harness
+//   §9  readiness/startup failures: missing binaries/bridges do not block
+
 func newHarnessConfig(primary config.HarnessName) *config.Config {
 	cfg := &config.Config{}
 	cfg.Harness.Default = primary
@@ -37,6 +41,15 @@ func writePackagedBridge(t *testing.T) string {
 	return bridgePath
 }
 
+func writePackagedClaudeBridge(t *testing.T) string {
+	t.Helper()
+
+	bridgePath := filepath.Join(t.TempDir(), "claude-agent-bridge")
+	writeTestFile(t, bridgePath, "#!/bin/sh\n", 0o755)
+
+	return bridgePath
+}
+
 func writeSourceBridge(t *testing.T) string {
 	t.Helper()
 
@@ -50,6 +63,8 @@ func writeSourceBridge(t *testing.T) string {
 
 	return bridgePath
 }
+
+// §9 — readiness failure: missing OhMyPi bridge does not block other harnesses
 
 func TestBuildAgentHarnesses_DoesNotBlockWhenOhMyPiBridgeUnavailable(t *testing.T) {
 	cfg := newHarnessConfig(config.HarnessOhMyPi)
@@ -67,6 +82,8 @@ func TestBuildAgentHarnesses_DoesNotBlockWhenOhMyPiBridgeUnavailable(t *testing.
 	}
 }
 
+// §9 — readiness failure: missing bun override does not block other harnesses
+
 func TestBuildAgentHarnesses_DoesNotBlockWhenOhMyPiBunOverrideMissing(t *testing.T) {
 	cfg := newHarnessConfig(config.HarnessOhMyPi)
 	cfg.Adapters.OhMyPi.BridgePath = writeSourceBridge(t)
@@ -80,6 +97,8 @@ func TestBuildAgentHarnesses_DoesNotBlockWhenOhMyPiBunOverrideMissing(t *testing
 		t.Fatalf("planning harness = %v, want nil when bun is unavailable", harnesses.Planning)
 	}
 }
+
+// §1 — config/readiness path: OhMyPi selected when packaged bridge ready
 
 func TestBuildAgentHarnesses_UsesOhMyPiWhenPackagedBridgeReady(t *testing.T) {
 	cfg := newHarnessConfig(config.HarnessOhMyPi)
@@ -97,6 +116,8 @@ func TestBuildAgentHarnesses_UsesOhMyPiWhenPackagedBridgeReady(t *testing.T) {
 	}
 }
 
+// §1 — config/readiness path: OhMyPi selected when source bridge + bun ready
+
 func TestBuildAgentHarnesses_UsesOhMyPiWhenSourceBridgeAndBunReady(t *testing.T) {
 	cfg := newHarnessConfig(config.HarnessOhMyPi)
 	cfg.Adapters.OhMyPi.BridgePath = writeSourceBridge(t)
@@ -110,6 +131,44 @@ func TestBuildAgentHarnesses_UsesOhMyPiWhenSourceBridgeAndBunReady(t *testing.T)
 		t.Fatalf("planning harness = %q, want omp", got)
 	}
 }
+
+// §1 — config/readiness path: Claude Agent selected when packaged bridge ready
+
+func TestBuildAgentHarnesses_UsesClaudeAgentWhenPackagedBridgeReady(t *testing.T) {
+	cfg := newHarnessConfig(config.HarnessClaudeCode)
+	cfg.Adapters.ClaudeCode.BridgePath = writePackagedClaudeBridge(t)
+
+	harnesses, err := BuildAgentHarnesses(cfg, "/tmp")
+	if err != nil {
+		t.Fatalf("BuildAgentHarnesses() error = %v", err)
+	}
+	if got := harnesses.Planning.Name(); got != "claude-code" {
+		t.Fatalf("planning harness = %q, want claude-code", got)
+	}
+	if got := harnesses.Resume.Name(); got != "claude-code" {
+		t.Fatalf("resume harness = %q, want claude-code", got)
+	}
+}
+
+// §1 — config/readiness path: OpenCode selected when binary ready
+
+func TestBuildAgentHarnesses_UsesOpenCodeWhenBinaryReady(t *testing.T) {
+	cfg := newHarnessConfig(config.HarnessOpenCode)
+	cfg.Adapters.OpenCode.BinaryPath = "/bin/sh"
+
+	harnesses, err := BuildAgentHarnesses(cfg, "/tmp")
+	if err != nil {
+		t.Fatalf("BuildAgentHarnesses() error = %v", err)
+	}
+	if got := harnesses.Planning.Name(); got != "opencode" {
+		t.Fatalf("planning harness = %q, want opencode", got)
+	}
+	if got := harnesses.Resume.Name(); got != "opencode" {
+		t.Fatalf("resume harness = %q, want opencode", got)
+	}
+}
+
+// §1 — config/readiness path: ACP selected when command ready
 
 func TestBuildAgentHarnesses_UsesACPWhenCommandReady(t *testing.T) {
 	cfg := newHarnessConfig(config.HarnessACP)
@@ -126,6 +185,8 @@ func TestBuildAgentHarnesses_UsesACPWhenCommandReady(t *testing.T) {
 		t.Fatalf("resume harness = %q, want acp", got)
 	}
 }
+
+// §9 — readiness failure: missing ACP command does not block other harnesses
 
 func TestBuildAgentHarnesses_DoesNotBlockWhenACPCommandMissing(t *testing.T) {
 	cfg := newHarnessConfig(config.HarnessACP)
@@ -155,6 +216,8 @@ func TestBuildAgentHarnesses_DoesNotBlockWhenACPCommandMissing(t *testing.T) {
 		t.Fatalf("planning warning = %q, want ACP command not configured", warnings[0])
 	}
 }
+
+// §9 — readiness failure: missing harness binary does not block other harnesses
 
 func TestBuildAgentHarnesses_DoesNotBlockWhenHarnessBinaryMissing(t *testing.T) {
 	cfg := newHarnessConfig(config.HarnessCodex)
@@ -186,6 +249,8 @@ func TestBuildAgentHarnesses_DoesNotBlockWhenHarnessBinaryMissing(t *testing.T) 
 		t.Fatalf("planning warning = %q, want grouped codex detail", warnings[0])
 	}
 }
+
+// §9 — readiness failure: diagnose summarizes bridge lookup for users
 
 func TestDiagnoseHarnesses_SummarizesOhMyPiBridgeLookupForUsers(t *testing.T) {
 	cfg := newHarnessConfig(config.HarnessOhMyPi)
