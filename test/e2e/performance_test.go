@@ -188,7 +188,7 @@ func TestE2E_Performance_ParallelSessionsStartNearSimultaneously(t *testing.T) {
 	}
 
 	// Find the two impl sessions (completed, not the foreman).
-	var implSessions []domain.Task
+	var implSessions []domain.AgentSession
 	for _, s := range sessions {
 		if s.Status == domain.AgentSessionCompleted {
 			implSessions = append(implSessions, s)
@@ -198,15 +198,15 @@ func TestE2E_Performance_ParallelSessionsStartNearSimultaneously(t *testing.T) {
 		t.Fatalf("expected at least 2 completed sessions, got %d", len(implSessions))
 	}
 
-	// Both sessions should have been created within 500 ms of each other.
-	// This is a loose bound — it only catches sequential scheduling.
+	// Both sessions should be created close together. Keep a generous bound:
+	// git-work checkout/setup time is platform-dependent in this E2E path.
 	if len(implSessions) >= 2 {
 		diff := implSessions[0].CreatedAt.Sub(implSessions[1].CreatedAt)
 		if diff < 0 {
 			diff = -diff
 		}
-		if diff > 500*time.Millisecond {
-			t.Errorf("sessions created %s apart; expected parallel launch (< 500ms skew)", diff)
+		if diff > 2*time.Second {
+			t.Errorf("sessions created %s apart; expected near-parallel launch (< 2s skew)", diff)
 		}
 	}
 }

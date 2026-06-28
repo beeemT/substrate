@@ -107,9 +107,11 @@ func TestE2E_Recovery_AgentInterrupted_Resumable(t *testing.T) {
 	}
 
 	// Create an interrupted session (simulates a crash).
-	interruptedSession := domain.Task{
+	interruptedSession := domain.AgentSession{
 		ID:             domain.NewID(),
+		WorkItemID:     item.ID,
 		WorkspaceID:    ws.ID,
+		Kind:           domain.AgentSessionKindImplementation,
 		SubPlanID:      subPlan.ID,
 		RepositoryName: "repo-a",
 		WorktreePath:   "/tmp/fake-worktree-for-test",
@@ -161,20 +163,20 @@ func TestE2E_Recovery_AgentInterrupted_Resumable(t *testing.T) {
 	if err := env.instanceRepo.Create(ctx, inst); err != nil {
 		t.Fatalf("create instance: %v", err)
 	}
-	result, err := env.resumption.ResumeSession(ctx, interrupted, instanceID)
+	newSession, err := env.sessionSvc.CreateResumeChild(ctx, interrupted.ID, "e2e-mock", &instanceID)
 	if err != nil {
-		t.Fatalf("ResumeSession(): %v", err)
+		t.Fatalf("CreateResumeChild(): %v", err)
 	}
 
 	// New session must be distinct from the interrupted one.
-	if result.NewSession.ID == interrupted.ID {
+	if newSession.ID == interrupted.ID {
 		t.Error("resumed session ID should differ from interrupted session ID")
 	}
-	if result.NewSession.SubPlanID != subPlan.ID {
-		t.Errorf("resumed session SubPlanID = %s, want %s", result.NewSession.SubPlanID, subPlan.ID)
+	if newSession.SubPlanID != subPlan.ID {
+		t.Errorf("resumed session SubPlanID = %s, want %s", newSession.SubPlanID, subPlan.ID)
 	}
-	if result.NewSession.WorktreePath != interrupted.WorktreePath {
-		t.Errorf("resumed session WorktreePath = %s, want %s", result.NewSession.WorktreePath, interrupted.WorktreePath)
+	if newSession.WorktreePath != interrupted.WorktreePath {
+		t.Errorf("resumed session WorktreePath = %s, want %s", newSession.WorktreePath, interrupted.WorktreePath)
 	}
 
 	// AgentSessionResumed event should have been published.
@@ -194,11 +196,6 @@ func TestE2E_Recovery_AgentInterrupted_Resumable(t *testing.T) {
 	}
 	if still.Status != domain.AgentSessionInterrupted {
 		t.Errorf("interrupted session status = %s, want interrupted", still.Status)
-	}
-
-	// The harness session handle must not be nil.
-	if result.HarnessSession == nil {
-		t.Error("ResumeSession should return a non-nil HarnessSession")
 	}
 }
 
@@ -231,9 +228,11 @@ func TestE2E_Recovery_AbandonInterrupted(t *testing.T) {
 		t.Fatalf("create sub-plan: %v", err)
 	}
 
-	sess := domain.Task{
+	sess := domain.AgentSession{
 		ID:             domain.NewID(),
+		WorkItemID:     item.ID,
 		WorkspaceID:    ws.ID,
+		Kind:           domain.AgentSessionKindImplementation,
 		SubPlanID:      subPlan.ID,
 		RepositoryName: "repo-a",
 		WorktreePath:   "/tmp/wt",
@@ -252,8 +251,8 @@ func TestE2E_Recovery_AbandonInterrupted(t *testing.T) {
 		t.Fatalf("interrupt session: %v", err)
 	}
 
-	if err := env.resumption.AbandonSession(ctx, sess.ID); err != nil {
-		t.Fatalf("AbandonSession(): %v", err)
+	if err := env.sessionSvc.Fail(ctx, sess.ID, nil); err != nil {
+		t.Fatalf("Fail(): %v", err)
 	}
 
 	abandoned, err := env.sessionRepo.Get(ctx, sess.ID)
@@ -296,9 +295,11 @@ func TestE2E_Recovery_ReviewMaxCycles_Escalated(t *testing.T) {
 	}
 
 	// Create a completed session so ReviewSession can look it up.
-	session := domain.Task{
+	session := domain.AgentSession{
 		ID:             domain.NewID(),
+		WorkItemID:     item.ID,
 		WorkspaceID:    ws.ID,
+		Kind:           domain.AgentSessionKindImplementation,
 		SubPlanID:      subPlan.ID,
 		RepositoryName: "repo-a",
 		WorktreePath:   "/tmp/wt-review",
@@ -497,9 +498,11 @@ func TestE2E_Recovery_ReviewPassAfterReimplementation(t *testing.T) {
 		t.Fatalf("create sub-plan: %v", err)
 	}
 
-	sess := domain.Task{
+	sess := domain.AgentSession{
 		ID:             domain.NewID(),
+		WorkItemID:     item.ID,
 		WorkspaceID:    ws.ID,
+		Kind:           domain.AgentSessionKindImplementation,
 		SubPlanID:      subPlan.ID,
 		RepositoryName: "repo-a",
 		WorktreePath:   "/tmp/wt-reimpl",

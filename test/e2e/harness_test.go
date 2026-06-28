@@ -3,9 +3,13 @@
 package e2e_test
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +23,7 @@ import (
 
 	"github.com/beeemT/go-atomic/generic"
 	"github.com/beeemT/substrate/internal/adapter"
+	"github.com/beeemT/substrate/internal/app"
 	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/event"
@@ -27,6 +32,7 @@ import (
 	repocore "github.com/beeemT/substrate/internal/repository"
 	reposqlite "github.com/beeemT/substrate/internal/repository/sqlite"
 	"github.com/beeemT/substrate/internal/service"
+	"github.com/beeemT/substrate/internal/worktree"
 	"github.com/beeemT/substrate/migrations"
 )
 
@@ -73,7 +79,7 @@ type testEnv struct {
 	planRepo      reposqlite.PlanRepo
 	subPlanRepo   reposqlite.SubPlanRepo
 	workspaceRepo reposqlite.WorkspaceRepo
-	sessionRepo   reposqlite.TaskRepo
+	sessionRepo   reposqlite.AgentSessionRepo
 	reviewRepo    reposqlite.ReviewRepo
 	questionRepo  reposqlite.QuestionRepo
 	eventRepo     reposqlite.EventRepo
@@ -82,7 +88,7 @@ type testEnv struct {
 	// Services
 	workItemSvc  *service.SessionService
 	planSvc      *service.PlanService
-	sessionSvc   *service.TaskService
+	sessionSvc   *service.AgentSessionService
 	reviewSvc    *service.ReviewService
 	workspaceSvc *service.WorkspaceService
 	questionSvc  *service.QuestionService
@@ -91,13 +97,16 @@ type testEnv struct {
 	plannerSvc     *orchestrator.PlanningService
 	implSvc        *orchestrator.ImplementationService
 	reviewPipeline *orchestrator.ReviewPipeline
-	resumption     *orchestrator.Resumption
 }
 
-// newTestEnv creates and wires all infrastructure for an e2e test.
-// It sets SUBSTRATE_HOME to an isolated temp dir so session logs do not
-// bleed into ~/.substrate during test runs.
+// newTestEnv creates and wires all infrastructure for an e2e test with the default mock harness.
 func newTestEnv(t *testing.T) *testEnv {
+	t.Helper()
+	return newTestEnvWithAgentHarnesses(t, nil, nil, nil)
+}
+
+// newTestEnvWithAgentHarnesses wires e2e infrastructure with explicit product harnesses.
+func newTestEnvWithAgentHarnesses(t *testing.T, planningHarness, implementationHarness, reviewHarness adapter.AgentHarness) *testEnv {
 	t.Helper()
 
 	// Isolate SUBSTRATE_HOME so session logs go to a temp dir.
@@ -112,20 +121,17 @@ func newTestEnv(t *testing.T) *testEnv {
 	workspaceDir := t.TempDir()
 
 	// --- Database ---
-	// ImplementationService spawns goroutines that open new connections from the
-	// pool. SQLite :memory: gives each new connection its own empty database,
-	// causing "no such table" errors in goroutines. Use a file-based database in
-	// the test's temp dir so all connections share the same schema and data.
 	dbPath := filepath.Join(substrateHome, "substrate.db")
 	db, err := sqlx.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	t.Cleanup(func() { _ = db.Close() })
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Logf("close db: %v", err)
+		}
+	})
 
-	// SQLite pragmas are per-connection. With a file-based DB and multiple
-	// goroutines, SetMaxOpenConns(1) ensures all operations share one connection
-	// so WAL/busy_timeout apply consistently and no SQLITE_BUSY errors occur.
 	db.SetMaxOpenConns(1)
 	for _, pragma := range []string{
 		"PRAGMA journal_mode=WAL",
@@ -141,56 +147,65 @@ func newTestEnv(t *testing.T) *testEnv {
 	}
 
 	// --- Repos ---
-	// *sqlx.DB does not implement generic.SQLXRemote directly (missing
-	// NamedStmtContext).  Wrap it with dbRemote which adds the stub method.
 	dbR := newDBRemote(db)
 	workItemRepo := reposqlite.NewSessionRepo(dbR)
 	planRepo := reposqlite.NewPlanRepo(dbR)
 	subPlanRepo := reposqlite.NewSubPlanRepo(dbR)
 	workspaceRepo := reposqlite.NewWorkspaceRepo(dbR)
-	sessionRepo := reposqlite.NewTaskRepo(dbR)
+	sessionRepo := reposqlite.NewAgentSessionRepo(dbR)
 	reviewRepo := reposqlite.NewReviewRepo(dbR)
 	questionRepo := reposqlite.NewQuestionRepo(dbR)
 	eventRepo := reposqlite.NewEventRepo(dbR)
 	instanceRepo := reposqlite.NewInstanceRepo(dbR)
 
-	// --- Services ---
-	transacter := reposqlite.NewTransacter(db)
-	workItemSvc := service.NewSessionService(transacter, nil)
-	planSvc := service.NewPlanService(transacter, nil)
-	sessionSvc := service.NewTaskService(transacter, nil)
-	reviewSvc := service.NewReviewService(transacter)
-	workspaceSvc := service.NewWorkspaceService(transacter)
-	questionSvc := service.NewQuestionService(transacter)
-	eventSvc := service.NewEventService(transacter)
-
 	// --- Event bus ---
 	bus := event.NewBus(event.BusConfig{EventRepo: eventRepo})
+
+	// --- Services ---
+	transacter := reposqlite.NewTransacter(db)
+	workItemSvc := service.NewSessionService(transacter, bus)
+	planSvc := service.NewPlanService(transacter, bus)
+	sessionSvc := service.NewAgentSessionService(transacter, bus)
+	continuationSvc := service.NewAgentSessionContinuationService(transacter)
+	reviewSvc := service.NewReviewService(transacter, bus)
+	workspaceSvc := service.NewWorkspaceService(transacter, bus)
+	questionSvc := service.NewQuestionService(transacter, bus)
+	eventSvc := service.NewEventService(transacter)
 
 	// --- Config ---
 	cfg := defaultTestConfig()
 
-	// --- Mock harness ---
+	// --- Harnesses ---
 	mockHarness := &e2eMockHarness{sessionsDir: sessionsDir}
+	if planningHarness == nil {
+		planningHarness = mockHarness
+	}
+	if implementationHarness == nil {
+		implementationHarness = mockHarness
+	}
+	if reviewHarness == nil {
+		reviewHarness = mockHarness
+	}
 
 	// --- git-work client ---
 	gitClient := gitwork.NewClient("")
 
 	// --- Discoverer ---
 	discoverer := orchestrator.NewDiscoverer(gitClient)
+	registry := orchestrator.NewSessionRegistry()
 
 	// --- Planning service ---
 	plannerSvc, err := orchestrator.NewPlanningService(
 		orchestrator.PlanningConfigFromConfig(cfg),
 		discoverer,
 		gitClient,
-		mockHarness,
+		planningHarness,
 		planSvc,
 		workItemSvc,
 		sessionSvc,
 		bus,
 		workspaceSvc,
-		nil, // registry
+		registry,
 		questionSvc,
 		cfg,
 	)
@@ -201,44 +216,37 @@ func newTestEnv(t *testing.T) *testEnv {
 	// --- Implementation service ---
 	implSvc := orchestrator.NewImplementationService(
 		cfg,
-		mockHarness,
+		implementationHarness,
 		gitClient,
 		bus,
 		planSvc,
 		workItemSvc,
 		sessionSvc,
+		continuationSvc,
 		workspaceSvc,
-		nil, // registry
+		registry,
 		nil, // reviewPipeline
 		nil, // foreman
 		nil, // questionSvc
 		nil, // reviewSvc
-		nil, // hookRegistry
+		worktree.NewHookRegistry(),
 	)
 
 	// --- Review pipeline ---
 	reviewPipeline := orchestrator.NewReviewPipeline(
 		cfg,
-		mockHarness,
+		reviewHarness,
 		reviewSvc,
 		sessionSvc,
 		planSvc,
 		workItemSvc,
 		bus,
-		nil, // registry
+		registry,
 	)
 
-	// --- Resumption ---
-	resumption := orchestrator.NewResumption(
-		mockHarness,
-		sessionSvc,
-		planSvc,
-		bus,
-		nil, // registry
-	)
-
-	_ = questionSvc  // used by Foreman; not exercised in these tests
-	_ = instanceRepo // used by instance manager; not exercised directly
+	_ = eventSvc    // constructed to keep service wiring explicit in e2e tests
+	_ = questionSvc // used by Foreman; not exercised in these tests
+	_ = instanceRepo
 
 	return &testEnv{
 		db:           db,
@@ -269,7 +277,6 @@ func newTestEnv(t *testing.T) *testEnv {
 		plannerSvc:     plannerSvc,
 		implSvc:        implSvc,
 		reviewPipeline: reviewPipeline,
-		resumption:     resumption,
 	}
 }
 
@@ -345,9 +352,14 @@ func (env *testEnv) approvePlan(t *testing.T, ctx context.Context, workItemID, p
 	if err := env.workItemSvc.ApprovePlan(ctx, workItemID); err != nil {
 		t.Fatalf("approve work item: %v", err)
 	}
-	// plannerSvc.Plan creates the plan in Draft status; submit before approve.
-	if err := env.planSvc.SubmitForReview(ctx, planID); err != nil {
-		t.Fatalf("submit plan for review: %v", err)
+	plan, err := env.planSvc.GetPlan(ctx, planID)
+	if err != nil {
+		t.Fatalf("get plan before approval: %v", err)
+	}
+	if plan.Status == domain.PlanDraft {
+		if err := env.planSvc.SubmitForReview(ctx, planID); err != nil {
+			t.Fatalf("submit plan for review: %v", err)
+		}
 	}
 	if err := env.planSvc.ApprovePlan(ctx, planID); err != nil {
 		t.Fatalf("approve plan: %v", err)
@@ -389,7 +401,7 @@ func (env *testEnv) reviewAllSessions(t *testing.T, ctx context.Context, wsID st
 	}
 	var results []*orchestrator.ReviewResult
 	for _, sess := range sessions {
-		if sess.Status != domain.AgentSessionCompleted {
+		if sess.Kind != domain.AgentSessionKindImplementation || sess.Status != domain.AgentSessionCompleted {
 			continue
 		}
 		result, err := env.reviewPipeline.ReviewSession(ctx, sess)
@@ -433,6 +445,7 @@ func createGitWorkRepo(t *testing.T, workspaceDir, name string) string {
 	}
 
 	run(repoDir, "git", "init")
+	run(repoDir, "git", "branch", "-M", "main")
 	run(repoDir, "git", "config", "user.email", "e2e@substrate.test")
 	run(repoDir, "git", "config", "user.name", "E2E Test")
 
@@ -443,6 +456,10 @@ func createGitWorkRepo(t *testing.T, workspaceDir, name string) string {
 	run(repoDir, "git", "add", "README.md")
 	// Disable GPG signing to avoid 1Password prompts in CI/local.
 	run(repoDir, "git", "-c", "commit.gpgsign=false", "commit", "-m", "Initial commit")
+	remoteDir := filepath.Join(workspaceDir, name+"-origin.git")
+	run(workspaceDir, "git", "init", "--bare", remoteDir)
+	run(repoDir, "git", "remote", "add", "origin", remoteDir)
+	run(repoDir, "git", "-c", "commit.gpgsign=false", "push", "-u", "origin", "main")
 	run(repoDir, "git-work", "init")
 
 	t.Cleanup(func() { _ = os.RemoveAll(repoDir) })
@@ -466,7 +483,7 @@ func validPlan(repos ...string) string {
 	}
 	sb.WriteString("]\n```\n\n## Orchestration\n\nAll repos execute in parallel.\n\n")
 	for _, r := range repos {
-		fmt.Fprintf(&sb, "## SubPlan: %s\n\nImplement changes in %s.\n\n", r, r)
+		writeValidSubPlan(&sb, r)
 	}
 	return sb.String()
 }
@@ -490,32 +507,43 @@ func validPlanWaves(firstWave, secondWave []string) string {
 	writeGroup(secondWave)
 	sb.WriteString("```\n\n## Orchestration\n\nTwo-wave execution.\n\n")
 	for _, r := range append(firstWave, secondWave...) {
-		fmt.Fprintf(&sb, "## SubPlan: %s\n\nImplement changes in %s.\n\n", r, r)
+		writeValidSubPlan(&sb, r)
 	}
 	return sb.String()
+}
+
+func writeValidSubPlan(sb *strings.Builder, repo string) {
+	fmt.Fprintf(sb, "## SubPlan: %s\n", repo)
+	sb.WriteString("### Goal\n")
+	fmt.Fprintf(sb, "Implement deterministic test changes in %s.\n\n", repo)
+	sb.WriteString("### Scope\n")
+	fmt.Fprintf(sb, "- Repository %s test fixture files.\n\n", repo)
+	sb.WriteString("### Changes\n")
+	sb.WriteString("1. Apply the requested product workflow changes.\n")
+	sb.WriteString("2. Preserve existing behavior for unaffected code paths.\n")
+	sb.WriteString("3. Add or refresh focused validation.\n\n")
+	sb.WriteString("### Validation\n")
+	sb.WriteString("- go test ./...\n\n")
+	sb.WriteString("### Risks\n")
+	sb.WriteString("- Keep the workflow deterministic and isolated from external services.\n\n")
 }
 
 // ---------------------------------------------------------------------------
 // Session log helpers
 // ---------------------------------------------------------------------------
 
-// writeProgressLog writes content lines as JSONL progress events to path.
-// Format: {"type":"event","event":{"type":"progress","text":"<line>"}}
-// This matches the format expected by ReviewPipeline.readSessionOutputFromLog.
+// writeProgressLog writes content as a canonical assistant_output JSONL event.
+// ReviewPipeline.readSessionOutputFromLog flattens assistant output entries.
 func writeProgressLog(path, content string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create log dir: %w", err)
 	}
-	var sb strings.Builder
-	for _, line := range strings.Split(content, "\n") {
-		escaped, err := json.Marshal(line)
-		if err != nil {
-			return fmt.Errorf("marshal line: %w", err)
-		}
-		fmt.Fprintf(&sb, `{"type":"event","event":{"type":"progress","text":%s}}`, string(escaped))
-		sb.WriteString("\n")
+	escaped, err := json.Marshal(content)
+	if err != nil {
+		return fmt.Errorf("marshal content: %w", err)
 	}
-	return os.WriteFile(path, []byte(sb.String()), 0o644)
+	entry := fmt.Sprintf(`{"type":"event","event":{"type":"assistant_output","text":%s}}`+"\n", string(escaped))
+	return os.WriteFile(path, []byte(entry), 0o644)
 }
 
 // ---------------------------------------------------------------------------
@@ -545,6 +573,8 @@ type e2eMockHarness struct {
 }
 
 func (h *e2eMockHarness) Name() string { return "e2e-mock" }
+
+func (h *e2eMockHarness) SupportsCompact() bool { return false }
 
 // EnqueueSpec appends one or more session specs to the FIFO queue.
 func (h *e2eMockHarness) EnqueueSpec(specs ...sessionSpec) {
@@ -613,7 +643,7 @@ func (h *e2eMockHarness) StartSession(_ context.Context, opts adapter.SessionOpt
 	// Implementation sessions don't need pre-buffered events: Wait() closes
 	// the channel and forwardEvents goroutine exits via context cancellation.
 	var preloaded []adapter.AgentEvent
-	if opts.DraftPath != "" || opts.Mode == adapter.SessionModeForeman {
+	if opts.DraftPath != "" || opts.Mode == adapter.SessionModeForeman || spec.reviewOutput != "" {
 		preloaded = []adapter.AgentEvent{{Type: "done", Timestamp: time.Now()}}
 	}
 
@@ -627,6 +657,7 @@ func (h *e2eMockHarness) StartSession(_ context.Context, opts adapter.SessionOpt
 type e2eSession struct {
 	id        string
 	eventsCh  chan adapter.AgentEvent
+	doneCh    chan struct{}
 	waitErr   error
 	closeOnce sync.Once
 }
@@ -636,16 +667,20 @@ func newE2ESession(id string, waitErr error, events ...adapter.AgentEvent) *e2eS
 	for _, e := range events {
 		ch <- e
 	}
-	return &e2eSession{id: id, eventsCh: ch, waitErr: waitErr}
+	return &e2eSession{id: id, eventsCh: ch, doneCh: make(chan struct{}), waitErr: waitErr}
 }
 
 func (s *e2eSession) ID() string                        { return s.id }
 func (s *e2eSession) Events() <-chan adapter.AgentEvent { return s.eventsCh }
+func (s *e2eSession) Done() <-chan struct{}             { return s.doneCh }
 
 // Wait closes the events channel and returns the configured error.
 // Idempotent via sync.Once — safe to call from forwardEvents goroutines.
 func (s *e2eSession) Wait(_ context.Context) error {
-	s.closeOnce.Do(func() { close(s.eventsCh) })
+	s.closeOnce.Do(func() {
+		close(s.eventsCh)
+		close(s.doneCh)
+	})
 	return s.waitErr
 }
 
@@ -654,7 +689,10 @@ func (s *e2eSession) SendMessage(_ context.Context, _ string) error { return nil
 
 // Abort closes the events channel. Idempotent via sync.Once.
 func (s *e2eSession) Abort(_ context.Context) error {
-	s.closeOnce.Do(func() { close(s.eventsCh) })
+	s.closeOnce.Do(func() {
+		close(s.eventsCh)
+		close(s.doneCh)
+	})
 	return nil
 }
 
@@ -665,3 +703,266 @@ func (s *e2eSession) SendAnswer(_ context.Context, _ string) error {
 }
 
 func (s *e2eSession) ResumeInfo() map[string]string { return nil }
+
+func (s *e2eSession) Compact(_ context.Context) error {
+	return adapter.ErrCompactNotSupported
+}
+
+type e2eHarnessCase struct {
+	name string
+	cfg  func(t *testing.T, plan string, workspaceRoot string) *config.Config
+}
+
+func buildE2EProductHarnesses(t *testing.T, cfg *config.Config, workspaceRoot string) app.AgentHarnesses {
+	t.Helper()
+	harnesses, err := app.BuildAgentHarnesses(cfg, workspaceRoot)
+	if err != nil {
+		t.Fatalf("BuildAgentHarnesses: %v", err)
+	}
+	return harnesses
+}
+
+func e2eProductHarnessCases() []e2eHarnessCase {
+	return []e2eHarnessCase{
+		{name: "ohmypi", cfg: func(t *testing.T, plan, _ string) *config.Config {
+			cfg := defaultTestConfig()
+			cfg.Harness.Default = config.HarnessOhMyPi
+			cfg.Adapters.OhMyPi.BridgePath = writeE2EHelperWrapper(t, "omp-bridge", "GO_WANT_E2E_BRIDGE")
+			t.Setenv("E2E_PRODUCT_PLAN", plan)
+			return cfg
+		}},
+		{name: "claudeagent", cfg: func(t *testing.T, plan, _ string) *config.Config {
+			cfg := defaultTestConfig()
+			cfg.Harness.Default = config.HarnessClaudeCode
+			cfg.Adapters.ClaudeCode.BridgePath = writeE2EHelperWrapper(t, "claude-bridge", "GO_WANT_E2E_BRIDGE")
+			t.Setenv("E2E_PRODUCT_PLAN", plan)
+			return cfg
+		}},
+		{name: "codex", cfg: func(t *testing.T, plan, _ string) *config.Config {
+			cfg := defaultTestConfig()
+			cfg.Harness.Default = config.HarnessCodex
+			cfg.Adapters.Codex.BinaryPath = writeE2EHelperWrapper(t, "codex", "GO_WANT_E2E_CODEX")
+			t.Setenv("E2E_PRODUCT_PLAN", plan)
+			return cfg
+		}},
+		{name: "opencode", cfg: func(t *testing.T, plan, _ string) *config.Config {
+			cfg := defaultTestConfig()
+			cfg.Harness.Default = config.HarnessOpenCode
+			cfg.Adapters.OpenCode.BinaryPath = writeE2EHelperWrapper(t, "opencode", "GO_WANT_E2E_OPENCODE")
+			t.Setenv("E2E_PRODUCT_PLAN", plan)
+			return cfg
+		}},
+		{name: "acp", cfg: func(t *testing.T, plan, _ string) *config.Config {
+			cfg := defaultTestConfig()
+			cfg.Harness.Default = config.HarnessACP
+			cfg.Adapters.ACP.Command = writeE2EHelperWrapper(t, "acp", "GO_WANT_E2E_ACP")
+			cfg.Adapters.ACP.Args = []string{}
+			cfg.Adapters.ACP.Env = map[string]string{"E2E_PRODUCT_PLAN": plan}
+			return cfg
+		}},
+	}
+}
+
+func writeE2EHelperWrapper(t *testing.T, name, envKey string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	content := fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo '%s fake'; exit 0; fi\n%s=1 exec %q -test.run=TestHelperE2EProductHarness -- \"$@\"\n", name, envKey, os.Args[0])
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatalf("write helper wrapper: %v", err)
+	}
+	return path
+}
+
+func TestHelperE2EProductHarness(t *testing.T) {
+	switch {
+	case os.Getenv("GO_WANT_E2E_BRIDGE") == "1":
+		runE2EBridgeHelper()
+	case os.Getenv("GO_WANT_E2E_CODEX") == "1":
+		runE2ECodexHelper()
+	case os.Getenv("GO_WANT_E2E_ACP") == "1":
+		runE2EACPHelper()
+	case os.Getenv("GO_WANT_E2E_OPENCODE") == "1":
+		runE2EOpenCodeHelper()
+		os.Exit(0)
+	}
+}
+
+func runE2EBridgeHelper() {
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		var msg map[string]any
+		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
+			continue
+		}
+		typ, _ := msg["type"].(string)
+		text, _ := msg["text"].(string)
+		switch typ {
+		case "prompt", "message", "steer":
+			writeE2EPlanFromPrompt(text)
+			writeE2EJSONLine(map[string]any{"type": "event", "event": map[string]any{"type": "assistant_output", "text": "NO_CRITIQUES"}})
+			writeE2EJSONLine(map[string]any{"type": "event", "event": map[string]any{"type": "lifecycle", "stage": "completed", "summary": "done"}})
+			os.Exit(0)
+		case "compact":
+			writeE2EJSONLine(map[string]any{"type": "event", "event": map[string]any{"type": "lifecycle", "stage": "compaction_end", "message": "done"}})
+		case "abort":
+			os.Exit(0)
+		}
+	}
+	os.Exit(0)
+}
+
+func runE2ECodexHelper() {
+	if len(os.Args) > 2 && os.Args[1] == "--" && len(os.Args) > 3 && os.Args[2] == "exec" && os.Args[3] == "--help" {
+		fmt.Println("usage: codex exec --json")
+		os.Exit(0)
+	}
+	promptBytes, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "read stdin: %v\n", err)
+		os.Exit(1)
+	}
+	writeE2EPlanFromPrompt(string(promptBytes))
+	writeE2EJSONLine(map[string]any{"type": "thread.started", "thread_id": "e2e-thread"})
+	writeE2EJSONLine(map[string]any{"type": "item.completed", "item": map[string]any{"id": "m1", "type": "agent_message", "text": "NO_CRITIQUES"}})
+	writeE2EJSONLine(map[string]any{"type": "turn.completed", "usage": map[string]any{"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1}})
+	os.Exit(0)
+}
+
+func runE2EACPHelper() {
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		var msg map[string]any
+		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
+			continue
+		}
+		method, _ := msg["method"].(string)
+		id := msg["id"]
+		switch method {
+		case "initialize":
+			writeE2EJSONLine(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{"protocolVersion": 1, "agentInfo": map[string]any{"name": "E2E ACP", "version": "test"}, "agentCapabilities": map[string]any{"loadSession": true, "sessionCapabilities": map[string]any{"close": map[string]any{}}}}})
+		case "session/new", "session/load", "session/resume":
+			writeE2EJSONLine(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{"sessionId": "acp-e2e"}})
+		case "session/prompt":
+			text := e2eACPPromptText(msg)
+			writeE2EPlanFromPrompt(text)
+			writeE2EJSONLine(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{"sessionId": "acp-e2e", "update": map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": "NO_CRITIQUES"}}}})
+			writeE2EJSONLine(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{"stopReason": "end_turn"}})
+			os.Exit(0)
+		case "session/cancel", "session/close":
+			writeE2EJSONLine(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{}})
+		}
+	}
+	os.Exit(0)
+}
+
+func runE2EOpenCodeHelper() {
+	helper := &e2eOpenCodeHelper{events: make(chan string, 16)}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "listen: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Server running on http://%s\n", listener.Addr().String())
+	if err := http.Serve(listener, helper); err != nil {
+		fmt.Fprintf(os.Stderr, "serve: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+type e2eOpenCodeHelper struct {
+	events chan string
+}
+
+func (h *e2eOpenCodeHelper) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/session":
+		w.WriteHeader(http.StatusOK)
+	case r.Method == http.MethodPost && r.URL.Path == "/session":
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"oc-e2e"}`)
+	case r.Method == http.MethodGet && r.URL.Path == "/event":
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+		for {
+			select {
+			case event := <-h.events:
+				fmt.Fprintf(w, "data: %s\n\n", event)
+				if flusher != nil {
+					flusher.Flush()
+				}
+			case <-r.Context().Done():
+				return
+			}
+		}
+	case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/session/") && strings.HasSuffix(r.URL.Path, "/message"):
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "read body", http.StatusBadRequest)
+			return
+		}
+		writeE2EPlanFromPrompt(string(body))
+		h.events <- `{"type":"message.updated","sessionID":"oc-e2e","message":{"id":"m1","parts":[{"type":"text","text":"NO_CRITIQUES"}]}}`
+		h.events <- `{"type":"session.completed","sessionID":"oc-e2e"}`
+		w.WriteHeader(http.StatusOK)
+	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/abort"):
+		h.events <- `{"type":"session.aborted","sessionID":"oc-e2e"}`
+		w.WriteHeader(http.StatusOK)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func e2eACPPromptText(msg map[string]any) string {
+	params, _ := msg["params"].(map[string]any)
+	blocks, _ := params["prompt"].([]any)
+	if len(blocks) == 0 {
+		return ""
+	}
+	block, _ := blocks[0].(map[string]any)
+	text, _ := block["text"].(string)
+	return text
+}
+
+func writeE2EPlanFromPrompt(prompt string) {
+	plan := os.Getenv("E2E_PRODUCT_PLAN")
+	if plan == "" {
+		return
+	}
+	path := extractE2EDraftPath(prompt)
+	if path == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "create draft dir: %v\n", err)
+		return
+	}
+	if err := os.WriteFile(path, []byte(plan), 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "write draft: %v\n", err)
+	}
+}
+
+func extractE2EDraftPath(prompt string) string {
+	for _, marker := range []string{"progressively to ", "draft update to ", "plan to "} {
+		idx := strings.Index(prompt, marker)
+		if idx < 0 {
+			continue
+		}
+		rest := prompt[idx+len(marker):]
+		rest = strings.Trim(rest, "` \n\t")
+		end := strings.IndexAny(rest, " \n\t")
+		if end > 0 {
+			return strings.TrimSuffix(strings.Trim(rest[:end], "`"), ".")
+		}
+		return strings.TrimSuffix(strings.Trim(rest, "`"), ".")
+	}
+	return ""
+}
+
+func writeE2EJSONLine(v any) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "marshal helper json: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(string(data))
+}

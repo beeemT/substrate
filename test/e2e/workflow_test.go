@@ -64,7 +64,7 @@ func TestE2E_FullWorkflow_ManualItem_TwoRepos(t *testing.T) {
 	if !implResult.State.AllWavesCompleted() {
 		t.Fatalf("implementation did not complete all waves: %+v", implResult.State)
 	}
-	env.requireWorkItemState(t, ctx, item.ID, domain.SessionReviewing)
+	env.requireWorkItemState(t, ctx, item.ID, domain.SessionImplementing)
 
 	// --- Review ---
 	reviewResults := env.reviewAllSessions(t, ctx, ws.ID)
@@ -157,7 +157,7 @@ func TestE2E_WorkItem_TraversesAllStates(t *testing.T) {
 	env.approvePlan(t, ctx, item.ID, result.Plan.ID)
 	snapshot("after approval")
 
-	// implementing → reviewing
+	// implementing
 	if _, err := env.implSvc.Implement(ctx, result.Plan.ID); err != nil {
 		t.Fatalf("Implement(): %v", err)
 	}
@@ -177,8 +177,8 @@ func TestE2E_WorkItem_TraversesAllStates(t *testing.T) {
 		domain.SessionIngested,
 		domain.SessionPlanReview,
 		domain.SessionApproved,
-		domain.SessionReviewing,
-		domain.SessionReviewing, // review doesn't auto-advance state
+		domain.SessionImplementing,
+		domain.SessionImplementing, // review doesn't auto-advance state
 		domain.SessionCompleted,
 	}
 	// Verify observable state sequence.
@@ -295,8 +295,8 @@ func TestE2E_MultiWave_ExecutionOrder(t *testing.T) {
 		t.Errorf("repo-c order = %d, want 1", orderMap["repo-c"])
 	}
 
-	// Verify work item reached reviewing state.
-	env.requireWorkItemState(t, ctx, item.ID, domain.SessionReviewing)
+	// Verify work item remains in implementing state after waves complete; manual completion is separate.
+	env.requireWorkItemState(t, ctx, item.ID, domain.SessionImplementing)
 }
 
 // ---------------------------------------------------------------------------
