@@ -442,5 +442,9 @@ func (lr *sseLineReader) ReadSSELine() (string, error) {
 			return line, err
 		}
 		// Empty line (SSE event separator) — skip and continue.
+		if line == "" {
+			continue
+		}
+		return line, nil
 	}
 }

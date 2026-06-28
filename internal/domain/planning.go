@@ -39,6 +39,8 @@ type PlanningContext struct {
 	Repos []RepoPointer
 	// RepoDocPaths are absolute paths to workspace-level documentation repositories or folders.
 	RepoDocPaths []string
+	// WorkspaceRoot is the root directory for workspace-level planning sessions.
+	WorkspaceRoot string
 	// SessionID is the ULID for this planning session.
 	SessionID string
 	// SessionDraftPath is the absolute path to plan-draft.md for this session.

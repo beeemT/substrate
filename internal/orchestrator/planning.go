@@ -510,6 +510,7 @@ func (s *PlanningService) planRun(ctx context.Context, req planRunRequest) (*dom
 		WorkspaceAgentsMd: workspaceAgentsMd,
 		Repos:             repos,
 		RepoDocPaths:      resolveRepoDocPaths(s.globalCfg, workspace.RootPath),
+		WorkspaceRoot:     workspace.RootPath,
 		SessionID:         sessionID,
 		SessionDraftPath:  sessionDir.DraftPath,
 		MaxParseRetries:   s.cfg.MaxParseRetries,
@@ -668,7 +669,7 @@ func (s *PlanningService) runPlanningWithCorrectionLoop(
 			DraftPath:    draftPath,
 			SystemPrompt: systemPrompt,
 			UserPrompt:   userPrompt,
-			WorktreePath: "", // Planning uses workspace root
+			WorktreePath: planningCtx.WorkspaceRoot, // Planning runs at the workspace root; some harnesses require a cwd.
 		}
 		if len(info) > 0 {
 			sessionOpts.ResumeFromSessionID = fromSessionID

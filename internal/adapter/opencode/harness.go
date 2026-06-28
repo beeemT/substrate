@@ -274,7 +274,11 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (_
 	// Create session log directory and file.
 	sessionLogDir := opts.SessionLogDir
 	if sessionLogDir == "" {
-		sessionLogDir = filepath.Join(workDir, ".opencode", "logs")
+		globalDir, err := config.GlobalDir()
+		if err != nil {
+			return nil, fmt.Errorf("get global dir: %w", err)
+		}
+		sessionLogDir = filepath.Join(globalDir, "sessions")
 	}
 	if err = os.MkdirAll(sessionLogDir, 0o750); err != nil {
 		return nil, fmt.Errorf("create session log dir: %w", err)

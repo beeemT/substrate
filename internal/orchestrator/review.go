@@ -527,12 +527,22 @@ func (p *ReviewPipeline) readSessionOutputFromLog(_ context.Context, sessionID s
 		return "", fmt.Errorf("get global dir: %w", err)
 	}
 
-	logPath := filepath.Join(globalDir, "sessions", sessionID+".log")
-
-	entries, err := sessionlog.ReadFile(logPath)
+	sessionsDir := filepath.Join(globalDir, "sessions")
+	paths, err := sessionlog.InteractionPaths(sessionsDir, sessionID)
 	if err != nil {
-		return "", fmt.Errorf("read session log: %w", err)
+		return "", fmt.Errorf("resolve session log paths: %w", err)
+	}
+	if len(paths) == 0 {
+		return "", fmt.Errorf("no session log found for %s", sessionID)
+	}
+	var allEntries []sessionlog.Entry
+	for _, logPath := range paths {
+		entries, err := sessionlog.ReadFile(logPath)
+		if err != nil {
+			return "", fmt.Errorf("read session log: %w", err)
+		}
+		allEntries = append(allEntries, entries...)
 	}
 
-	return sessionlog.FlattenAssistantOutput(entries), nil
+	return sessionlog.FlattenAssistantOutput(allEntries), nil
 }

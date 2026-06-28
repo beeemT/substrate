@@ -83,6 +83,8 @@ func (h *Harness) StartSession(ctx context.Context, opts adapter.SessionOpts) (a
 		logPath:       sessionLogPath(opts),
 		completed:     make(chan error, 1),
 		done:          make(chan struct{}),
+		turnDone:      make(chan struct{}),
+		turnNum:       1,
 		state:         sessionRunning,
 		lastText:      make(map[string]string),
 	}
@@ -231,6 +233,8 @@ type session struct {
 	logPath   string
 	completed chan error // receives exactly once: when the session is aborted or fails fatally
 	done      chan struct{}
+	turnDone  chan struct{} // closed when the current turn completes; replaced per resume
+	turnNum   int           // incremented on each new turn; guards Wait against stale channel closes
 }
 
 func (s *session) ID() string                        { return s.id }
@@ -254,23 +258,35 @@ func (s *session) Compact(_ context.Context) error {
 	return adapter.ErrCompactNotSupported
 }
 
-// Wait blocks until the session is aborted or a fatal error occurs.
-//
-// Note: unlike single-turn harnesses, Wait does NOT return when a turn
-// completes — it returns only when the session is explicitly Abort()ed or
-// hits an unrecoverable error. Callers that need to react to turn completion
-// should listen for the "done" event on Events().
-
+// Wait blocks until the current turn completes, the session is aborted, or a
+// fatal error occurs. For multi-turn sessions, each call to Wait returns once
+// the *current* turn finishes — callers should invoke Wait after each
+// SendMessage to observe that turn's outcome.
 func (s *session) Wait(ctx context.Context) error {
-	select {
-	case <-ctx.Done():
-		if abortErr := s.Abort(ctx); abortErr != nil {
-			slog.Warn("failed to abort codex session on context cancel", "error", abortErr)
-		}
+	for {
+		s.mu.Lock()
+		ch := s.turnDone
+		n := s.turnNum
+		s.mu.Unlock()
 
-		return ctx.Err()
-	case err := <-s.completed:
-		return err
+		select {
+		case <-ctx.Done():
+			if abortErr := s.Abort(ctx); abortErr != nil {
+				slog.Warn("failed to abort codex session on context cancel", "error", abortErr)
+			}
+			return ctx.Err()
+		case <-ch:
+			s.mu.Lock()
+			sameTurn := s.turnNum == n
+			st := s.state
+			s.mu.Unlock()
+			if sameTurn || st == sessionAborted {
+				return nil
+			}
+			// Channel was closed by a new turn starting — loop and re-read.
+		case err := <-s.completed:
+			return err
+		}
 	}
 }
 
@@ -310,9 +326,13 @@ func (s *session) SendMessage(ctx context.Context, msg string) error {
 	}
 
 	s.mu.Lock()
+	oldCh := s.turnDone
 	s.cmd = cmd
 	s.state = sessionRunning
+	s.turnDone = make(chan struct{})
+	s.turnNum++
 	s.mu.Unlock()
+	close(oldCh) // unblock any Wait() stuck on the previous turn's channel
 
 	if err := s.openLogFile(); err != nil {
 		if killErr := cmd.Process.Kill(); killErr != nil {
@@ -368,12 +388,14 @@ func (s *session) Abort(ctx context.Context) error {
 		if killErr := cmd.Process.Kill(); killErr != nil {
 			slog.Warn("failed to kill codex process on abort timeout", "error", killErr)
 		}
+		s.terminateSession(nil)
 
 		return nil
 	case <-ctx.Done():
 		if killErr := cmd.Process.Kill(); killErr != nil {
 			slog.Warn("failed to kill codex process on context cancel", "error", killErr)
 		}
+		s.terminateSession(ctx.Err())
 
 		return ctx.Err()
 	}
@@ -412,6 +434,9 @@ func (s *session) waitProcess(cmd *exec.Cmd, ioWg *sync.WaitGroup) {
 	case sessionAborted:
 		// Abort called: close the events channel and deliver nil on completed.
 		s.terminateSession(nil)
+		s.mu.Lock()
+		s.signalTurnDone()
+		s.mu.Unlock()
 	case sessionRunning:
 		if err != nil {
 			// Process exited non-zero without us aborting: use the pending turn
@@ -425,24 +450,38 @@ func (s *session) waitProcess(cmd *exec.Cmd, ioWg *sync.WaitGroup) {
 		} else {
 			// Clean exit without turn.completed already transitioning state means
 			// the process exited before we saw that event — treat as turn done.
-			// (The JSONL parser sets sessionTurnDone on turn.completed; if it got
-			// there first, this branch becomes a no-op on the already-done state.)
 			s.mu.Lock()
 			if s.state == sessionRunning {
 				s.state = sessionTurnDone
 			}
+			s.signalTurnDone()
 			s.mu.Unlock()
 		}
 	case sessionTurnDone:
 		// Normal: process exited after turn.completed was already processed.
 		// State is already sessionTurnDone; nothing to do.
+		s.mu.Lock()
+		s.signalTurnDone()
+		s.mu.Unlock()
 	}
+}
+
+// signalTurnDone closes the current turnDone channel, bumps turnNum, and
+// creates a fresh channel for the next turn. Callers MUST hold s.mu.
+func (s *session) signalTurnDone() {
+	ch := s.turnDone
+	s.turnNum++
+	s.turnDone = make(chan struct{})
+	close(ch)
 }
 
 // terminateSession closes the events channel and sends err on completed exactly once.
 func (s *session) terminateSession(err error) {
 	s.closeOnce.Do(func() {
 		s.mu.Lock()
+		if err == nil {
+			s.signalTurnDone()
+		}
 		if s.logFile != nil {
 			if closeErr := s.logFile.Close(); closeErr != nil {
 				slog.Warn("failed to close session log file", "error", closeErr)
@@ -640,6 +679,7 @@ func (s *session) readStdout(r io.ReadCloser) {
 		line := scanner.Text()
 		s.writeLogLine(line)
 		if evt, ok := s.mapCodexEvent(line); ok {
+			s.writeLogEvent(evt)
 			s.emitEvent(evt)
 		}
 	}
@@ -703,6 +743,7 @@ func (s *session) mapCodexEvent(line string) (adapter.AgentEvent, bool) {
 		if s.state == sessionRunning {
 			s.state = sessionTurnDone
 		}
+		s.signalTurnDone()
 		s.mu.Unlock()
 
 		meta := map[string]any{}
@@ -938,9 +979,15 @@ func (s *session) openLogFile() error {
 }
 
 func sessionLogPath(opts adapter.SessionOpts) string {
-	if opts.SessionLogDir == "" {
-		return ""
+	sessionLogDir := opts.SessionLogDir
+	if sessionLogDir == "" {
+		globalDir, err := config.GlobalDir()
+		if err != nil {
+			slog.Warn("failed to resolve global dir for codex session log", "error", err)
+			return ""
+		}
+		sessionLogDir = filepath.Join(globalDir, "sessions")
 	}
 
-	return filepath.Join(opts.SessionLogDir, opts.SessionID+".log")
+	return filepath.Join(sessionLogDir, opts.SessionID+".log")
 }
