@@ -554,7 +554,7 @@ func (s *SessionService) RetryFailedWorkItem(ctx context.Context, id string) err
 	return s.Transition(ctx, id, domain.SessionImplementing)
 }
 
-// Archive archives a terminal work item (completed, merged, or failed).
+// Archive archives a non-archived work item when none of its agent sessions are active.
 // It captures the current state in PreviousState so it can be restored on unarchive.
 func (s *SessionService) Archive(ctx context.Context, id string) error {
 	var committed stateChangeEvent
@@ -564,12 +564,27 @@ func (s *SessionService) Archive(ctx context.Context, id string) error {
 			return newNotFoundError("work item", id)
 		}
 
-		if !canTransition(item.State, domain.SessionArchived) {
+		if item.State == domain.SessionArchived {
 			return newInvalidTransitionError(
 				workItemStateName(item.State),
 				workItemStateName(domain.SessionArchived),
 				"work item",
 			)
+		}
+
+		agentSessions, err := res.AgentSessions.ListByWorkItemID(ctx, id)
+		if err != nil {
+			return err
+		}
+		for _, agentSession := range agentSessions {
+			switch agentSession.Status {
+			case domain.AgentSessionPending, domain.AgentSessionRunning, domain.AgentSessionWaitingForAnswer:
+				return newInvalidTransitionError(
+					workItemStateName(item.State),
+					workItemStateName(domain.SessionArchived),
+					"work item",
+				)
+			}
 		}
 
 		now := time.Now()

@@ -2,6 +2,9 @@ package views
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,6 +13,7 @@ import (
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/service"
+	"github.com/beeemT/substrate/internal/tui/styles"
 )
 
 // archFlowRepo is a minimal in-memory SessionRepository.
@@ -82,7 +86,10 @@ func TestArchAppFlow(t *testing.T) {
 			repo := &archFlowRepo{
 				items: map[string]domain.Session{tc.workItem.ID: tc.workItem},
 			}
-			svc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}}, NewNoopPublisher())
+			svc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{
+				Sessions:      repo,
+				AgentSessions: &mockTaskRepoForSession{tasks: map[string]domain.AgentSession{}},
+			}}, NewNoopPublisher())
 
 			app := newTestApp(Services{
 				WorkspaceID:   "ws-local",
@@ -169,6 +176,417 @@ func TestArchAppFlow(t *testing.T) {
 	}
 }
 
+func TestArchiveConfirmationTerminatesLegacyChildrenBeforeArchive(t *testing.T) {
+	t.Parallel()
+
+	const workItemID = "wi-confirm-legacy-archive"
+	taskRepo := &mockTaskRepoForSession{tasks: map[string]domain.AgentSession{
+		"pending": {
+			ID:         "pending",
+			WorkItemID: workItemID,
+			Status:     domain.AgentSessionPending,
+		},
+		"running": {
+			ID:         "running",
+			WorkItemID: workItemID,
+			Status:     domain.AgentSessionRunning,
+		},
+	}}
+	workRepo := &archFlowRepo{items: map[string]domain.Session{
+		workItemID: {
+			ID:    workItemID,
+			State: domain.SessionImplementing,
+		},
+	}}
+	resources := repository.Resources{Sessions: workRepo, AgentSessions: taskRepo}
+	sessionSvc := service.NewSessionService(repository.NoopTransacter{Res: resources}, NewNoopPublisher())
+	taskSvc := service.NewAgentSessionService(repository.NoopTransacter{Res: resources}, NewNoopPublisher())
+	app := newTestApp(Services{
+		WorkspaceID: "ws-local",
+		Session:     sessionSvc,
+		Task:        taskSvc,
+		Settings:    newTestSettingsService(),
+	})
+	app.workItems = []domain.Session{workRepo.items[workItemID]}
+	app.sessions = []domain.AgentSession{taskRepo.tasks["pending"], taskRepo.tasks["running"]}
+	app.currentWorkItemID = workItemID
+	app.content.SetSize(80, 20)
+	pipelineCtx := app.registerPipelineCancel(workItemID)
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	if cmd != nil {
+		t.Fatalf("archive shortcut returned command before confirmation: %v", cmd)
+	}
+	app = model.(*App)
+	if !app.confirmActive {
+		t.Fatal("archive confirmation did not open")
+	}
+	if !strings.Contains(app.confirm.Message, "1 live agent session") {
+		t.Fatalf("confirm message = %q, want live session count", app.confirm.Message)
+	}
+
+	model, cmd = app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	app = model.(*App)
+	archiveMsg := tea.Msg(ArchiveSessionMsg{WorkItemID: workItemID})
+	if cmd != nil {
+		archiveMsg = cmd()
+		if archiveMsg == nil {
+			t.Fatal("confirmation command returned nil message")
+		}
+	}
+	model, cmd = app.Update(archiveMsg)
+	app = model.(*App)
+	if cmd == nil {
+		t.Fatal("ArchiveSessionMsg returned nil command")
+	}
+	select {
+	case <-pipelineCtx.Done():
+	default:
+		t.Fatal("pipeline context was not canceled before archive command dispatch")
+	}
+
+	msg := cmd()
+	if _, ok := msg.(SessionArchivedMsg); !ok {
+		t.Fatalf("archive command message = %T %#v, want SessionArchivedMsg", msg, msg)
+	}
+	if got := workRepo.items[workItemID].State; got != domain.SessionArchived {
+		t.Fatalf("work item state = %q, want %q", got, domain.SessionArchived)
+	}
+	if got := taskRepo.tasks["pending"].Status; got != domain.AgentSessionFailed {
+		t.Fatalf("pending status = %q, want %q", got, domain.AgentSessionFailed)
+	}
+	if got := taskRepo.tasks["running"].Status; got != domain.AgentSessionInterrupted {
+		t.Fatalf("running status = %q, want %q", got, domain.AgentSessionInterrupted)
+	}
+}
+
+func TestShowArchiveConfirmDescribesLiveAgentCount(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		statuses    []domain.AgentSessionStatus
+		wantMessage string
+	}{
+		{
+			name:        "no live sessions keeps reversible explanation",
+			wantMessage: "Archive this session? It will be hidden from the default views. You can unarchive it later.",
+		},
+		{
+			name:        "one live session uses singular copy",
+			statuses:    []domain.AgentSessionStatus{domain.AgentSessionRunning},
+			wantMessage: "1 live agent session before archive",
+		},
+		{
+			name: "multiple live sessions use plural copy",
+			statuses: []domain.AgentSessionStatus{
+				domain.AgentSessionRunning,
+				domain.AgentSessionWaitingForAnswer,
+			},
+			wantMessage: "2 live agent sessions before archive",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			app := App{
+				statusBar: NewStatusBarModel(styles.NewStyles(styles.DefaultTheme)),
+			}
+			for i, status := range tc.statuses {
+				app.sessions = append(app.sessions, domain.AgentSession{
+					ID:         fmt.Sprintf("agent-%d", i),
+					WorkItemID: "wi-archive",
+					Status:     status,
+				})
+			}
+
+			app.showArchiveConfirm("wi-archive")
+			if !app.confirmActive {
+				t.Fatal("confirmActive = false, want true")
+			}
+			if tc.statuses == nil {
+				if app.confirm.Message != tc.wantMessage {
+					t.Fatalf("confirm message = %q, want %q", app.confirm.Message, tc.wantMessage)
+				}
+			} else if !strings.Contains(app.confirm.Message, tc.wantMessage) ||
+				!strings.Contains(app.confirm.Message, "Accepting will terminate") {
+				t.Fatalf("confirm message = %q, want live-count termination copy", app.confirm.Message)
+			}
+		})
+	}
+}
+
+func TestArchiveSessionCmdTerminatesLegacyChildrenBeforeArchive(t *testing.T) {
+	t.Parallel()
+
+	const workItemID = "wi-legacy-archive"
+	taskRepo := &mockTaskRepoForSession{tasks: map[string]domain.AgentSession{
+		"pending": {
+			ID:         "pending",
+			WorkItemID: workItemID,
+			Status:     domain.AgentSessionPending,
+		},
+		"running": {
+			ID:         "running",
+			WorkItemID: workItemID,
+			Status:     domain.AgentSessionRunning,
+		},
+		"waiting": {
+			ID:         "waiting",
+			WorkItemID: workItemID,
+			Status:     domain.AgentSessionWaitingForAnswer,
+		},
+		"completed": {
+			ID:         "completed",
+			WorkItemID: workItemID,
+			Status:     domain.AgentSessionCompleted,
+		},
+	}}
+	workRepo := &archFlowRepo{items: map[string]domain.Session{
+		workItemID: {
+			ID:    workItemID,
+			State: domain.SessionImplementing,
+		},
+	}}
+	resources := repository.Resources{Sessions: workRepo, AgentSessions: taskRepo}
+	sessionSvc := service.NewSessionService(repository.NoopTransacter{Res: resources}, NewNoopPublisher())
+	taskSvc := service.NewAgentSessionService(repository.NoopTransacter{Res: resources}, NewNoopPublisher())
+
+	msg := archiveSessionCmd(sessionSvc, nil, taskSvc, nil, workItemID, false, "")()
+	archived, ok := msg.(SessionArchivedMsg)
+	if !ok {
+		t.Fatalf("archive command message = %T %#v, want SessionArchivedMsg", msg, msg)
+	}
+	if archived.WorkItemID != workItemID {
+		t.Fatalf("archived work item ID = %q, want %q", archived.WorkItemID, workItemID)
+	}
+	if got := workRepo.items[workItemID].State; got != domain.SessionArchived {
+		t.Fatalf("work item state = %q, want %q", got, domain.SessionArchived)
+	}
+	if got := taskRepo.tasks["pending"].Status; got != domain.AgentSessionFailed {
+		t.Fatalf("pending status = %q, want %q", got, domain.AgentSessionFailed)
+	}
+	for _, id := range []string{"running", "waiting"} {
+		if got := taskRepo.tasks[id].Status; got != domain.AgentSessionInterrupted {
+			t.Fatalf("%s status = %q, want %q", id, got, domain.AgentSessionInterrupted)
+		}
+	}
+	if got := taskRepo.tasks["completed"].Status; got != domain.AgentSessionCompleted {
+		t.Fatalf("completed status = %q, want %q", got, domain.AgentSessionCompleted)
+	}
+}
+
+type archiveFailTaskRepo struct {
+	*mockTaskRepoForSession
+	failID  string
+	failErr error
+}
+
+func (r *archiveFailTaskRepo) Update(ctx context.Context, session domain.AgentSession) error {
+	if session.ID == r.failID {
+		return r.failErr
+	}
+	return r.mockTaskRepoForSession.Update(ctx, session)
+}
+
+func TestArchiveSessionCmdTerminationFailurePreventsArchive(t *testing.T) {
+	t.Parallel()
+
+	const workItemID = "wi-legacy-archive-failure"
+	terminationErr := errors.New("interrupt failed")
+	taskRepo := &archiveFailTaskRepo{
+		mockTaskRepoForSession: &mockTaskRepoForSession{tasks: map[string]domain.AgentSession{
+			"running": {
+				ID:         "running",
+				WorkItemID: workItemID,
+				Status:     domain.AgentSessionRunning,
+			},
+		}},
+		failID:  "running",
+		failErr: terminationErr,
+	}
+	workRepo := &archFlowRepo{items: map[string]domain.Session{
+		workItemID: {
+			ID:    workItemID,
+			State: domain.SessionImplementing,
+		},
+	}}
+	resources := repository.Resources{Sessions: workRepo, AgentSessions: taskRepo}
+	sessionSvc := service.NewSessionService(repository.NoopTransacter{Res: resources}, NewNoopPublisher())
+	taskSvc := service.NewAgentSessionService(repository.NoopTransacter{Res: resources}, NewNoopPublisher())
+
+	msg := archiveSessionCmd(sessionSvc, nil, taskSvc, nil, workItemID, false, "")()
+	errMsg, ok := msg.(ErrMsg)
+	if !ok {
+		t.Fatalf("archive command message = %T %#v, want ErrMsg", msg, msg)
+	}
+	if !errors.Is(errMsg.Err, terminationErr) {
+		t.Fatalf("archive error = %v, want termination error chain", errMsg.Err)
+	}
+	if got := workRepo.items[workItemID].State; got == domain.SessionArchived {
+		t.Fatal("work item was archived after child termination failed")
+	}
+}
+
+func TestArchivablSessionIDFromWorkItemEligibility(t *testing.T) {
+	t.Parallel()
+
+	const workItemID = "wi-eligibility"
+	tests := []struct {
+		name        string
+		workItem    domain.SessionState
+		childStatus domain.AgentSessionStatus
+		wantID      string
+	}{
+		{
+			name:        "implementing with completed child",
+			workItem:    domain.SessionImplementing,
+			childStatus: domain.AgentSessionCompleted,
+			wantID:      workItemID,
+		},
+		{
+			name:        "implementing with failed child",
+			workItem:    domain.SessionImplementing,
+			childStatus: domain.AgentSessionFailed,
+			wantID:      workItemID,
+		},
+		{
+			name:        "implementing with interrupted child",
+			workItem:    domain.SessionImplementing,
+			childStatus: domain.AgentSessionInterrupted,
+			wantID:      workItemID,
+		},
+		{
+			name:        "implementing with no child sessions",
+			workItem:    domain.SessionImplementing,
+			wantID:      workItemID,
+		},
+		{
+			name:        "pending child",
+			workItem:    domain.SessionImplementing,
+			childStatus: domain.AgentSessionPending,
+			wantID:      workItemID,
+		},
+		{
+			name:        "running child",
+			workItem:    domain.SessionImplementing,
+			childStatus: domain.AgentSessionRunning,
+			wantID:      workItemID,
+		},
+		{
+			name:        "waiting child",
+			workItem:    domain.SessionImplementing,
+			childStatus: domain.AgentSessionWaitingForAnswer,
+			wantID:      workItemID,
+		},
+		{
+			name:        "completed work item remains archiveable",
+			workItem:    domain.SessionCompleted,
+			wantID:      workItemID,
+		},
+		{
+			name:        "merged work item remains archiveable",
+			workItem:    domain.SessionMerged,
+			wantID:      workItemID,
+		},
+		{
+			name:        "failed work item remains archiveable",
+			workItem:    domain.SessionFailed,
+			wantID:      workItemID,
+		},
+		{
+			name:     "archived work item is not archiveable",
+			workItem: domain.SessionArchived,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			app := App{
+				currentWorkItemID: workItemID,
+				workItems: []domain.Session{{
+					ID:    workItemID,
+					State: tc.workItem,
+				}},
+			}
+			if tc.childStatus != "" {
+				app.sessions = []domain.AgentSession{{
+					ID:         "child-1",
+					WorkItemID: workItemID,
+					Status:     tc.childStatus,
+				}}
+			}
+
+			if got := app.archivablSessionIDFromWorkItem(); got != tc.wantID {
+				t.Fatalf("archivable work item ID = %q, want %q", got, tc.wantID)
+			}
+		})
+	}
+}
+
+func TestArchiveActionRegistryIncludesActiveImplementingWorkItem(t *testing.T) {
+	t.Parallel()
+
+	const workItemID = "wi-active"
+	app := &App{
+		currentWorkItemID: workItemID,
+		workItems: []domain.Session{{
+			ID:    workItemID,
+			State: domain.SessionImplementing,
+		}},
+		sessions: []domain.AgentSession{{
+			ID:         "child-running",
+			WorkItemID: workItemID,
+			Status:     domain.AgentSessionRunning,
+		}},
+		content: NewContentModel(styles.NewStyles(styles.DefaultTheme)),
+	}
+
+	action := findAction(app.BuildActionRegistry(ContextOverview), "archive_session")
+	if action == nil {
+		t.Fatal("action registry missing archive_session for active implementing work item")
+	}
+	if action.Shortcut != "a" {
+		t.Fatalf("archive shortcut = %q, want %q", action.Shortcut, "a")
+	}
+}
+
+func TestArchivablSessionIDFromHistoryEntryRemainsTerminalOnly(t *testing.T) {
+	t.Parallel()
+
+	const workItemID = "wi-history"
+	tests := []struct {
+		name  string
+		state domain.SessionState
+		want  string
+	}{
+		{name: "completed", state: domain.SessionCompleted, want: workItemID},
+		{name: "merged", state: domain.SessionMerged, want: workItemID},
+		{name: "failed", state: domain.SessionFailed, want: workItemID},
+		{name: "implementing", state: domain.SessionImplementing},
+		{name: "archived", state: domain.SessionArchived},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			app := App{currentHistoryEntry: SidebarEntry{
+				WorkItemID: workItemID,
+				State:      tc.state,
+			}}
+			if got := app.archivablSessionIDFromHistoryEntry(); got != tc.want {
+				t.Fatalf("archivable history work item ID = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestArchiveSelectedSessionFocusesVisibleNeighbor(t *testing.T) {
 	now := time.Now()
 	items := []domain.Session{
@@ -202,7 +620,10 @@ func TestArchiveSelectedSessionFocusesVisibleNeighbor(t *testing.T) {
 				repoItems[item.ID] = item
 			}
 			repo := &archFlowRepo{items: repoItems}
-			svc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{Sessions: repo}}, NewNoopPublisher())
+			svc := service.NewSessionService(repository.NoopTransacter{Res: repository.Resources{
+				Sessions:      repo,
+				AgentSessions: &mockTaskRepoForSession{tasks: map[string]domain.AgentSession{}},
+			}}, NewNoopPublisher())
 
 			app := newTestApp(Services{
 				WorkspaceID:   "ws-local",

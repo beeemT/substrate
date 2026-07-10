@@ -1489,10 +1489,51 @@ func unarchiveSessionWithClientCmd(client logic.Client, workItemID string) tea.C
 	}
 }
 
-// archiveSessionCmd archives a work item and returns a completion message.
-func archiveSessionCmd(svc *service.SessionService, workItemID string, focusAfterArchive bool, focusWorkItemID string) tea.Cmd {
+// archiveSessionCmd terminates any legacy in-process child sessions before
+// archiving a work item. It runs synchronously inside the Bubble Tea command so
+// the success message cannot be delivered until all termination and archive
+// writes have completed.
+func archiveSessionCmd(
+	svc *service.SessionService,
+	impl *orchestrator.ImplementationService,
+	taskSvc *service.AgentSessionService,
+	registry orchestrator.SessionRegistry,
+	workItemID string,
+	focusAfterArchive bool,
+	focusWorkItemID string,
+) tea.Cmd {
 	return func() tea.Msg {
-		if err := svc.Archive(context.Background(), workItemID); err != nil {
+		ctx := context.Background()
+		if svc == nil {
+			return ErrMsg{Err: errors.New("session service is unavailable")}
+		}
+
+		if impl != nil {
+			if err := impl.EndForeman(ctx, workItemID); err != nil {
+				return ErrMsg{Err: fmt.Errorf("end foreman before archive: %w", err)}
+			}
+		}
+
+		if taskSvc != nil {
+			sessions, err := taskSvc.ListByWorkItemID(ctx, workItemID)
+			if err != nil {
+				return ErrMsg{Err: fmt.Errorf("list agent sessions before archive: %w", err)}
+			}
+			for _, session := range sessions {
+				switch session.Status {
+				case domain.AgentSessionPending:
+					if err := taskSvc.Fail(ctx, session.ID, nil); err != nil {
+						return ErrMsg{Err: fmt.Errorf("fail pending agent session %s before archive: %w", session.ID, err)}
+					}
+				case domain.AgentSessionRunning, domain.AgentSessionWaitingForAnswer:
+					if err := interruptAgentSession(ctx, taskSvc, registry, session); err != nil {
+						return ErrMsg{Err: fmt.Errorf("interrupt agent session %s before archive: %w", session.ID, err)}
+					}
+				}
+			}
+		}
+
+		if err := svc.Archive(ctx, workItemID); err != nil {
 			return ErrMsg{Err: fmt.Errorf("archive session: %w", err)}
 		}
 		return SessionArchivedMsg{

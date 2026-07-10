@@ -1059,8 +1059,10 @@ func (a App) deletableSessionID() string {
 	return ""
 }
 
-// archivablSessionID returns the work item ID if the currently selected session
-// is in a terminal state (completed, merged, failed) and can be archived.
+// archivablSessionID returns the work item ID if the currently selected item
+// can be archived. History entries use terminal-only eligibility; loaded work
+// items may be archived while child agent sessions are still live because the
+// confirmation flow terminates them before the durable archive.
 func (a App) archivablSessionID() string {
 	if id := a.archivablSessionIDFromHistoryEntry(); id != "" {
 		return id
@@ -1071,8 +1073,10 @@ func (a App) archivablSessionID() string {
 	return ""
 }
 
-// archivablSessionIDFromHistoryEntry returns the work item ID from the current history entry
-// if it is in a terminal state and can be archived.
+// archivablSessionIDFromHistoryEntry returns the work item ID from the current
+// history entry if it is in a terminal state and can be archived. History
+// entries do not include complete child-session state, so they retain this
+// terminal-only eligibility.
 func (a App) archivablSessionIDFromHistoryEntry() string {
 	if a.currentHistoryEntry.WorkItemID == "" {
 		return ""
@@ -1084,21 +1088,18 @@ func (a App) archivablSessionIDFromHistoryEntry() string {
 	return ""
 }
 
-// archivablSessionIDFromWorkItem returns the work item ID from the current work item
-// if it is in a terminal state and can be archived.
+// archivablSessionIDFromWorkItem returns the current work item ID when it is
+// loaded and not archived. Live and pending child sessions are terminated as
+// part of the archive command after user confirmation.
 func (a App) archivablSessionIDFromWorkItem() string {
 	if a.currentWorkItemID == "" {
 		return ""
 	}
 	wi := a.workItemByID(a.currentWorkItemID)
-	if wi == nil {
+	if wi == nil || wi.State == domain.SessionArchived {
 		return ""
 	}
-	switch wi.State {
-	case domain.SessionCompleted, domain.SessionMerged, domain.SessionFailed:
-		return a.currentWorkItemID
-	}
-	return ""
+	return a.currentWorkItemID
 }
 
 // unarchivablSessionID returns the work item ID if the currently selected session
@@ -2677,6 +2678,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case ArchiveSessionMsg:
+		// Stop any client-side pipeline before asking the durable layer to
+		// terminate child sessions or archive the work item.
+		a.cancelPipeline(msg.WorkItemID)
 		focusAfterArchive := a.currentWorkItemID == msg.WorkItemID || a.currentHistoryEntry.WorkItemID == msg.WorkItemID
 		focusWorkItemID := ""
 		if focusAfterArchive {
@@ -2685,7 +2689,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.provider.Logic() != nil {
 			cmds = append(cmds, archiveSessionWithClientCmd(a.provider.Logic(), msg.WorkItemID, focusAfterArchive, focusWorkItemID))
 		} else {
-			cmds = append(cmds, archiveSessionCmd(a.provider.Session(), msg.WorkItemID, focusAfterArchive, focusWorkItemID))
+			cmds = append(cmds, archiveSessionCmd(
+				a.provider.Session(),
+				a.provider.Implementation(),
+				a.provider.Task(),
+				a.provider.SessionRegistry(),
+				msg.WorkItemID,
+				focusAfterArchive,
+				focusWorkItemID,
+			))
 		}
 		return a, tea.Batch(cmds...)
 
@@ -4143,8 +4155,30 @@ func (a *App) showDeleteSessionConfirm(sessionID string) {
 }
 
 func (a *App) showArchiveConfirm(workItemID string) {
-	a.showConfirm("Archive Session",
-		"Archive this session? It will be hidden from the default views. You can unarchive it later.",
+	liveCount := 0
+	for _, agentSession := range a.sessions {
+		if agentSession.WorkItemID != workItemID {
+			continue
+		}
+		switch agentSession.Status {
+		case domain.AgentSessionRunning, domain.AgentSessionWaitingForAnswer:
+			liveCount++
+		}
+	}
+
+	message := "Archive this session? It will be hidden from the default views. You can unarchive it later."
+	if liveCount > 0 {
+		sessionWord := "sessions"
+		if liveCount == 1 {
+			sessionWord = "session"
+		}
+		message = fmt.Sprintf(
+			"Archive this session? Accepting will terminate %d live agent %s before archive. It will be hidden from the default views. You can unarchive it later.",
+			liveCount,
+			sessionWord,
+		)
+	}
+	a.showConfirm("Archive Session", message,
 		func() tea.Msg { return ArchiveSessionMsg{WorkItemID: workItemID} },
 	)
 }

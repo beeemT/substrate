@@ -182,6 +182,30 @@ func (c *InProcessClient) ArchiveSession(ctx context.Context, workItemID string)
 	if c.deps.Sessions == nil {
 		return ActionResult{}, fmt.Errorf("session service is required")
 	}
+	if c.deps.AgentSessions == nil {
+		return ActionResult{}, fmt.Errorf("agent session service is required")
+	}
+	if c.deps.Implementation != nil {
+		if err := c.deps.Implementation.EndForeman(ctx, workItemID); err != nil {
+			return ActionResult{}, fmt.Errorf("end foreman for archive: %w", err)
+		}
+	}
+	agentSessions, err := c.deps.AgentSessions.ListByWorkItemID(ctx, workItemID)
+	if err != nil {
+		return ActionResult{}, fmt.Errorf("list agent sessions for archive: %w", err)
+	}
+	for _, session := range agentSessions {
+		switch session.Status {
+		case domain.AgentSessionPending:
+			if err := c.deps.AgentSessions.Fail(ctx, session.ID, nil); err != nil {
+				return ActionResult{}, fmt.Errorf("fail pending agent session %s for archive: %w", session.ID, err)
+			}
+		case domain.AgentSessionRunning, domain.AgentSessionWaitingForAnswer:
+			if err := c.interruptAgentSession(ctx, session); err != nil {
+				return ActionResult{}, fmt.Errorf("interrupt agent session %s for archive: %w", session.ID, err)
+			}
+		}
+	}
 	if err := c.deps.Sessions.Archive(ctx, workItemID); err != nil {
 		return ActionResult{}, err
 	}
