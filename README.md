@@ -134,6 +134,7 @@ The default harness. The bridge that Substrate uses to talk to Oh My Pi is **bun
 
 - **Homebrew install**: a compiled bridge executable ships inside the package. Bun is not required.
 - **Source build / `go install`**: the bridge runs as a TypeScript script via Bun. Bun must be on your PATH and `bun install --cwd bridge` must have been run in the repository checkout.
+  Use Bun 1.4.2 or newer for source builds.
 
 Optional config:
 

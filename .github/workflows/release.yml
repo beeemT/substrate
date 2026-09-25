@@ -39,18 +39,22 @@ jobs:
           - goos: darwin
             goarch: amd64
             bridge_target: bun-darwin-x64-baseline
+            native_cpu: x64
             native_addon: pi_natives.darwin-x64-baseline.node
           - goos: darwin
             goarch: arm64
             bridge_target: bun-darwin-arm64
+            native_cpu: arm64
             native_addon: pi_natives.darwin-arm64.node
           - goos: linux
             goarch: amd64
             bridge_target: bun-linux-x64-baseline
+            native_cpu: x64
             native_addon: pi_natives.linux-x64-baseline.node
           - goos: linux
             goarch: arm64
             bridge_target: bun-linux-arm64
+            native_cpu: arm64
             native_addon: pi_natives.linux-arm64.node
     steps:
       - name: Checkout
@@ -65,7 +69,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.3.9"
+          bun-version: "1.4.2"
 
       - name: Cache Bun dependencies
         uses: actions/cache@v5
@@ -79,7 +83,7 @@ jobs:
 
       - name: Install Bun dependencies
         run: |
-          bun install --cwd bridge --frozen-lockfile
+          bun install --cwd bridge --frozen-lockfile --os=${{ matrix.goos }} --cpu=${{ matrix.native_cpu }}
           bun install --cwd bridge/question-mcp --frozen-lockfile
 
       - name: Build
@@ -98,11 +102,9 @@ jobs:
             -o "dist/substrate" \
             ./cmd/substrate
 
-          bun build bridge/omp-bridge.ts \
-            --compile \
-            --target "${{ matrix.bridge_target }}" \
-            --outfile "dist/bridge/omp-bridge"
-
+          bun run bridge/build-omp-bridge.ts \
+            "${{ matrix.bridge_target }}" \
+            "dist/bridge/omp-bridge"
           bun build bridge/claude-agent-bridge.ts \
             --compile \
             --target "${{ matrix.bridge_target }}" \
@@ -113,7 +115,7 @@ jobs:
             --target "${{ matrix.bridge_target }}" \
             --outfile "dist/bridge/question-mcp"
 
-          cp "bridge/node_modules/@oh-my-pi/pi-natives/native/${{ matrix.native_addon }}" "dist/bridge/${{ matrix.native_addon }}"
+          cp "bridge/node_modules/@oh-my-pi/pi-natives-${{ matrix.goos }}-${{ matrix.native_cpu }}/${{ matrix.native_addon }}" "dist/bridge/${{ matrix.native_addon }}"
 
           tar -C dist -czf "substrate_${VERSION_NUM}_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz" .
 

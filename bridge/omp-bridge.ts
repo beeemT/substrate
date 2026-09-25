@@ -15,8 +15,7 @@
  *   - {"type":"event","event":{...}} — canonical session transcript entry
  */
 
-import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { AgentSession } from "@oh-my-pi/pi-coding-agent";
+import type { AgentSession, CreateAgentSessionOptions } from "@oh-my-pi/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { createInterface } from "readline";
 import {
@@ -29,9 +28,8 @@ import {
 import { isBenignCompactSkip, isCompactionRedundant } from "./compact-helpers";
 
 const mode = process.env.SUBSTRATE_BRIDGE_MODE ?? "agent";
-const thinkingLevel: ThinkingLevel | undefined = process.env.SUBSTRATE_THINKING_LEVEL as
-  | ThinkingLevel
-  | undefined;
+const thinkingLevel: CreateAgentSessionOptions["thinkingLevel"] = process.env
+  .SUBSTRATE_THINKING_LEVEL as CreateAgentSessionOptions["thinkingLevel"];
 const worktreePath = process.env.SUBSTRATE_WORKTREE_PATH ?? process.cwd();
 let systemPrompt: string | undefined;
 let modelPattern: string | undefined;

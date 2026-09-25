@@ -37,7 +37,7 @@ func repoBridgePath(t *testing.T) string {
 		t.Fatalf("failed to get cwd: %v", err)
 	}
 
-	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(cwd))))
+	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(cwd)))
 	bridgePath := filepath.Join(repoRoot, "bridge", "omp-bridge.ts")
 	if _, err := os.Stat(bridgePath); os.IsNotExist(err) {
 		t.Skipf("bridge script not found at %s, skipping integration test", bridgePath)
