@@ -767,7 +767,8 @@ func (m SessionOverviewModel) renderPlanSection() string {
 	innerWidth := components.CalloutInnerWidth(m.styles, m.width)
 	rows := []string{renderKeyValueLine(m.styles, innerWidth, "Status", firstNonEmptyString(m.data.Plan.StateLabel, "No plan yet"))}
 	if m.data.Plan.Exists {
-		rows = append(rows,
+		rows = append(
+			rows,
 			renderKeyValueLine(m.styles, innerWidth, "Version", fmt.Sprintf("v%d", m.data.Plan.Version)),
 			renderKeyValueLine(m.styles, innerWidth, "Updated", formatAbsoluteTime(m.data.Plan.UpdatedAt)),
 			renderKeyValueLine(m.styles, innerWidth, "Repos", strconv.Itoa(m.data.Plan.RepoCount)),
@@ -945,7 +946,8 @@ func renderOverviewActionCard(st styles.Styles, width int, action OverviewAction
 	if selected {
 		lines = append(lines, ansi.Hardwrap(st.Active.Render("▶ Selected action"), innerWidth, true), "")
 	}
-	lines = append(lines,
+	lines = append(
+		lines,
 		ansi.Hardwrap(st.Title.Render(action.Title), innerWidth, true),
 		renderKeyValueLine(st, innerWidth, "Blocked", action.Blocked),
 		renderKeyValueLine(st, innerWidth, "Why", action.Why),
@@ -2064,76 +2066,31 @@ func (a *App) buildOverviewExternalLifecycle(wi *domain.Session) OverviewExterna
 	if wi.WorkspaceID == "" {
 		return external
 	}
-	external.Reviews = reviewRowsForWorkItem(context.Background(), a.provider.GetServices(), wi)
-
-	return external
-}
-
-func reviewRowsForWorkItem(ctx context.Context, svcs *Services, wi *domain.Session) []OverviewReviewRow {
-	if wi == nil || wi.WorkspaceID == "" {
-		return nil
+	items, ok := a.artifactItems[wi.ID]
+	if !ok {
+		items = a.buildArtifactItems(wi)
 	}
-	var reviews []OverviewReviewRow
-	links, err := svcs.SessionArtifacts.ListByWorkItemID(ctx, wi.ID)
-	if err != nil {
-		slog.Warn("failed to list session artifacts for overview", "error", err, "workItemID", wi.ID)
+	for _, item := range items {
+		external.Reviews = append(external.Reviews, OverviewReviewRow{
+			Kind:     item.Kind,
+			RepoName: item.RepoName,
+			Ref:      item.Ref,
+			URL:      item.URL,
+			State:    item.State,
+			Branch:   item.Branch,
+		})
 	}
-	for _, link := range links {
-		switch link.Provider {
-		case "github":
-			pr, err := svcs.GithubPRs.Get(ctx, link.ProviderArtifactID)
-			if err != nil {
-				slog.Warn("failed to get github PR for overview", "error", err, "id", link.ProviderArtifactID)
-				continue
-			}
-			reviews = append(reviews, OverviewReviewRow{
-				Kind:     "PR",
-				RepoName: pr.Owner + "/" + pr.Repo,
-				Ref:      fmt.Sprintf("#%d", pr.Number),
-				URL:      pr.HTMLURL,
-				State:    pr.State,
-				Branch:   pr.HeadBranch,
-			})
-		case providerGitlab:
-			mr, err := svcs.GitlabMRs.Get(ctx, link.ProviderArtifactID)
-			if err != nil {
-				slog.Warn("failed to get gitlab MR for overview", "error", err, "id", link.ProviderArtifactID)
-				continue
-			}
-			reviews = append(reviews, OverviewReviewRow{
-				Kind:     "MR",
-				RepoName: mr.ProjectPath,
-				Ref:      fmt.Sprintf("!%d", mr.IID),
-				URL:      mr.WebURL,
-				State:    mr.State,
-				Branch:   mr.SourceBranch,
-			})
+	sort.SliceStable(external.Reviews, func(i, j int) bool {
+		if external.Reviews[i].RepoName != external.Reviews[j].RepoName {
+			return external.Reviews[i].RepoName < external.Reviews[j].RepoName
 		}
-	}
-	reviewKeys := make(map[string]struct{}, len(reviews))
-	for _, row := range reviews {
-		reviewKeys[reviewArtifactKey(row.RepoName, row.Branch, row.Ref)] = struct{}{}
-	}
-	for _, artifact := range recordedReviewArtifacts(ctx, svcs, wi) {
-		row := reviewRowFromReviewArtifact(artifact)
-		key := reviewArtifactKey(row.RepoName, row.Branch, row.Ref)
-		if _, ok := reviewKeys[key]; ok {
-			continue
+		if external.Reviews[i].Branch != external.Reviews[j].Branch {
+			return external.Reviews[i].Branch < external.Reviews[j].Branch
 		}
-		reviewKeys[key] = struct{}{}
-		reviews = append(reviews, row)
-	}
-	sort.SliceStable(reviews, func(i, j int) bool {
-		if reviews[i].RepoName != reviews[j].RepoName {
-			return reviews[i].RepoName < reviews[j].RepoName
-		}
-		if reviews[i].Branch != reviews[j].Branch {
-			return reviews[i].Branch < reviews[j].Branch
-		}
-		return reviews[i].Ref < reviews[j].Ref
+		return external.Reviews[i].Ref < external.Reviews[j].Ref
 	})
 
-	return reviews
+	return external
 }
 
 func reviewRowFromReviewArtifact(artifact domain.ReviewArtifact) OverviewReviewRow {

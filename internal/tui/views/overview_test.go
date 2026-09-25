@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/beeemT/substrate/internal/config"
 	"github.com/beeemT/substrate/internal/domain"
 	"github.com/beeemT/substrate/internal/repository"
 	"github.com/beeemT/substrate/internal/service"
@@ -433,6 +434,56 @@ func TestBuildArtifactItemsMergesRecordedGitLabWorktreePath(t *testing.T) {
 	}
 	if items[0].WorktreePath != worktreePath {
 		t.Fatalf("worktree path = %q, want %q", items[0].WorktreePath, worktreePath)
+	}
+}
+
+func TestDaemonOverviewUsesSnapshotArtifacts(t *testing.T) {
+	t.Parallel()
+
+	app := NewApp(NewDaemonProvider(nil), RuntimeContext{
+		Cfg:         &config.Config{UI: config.UIConfig{DefaultFilter: "all", DefaultGroup: "state"}},
+		WorkspaceID: "ws-remote",
+	})
+	app.content.SetSize(100, 40)
+	app.workItems = []domain.Session{{
+		ID:          "wi-1",
+		WorkspaceID: "ws-remote",
+		Title:       "Reviewing work",
+		State:       domain.SessionReviewing,
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}}
+	app.artifactItems["wi-1"] = []ArtifactItem{
+		{Kind: "PR", RepoName: "acme/api", Ref: "#7", URL: "https://github.com/acme/api/pull/7", State: "open", Branch: "feature"},
+		{Kind: "MR", RepoName: "acme/web", Ref: "!8", URL: "https://gitlab.com/acme/web/-/merge_requests/8", State: "merged", Branch: "feature"},
+	}
+	app.rebuildSidebar()
+	app.sidebar.SelectWorkItem("wi-1")
+	if cmd := app.onSidebarMove(); cmd != nil {
+		t.Fatalf("onSidebarMove() cmd = %v, want nil", cmd)
+	}
+	rows := app.content.overview.data.External.Reviews
+	if len(rows) != 2 || rows[0].Ref != "#7" || rows[0].URL != "https://github.com/acme/api/pull/7" ||
+		rows[1].Ref != "!8" || rows[1].State != "merged" {
+		t.Fatalf("overview reviews = %+v, want snapshot PR and MR", rows)
+	}
+	view := stripBrowseANSI(app.content.View())
+	if !strings.Contains(view, "acme/api") || !strings.Contains(view, "acme/web") {
+		t.Fatalf("overview view = %q, want both reviews", view)
+	}
+	app.workItems = append(app.workItems, domain.Session{
+		ID:          "wi-2",
+		WorkspaceID: "ws-remote",
+		Title:       "No reviews",
+		State:       domain.SessionPlanning,
+	})
+	app.rebuildSidebar()
+	app.sidebar.SelectWorkItem("wi-2")
+	if cmd := app.onSidebarMove(); cmd != nil {
+		t.Fatalf("onSidebarMove() for work item without artifacts = %v, want nil", cmd)
+	}
+	if got := app.content.overview.data.External.Reviews; len(got) != 0 {
+		t.Fatalf("overview reviews without artifacts = %+v, want none", got)
 	}
 }
 
